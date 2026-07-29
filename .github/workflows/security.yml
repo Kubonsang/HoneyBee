@@ -29,3 +29,4 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm security:scan
       - run: pnpm licenses:check
+      - run: pnpm audit --audit-level=low
