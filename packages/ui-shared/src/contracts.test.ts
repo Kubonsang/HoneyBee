@@ -1,8 +1,34 @@
 import { describe, expect, it } from "vitest";
 
-import { isConsoleToExtensionMessage } from "./index.js";
+import { isConsoleToExtensionMessage, isExtensionToConsoleMessage } from "./index.js";
 
-describe("isConsoleToExtensionMessage", () => {
+describe("Console message contracts", () => {
+  it("requires a request ID and non-empty content for prompt.send", () => {
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.send",
+        requestId: "prompt-1",
+        sessionId: "session-1",
+        content: "hello",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.send",
+        sessionId: "session-1",
+        content: "hello",
+      }),
+    ).toBe(false);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.send",
+        requestId: "prompt-2",
+        sessionId: "session-1",
+        content: "   ",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts valid input and resize messages", () => {
     expect(
       isConsoleToExtensionMessage({
@@ -30,6 +56,48 @@ describe("isConsoleToExtensionMessage", () => {
         rows: 36,
       }),
     ).toBe(false);
-    expect(isConsoleToExtensionMessage({ type: "prompt.send", content: "hello" })).toBe(false);
+  });
+
+  it("distinguishes accepted, cleanup-warning, and rejected acknowledgements", () => {
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.accepted",
+        requestId: "prompt-1",
+        sessionId: "session-1",
+        draftCleanup: "cleared",
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.accepted",
+        requestId: "prompt-2",
+        sessionId: "session-1",
+        draftCleanup: "warning",
+        warning: "Draft cleanup failed.",
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.rejected",
+        requestId: "prompt-3",
+        sessionId: "session-1",
+        message: "Runtime write failed.",
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.accepted",
+        requestId: "prompt-4",
+        sessionId: "session-1",
+        draftCleanup: "warning",
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.rejected",
+        sessionId: "session-1",
+        message: "Runtime write failed.",
+      }),
+    ).toBe(false);
   });
 });

@@ -254,6 +254,11 @@ button:disabled {
   border-left-color: var(--hb-gold);
 }
 
+#prompt-editor[data-pending="true"] {
+  border-left-color: var(--hb-gold-deep);
+  opacity: 0.72;
+}
+
 .prompt-footer {
   display: flex;
   align-items: center;

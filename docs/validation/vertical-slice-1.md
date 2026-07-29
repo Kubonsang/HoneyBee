@@ -1,10 +1,10 @@
 # Vertical Slice 1 validation
 
-Date: 2026-07-29 (Asia/Seoul)
+Date: 2026-07-30 (Asia/Seoul)
 
 ## Outcome
 
-The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 64 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
+The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 86 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
 
 ## Environment
 
@@ -21,7 +21,7 @@ The automated Windows vertical slice is green: repository quality gates, archite
 
 | ID    | Status  | Scope and evidence                                                                                                                                                                                                                                                                                                           |
 | ----- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 81 source modules and 84 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.             |
+| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 90 source modules and 98 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.             |
 | VS-02 | PASS    | Domain/persistence tests cover session creation, tag rules, parent/related integrity, cycle/self-reference rejection, CRUD, query ordering, and delete detachment: `packages/domain`, `packages/persistence`, and extension application tests all passed.                                                                    |
 | VS-03 | PASS    | `GlobalStateSessionRepository`, per-session drafts, and selected Session ID survive new repository instances. Missing or schema-invalid selected IDs are cleared and fall back to no selection; draft `session-2` restores as `second`.                                                                                      |
 | VS-04 | PASS    | The default runtime is built into `apps/vscode-extension/dist/runtime/cli.cjs`, resolved from the absolute extension root, and packaged with node-pty workers, license, and Windows x64/arm64 native assets. Explicit command and argv (including quotes, metacharacters, spaces, and Korean) remain separate and unchanged. |
@@ -42,7 +42,7 @@ The automated Windows vertical slice is green: repository quality gates, archite
 | `corepack pnpm format` then `corepack pnpm format:check`                                                    | PASS; mechanically corrected the 11 baseline formatting failures and formatted new artifacts.                                               |
 | `corepack pnpm exec vitest run packages/session-runtime/src/node-pty.integration.test.ts`                   | PASS; 1 file, 4 real Windows PTY tests, including Git-bundled Vim.                                                                          |
 | `corepack pnpm exec vitest run apps/vscode-extension/src/adapters/jsonl-runtime-client.integration.test.ts` | PASS; packaged sidecar and real PTY round trip.                                                                                             |
-| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 23 files/64 tests, and dependency-cruiser (81 modules/84 dependencies). |
+| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 28 files/86 tests, and dependency-cruiser (90 modules/98 dependencies). |
 | `corepack pnpm test:vscode`                                                                                 | PASS; official VS Code 1.131.0 Extension Host, 1 test, exit code 0.                                                                         |
 | `code --version`                                                                                            | PASS; 1.116.0 x64.                                                                                                                          |
 | `Get-Command code,vim,nvim` plus Git-root derivation                                                        | `code` found; `vim` is not on PATH but Git-bundled Vim was found and passed; `nvim` NOT FOUND.                                              |
@@ -56,6 +56,35 @@ The Extension Host emitted non-fatal upstream warnings for Chromium `cached-data
 - The first packaged runtime bundled node-pty's worker code into one file and hung because node-pty resolves a worker by path. The build now externalizes node-pty into `dist/runtime/node_modules` with its workers/native assets; the packaged sidecar PTY test passes.
 - A full verify after downloading VS Code initially let dependency-cruiser enter `.vscode-test` and hit a stack overflow in a built-in minified extension. Source exclusions were added, and the final dependency gate passes.
 
+## Console delivery correctness (2026-07-30)
+
+### Resolved race
+
+The former Webview submitted `prompt.send`, immediately cleared Monaco and its local Draft, and posted an empty `draft.changed`. That empty write raced the Provider's independent 250 ms debounce, while the Extension had no way to tell the Webview whether `RuntimeClientPort.sendInput` succeeded. A failed Runtime write could therefore leave persisted and visible Draft state disagreeing or make the Prompt appear lost.
+
+Protocol version 2 resolves the race with centrally validated, correlated messages:
+
+- `prompt.send` requires `requestId`, `sessionId`, and non-empty `content`.
+- `prompt.accepted` carries the same IDs and distinguishes `draftCleanup: cleared` from `draftCleanup: warning`.
+- `prompt.rejected` carries the same IDs and a safe display message.
+- The Webview clears only when both IDs match its current pending Prompt and the current Draft still equals the submitted content. Cross-Session, stale, and duplicate acknowledgements are ignored.
+
+The Provider now owns a Session-scoped revision, debounce timer, serialized Draft-write tail, active request, and bounded request-ID history. Submission cancels the scheduled debounce, drains an already-started write, then the Application Service persists the exact submitted content before attempting Runtime input. Runtime success is followed by Draft deletion; Runtime failure preserves the exact Draft. Pending input is read-only and Send/Enter/Ctrl+Enter are disabled until acknowledgement. Alt+Enter and Shift+Enter remain newline commands.
+
+### Automated evidence
+
+- Contract tests require request IDs and distinguish cleared, warning, and rejected acknowledgements.
+- Webview-state tests cover pre-ack preservation, rejection preservation, accepted-only clearing, cross-Session acknowledgement, stale acknowledgement, duplicate acknowledgement, and content written after submission.
+- Input-policy tests cover Enter/Ctrl+Enter submit, Alt+Enter/Shift+Enter newline, empty Prompt rejection, pending submission rejection, and composition-time rejection.
+- Coordinator tests cover immediate submit before debounce, stale timer cancellation, in-flight Draft-write draining, duplicate request IDs, concurrent Session delivery rejection, and diagnostic redaction.
+- Application and Fake Runtime integration tests cover exactly one PTY input followed by accepted/Draft deletion, plus exactly one failed input followed by rejected/exact Draft preservation.
+
+### Cleanup warning policy and manual IME validation
+
+A Runtime write that succeeds is never reclassified as failed because local Draft deletion failed. The Extension returns `prompt.accepted` with `draftCleanup: warning`, the Webview treats the command as delivered and does not invite a retry, and the Output Channel logs only Session/request identifiers plus a generic cleanup warning, never the Prompt body. The in-memory Console state is cleared; if the storage backend remains unavailable, its stale persisted Draft may still require operator cleanup after restart.
+
+Monaco composition start/end now gates submission, and the pure input policy is tested. Korean Windows IME behavior remains a manual GUI item because this environment cannot automate real OS composition events; verify that intermediate composition Enter presses neither submit nor duplicate characters.
+
 ## Manual GUI, IME, and Neovim checklist
 
 Run these on a Windows 11 workstation with a human-observable Extension Development Host. Record screenshots or a short capture and the exact VS Code/Neovim versions. Git-bundled Vim already has automated ConPTY coverage.
@@ -66,15 +95,15 @@ Run these on a Windows 11 workstation with a human-observable Extension Developm
 4. Configure Echo Fixture as the agent, start it, and confirm ANSI colors, `Honey Bee Echo 벌 🐝`, literal input, resize/reflow, non-zero exit, and interrupt are visible in xterm.
 5. Verify Enter and Ctrl+Enter submit; Shift+Enter and Alt+Enter insert a newline. Compose Korean text with the Windows IME and confirm intermediate composition does not submit or duplicate characters.
 6. Switch repeatedly between two sessions and confirm draft text and console output remain associated with the correct Session.
-7. Force runtime input failure while a non-empty draft exists and confirm whether the editor preserves it. This is a known risk because the webview currently clears optimistically before an extension-confirmed success acknowledgement.
+7. Force Runtime input failure with a non-empty Draft and confirm `prompt.rejected`, preserved editor text, restored focus, and an accessible status error. Then inject Draft cleanup failure after a successful write and confirm `prompt.accepted` with a cleanup warning and no retry invitation.
 8. Optionally inspect Git-bundled Vim interactively beyond its passing automated smoke. Install Neovim (`nvim`), repeat insert/normal mode, arrow/function keys, resize, `:q`, and Ctrl+C through the PTY, and record any ConPTY escape-sequence differences.
 
 ## Remaining risks and intentional limits
 
 - Visual layout, accessibility focus order, screen-reader behavior, Korean IME composition, and Neovim behavior are BLOCKED in this environment; no automated success is substituted. Git-bundled Vim is PASS through the real ConPTY smoke.
-- The webview clears its local prompt immediately on send, while the application service deletes the persisted draft only after runtime success. Without a success/failure acknowledgement back to the webview, a failed send can still appear to lose the local draft; this needs a protocol/UI follow-up and failure-preserves-draft test.
+- The optimistic-clear Prompt loss risk is resolved by protocol-version-2 acknowledgements and the new failure-preserves-Draft tests. A genuine storage outage after successful Runtime delivery remains an explicit `accepted/warning` condition; the Webview avoids duplicate resend, but stale persistent data may require operator cleanup after restart.
 - No signed/installed VSIX was produced. The built `dist` layout and native packaged runtime were executed in both Vitest and the official development Extension Host; Marketplace/VSIX installation remains release validation.
-- Source-size debt remains: `jsonl-runtime-client.ts` is 490 lines, `console-service.ts` 353, `session-commands.ts` 335, and `server.ts` 303. The 490-line client especially combines transport, decoding, and orchestration and should be split before expansion.
+- Source-size debt remains: `jsonl-runtime-client.ts` is 490 lines, `console-service.ts` 352, `session-commands.ts` 335, and `server.ts` 303. The 490-line client especially combines transport, decoding, and orchestration and should be split before expansion.
 - The UI exposes bounded in-memory output but no explicit truncation marker. The PTY file log retains the full output; a future UI should surface truncation state.
 - The generated packaged runtime is 6,895,824 bytes across 56 files after excluding PDB debug symbols and includes Windows x64 and arm64 assets only, consistent with the Windows-first decision.
 - Actual Git worktree, Library copy, ReFS/COW, Unity CLI operations, and production tool integrations are intentionally outside this vertical slice; only their package boundaries/contracts exist.

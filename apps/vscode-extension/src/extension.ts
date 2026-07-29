@@ -56,6 +56,9 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
     output.appendLine(`[error] ${message}`);
     vscode.window.showErrorMessage(`Honey Bee: ${message}`);
   };
+  const reportPromptDiagnostic = (message: string): void => {
+    output.appendLine(`[prompt] ${message}`);
+  };
 
   const sessions = new GlobalStateSessionRepository(context.globalState);
   const drafts = new GlobalStateDraftRepository(context.globalState);
@@ -109,7 +112,12 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
     clock,
   );
   const tree = new SessionTreeProvider(sessionService);
-  const consoleView = new ConsoleViewProvider(context.extensionUri, consoleService, reportError);
+  const consoleView = new ConsoleViewProvider(
+    context.extensionUri,
+    consoleService,
+    reportError,
+    reportPromptDiagnostic,
+  );
 
   context.subscriptions.push(
     output,

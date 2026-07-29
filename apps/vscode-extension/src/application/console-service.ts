@@ -14,6 +14,7 @@ import {
 } from "@honeybee/ui-shared";
 
 import { ApplicationError } from "./errors.js";
+import { deliverPrompt, type PromptDeliveryResult } from "./prompt-delivery.js";
 import type {
   AgentProfileResolverPort,
   ClockPort,
@@ -194,16 +195,13 @@ export class ConsoleApplicationService {
     }
   }
 
-  public async sendPrompt(sessionId: SessionId, content: string): Promise<void> {
-    if (content.trim().length === 0) {
-      return;
-    }
-    await this.runtime.sendInput(sessionId, `${content}\r`);
-    const result = await this.drafts.delete(sessionId);
-    if (!result.ok) {
-      throw new ApplicationError(result.error.code, result.error.message, result.error.details);
-    }
-    if (this.#state.selectedSession?.id === sessionId) {
+  public async sendPrompt(sessionId: SessionId, content: string): Promise<PromptDeliveryResult> {
+    const result = await deliverPrompt(
+      { drafts: this.drafts, runtime: this.runtime, clock: this.clock },
+      sessionId,
+      content,
+    );
+    if (result.status === "accepted" && this.#state.selectedSession?.id === sessionId) {
       this.setState(
         reduceConsoleViewState(this.#state, {
           type: "draft.updated",
@@ -211,6 +209,7 @@ export class ConsoleApplicationService {
         }),
       );
     }
+    return result;
   }
 
   public async sendTerminalInput(sessionId: SessionId, data: string): Promise<void> {
