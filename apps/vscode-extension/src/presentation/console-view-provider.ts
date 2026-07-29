@@ -2,22 +2,20 @@ import { randomBytes } from "node:crypto";
 
 import * as vscode from "vscode";
 
-import { SessionIdSchema, type SessionId } from "@honeybee/domain";
+import { SessionIdSchema } from "@honeybee/domain";
 import {
   createConsoleWebviewHtml,
   isConsoleToExtensionMessage,
   type ConsoleToExtensionMessage,
+  type PromptAcknowledgementMessage,
+  type PromptSendMessage,
 } from "@honeybee/ui-shared";
 
 import type { ConsoleApplicationService } from "../application/console-service.js";
-
-interface PendingDraft {
-  readonly content: string;
-  readonly timeout: ReturnType<typeof setTimeout>;
-}
+import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 
 export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
-  readonly #pendingDrafts = new Map<SessionId, PendingDraft>();
+  readonly #delivery: PromptDeliveryCoordinator;
   readonly #serviceSubscription: { dispose(): void };
   #view: vscode.WebviewView | undefined;
 
@@ -25,7 +23,9 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly extensionUri: vscode.Uri,
     private readonly consoleService: ConsoleApplicationService,
     private readonly reportError: (error: unknown) => void,
+    reportDiagnostic: (message: string) => void,
   ) {
+    this.#delivery = new PromptDeliveryCoordinator(consoleService, reportError, reportDiagnostic);
     this.#serviceSubscription = consoleService.onMessage((message) => {
       this.#view?.webview.postMessage(message);
     });
@@ -68,10 +68,7 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
 
   public dispose(): void {
     this.#serviceSubscription.dispose();
-    for (const [sessionId] of this.#pendingDrafts) {
-      this.flushDraft(sessionId);
-    }
-    this.#pendingDrafts.clear();
+    this.#delivery.dispose();
   }
 
   private handleMessage(message: ConsoleToExtensionMessage): void {
@@ -80,12 +77,10 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
         this.consoleService.replayState();
         break;
       case "draft.changed":
-        this.scheduleDraft(SessionIdSchema.parse(message.sessionId), message.content);
+        this.#delivery.scheduleDraft(SessionIdSchema.parse(message.sessionId), message.content);
         break;
       case "prompt.send":
-        this.run(
-          this.consoleService.sendPrompt(SessionIdSchema.parse(message.sessionId), message.content),
-        );
+        this.deliverPrompt(message);
         break;
       case "terminal.input":
         this.run(
@@ -116,25 +111,24 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
-  private scheduleDraft(sessionId: SessionId, content: string): void {
-    const current = this.#pendingDrafts.get(sessionId);
-    if (current !== undefined) {
-      clearTimeout(current.timeout);
-    }
-    const timeout = setTimeout(() => {
-      this.flushDraft(sessionId);
-    }, 250);
-    this.#pendingDrafts.set(sessionId, { content, timeout });
+  private deliverPrompt(message: PromptSendMessage): void {
+    const parsedMessage = {
+      ...message,
+      sessionId: SessionIdSchema.parse(message.sessionId),
+    };
+    this.run(
+      this.#delivery.deliver(parsedMessage).then(async (acknowledgement) => {
+        await this.postAcknowledgement(acknowledgement);
+      }),
+    );
   }
 
-  private flushDraft(sessionId: SessionId): void {
-    const pending = this.#pendingDrafts.get(sessionId);
-    if (pending === undefined) {
-      return;
+  private async postAcknowledgement(
+    message: PromptAcknowledgementMessage | undefined,
+  ): Promise<void> {
+    if (message !== undefined && this.#view !== undefined) {
+      await this.#view.webview.postMessage(message);
     }
-    clearTimeout(pending.timeout);
-    this.#pendingDrafts.delete(sessionId);
-    this.run(this.consoleService.saveDraft(sessionId, pending.content));
   }
 
   private run(work: Promise<void>): void {

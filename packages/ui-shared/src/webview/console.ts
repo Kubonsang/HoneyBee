@@ -5,10 +5,13 @@ import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 
 import {
   CONSOLE_WEBVIEW_VERSION,
+  isExtensionToConsoleMessage,
   type ConsoleToExtensionMessage,
   type ConsoleViewState,
-  type ExtensionToConsoleMessage,
+  type PromptAcknowledgementMessage,
 } from "../contracts.js";
+import { PromptDeliveryTracker, reconcileDraftAfterSettlement } from "../prompt-delivery-state.js";
+import { createPromptKeyBindings, shouldSubmitPrompt } from "../prompt-input-policy.js";
 import "./console.css";
 
 interface VsCodeApi {
@@ -103,7 +106,9 @@ const editor = monaco.editor.create(editorElement, {
 let activeState: ConsoleViewState | undefined;
 let activeSessionId: string | undefined;
 let suppressDraftMessage = false;
+let isComposing = false;
 const localDrafts = new Map<string, string>();
+const promptDelivery = new PromptDeliveryTracker();
 
 const selectedSessionId = (): string | undefined => activeState?.selectedSession?.id;
 
@@ -116,28 +121,64 @@ const postForSelectedSession = (
   }
 };
 
+const updatePromptControls = (): void => {
+  const selected = activeState?.selectedSession ?? null;
+  const pending = selected !== null && promptDelivery.isPending(selected.id);
+  const canSend =
+    selected !== null &&
+    activeState?.connectionStatus === "connected" &&
+    (selected.status === "running" || selected.status === "waiting_for_input");
+  sendButton.disabled = !canSend || pending;
+  sendButton.textContent = pending ? "Sending..." : "Send";
+  editorElement.dataset.pending = String(pending);
+  editor.updateOptions({ readOnly: selected === null || pending });
+};
+
 const submitPrompt = (): void => {
   const sessionId = selectedSessionId();
   const content = editor.getValue();
-  if (sessionId === undefined || content.trim().length === 0) {
+  if (
+    sessionId === undefined ||
+    !shouldSubmitPrompt(content, isComposing, promptDelivery.isPending(sessionId))
+  ) {
     return;
   }
 
-  vscode.postMessage({ type: "prompt.send", sessionId, content });
-  localDrafts.set(sessionId, "");
-  suppressDraftMessage = true;
-  editor.setValue("");
-  suppressDraftMessage = false;
-  vscode.postMessage({ type: "draft.changed", sessionId, content: "" });
+  const message = {
+    type: "prompt.send",
+    requestId: crypto.randomUUID(),
+    sessionId,
+    content,
+  } as const;
+  if (!promptDelivery.begin(message)) {
+    return;
+  }
+
+  localDrafts.set(sessionId, content);
+  statusMessage.textContent = "Sending Prompt...";
+  updatePromptControls();
+  vscode.postMessage(message);
 };
 
-editor.addCommand(monaco.KeyCode.Enter, submitPrompt);
-editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, submitPrompt);
-editor.addCommand(monaco.KeyMod.Shift | monaco.KeyCode.Enter, () => {
-  editor.trigger("honeybee", "type", { text: "\n" });
+const promptKeyBindings = createPromptKeyBindings(
+  monaco.KeyCode.Enter,
+  monaco.KeyMod.CtrlCmd,
+  monaco.KeyMod.Shift,
+  monaco.KeyMod.Alt,
+);
+for (const keybinding of promptKeyBindings.submit) {
+  editor.addCommand(keybinding, submitPrompt);
+}
+for (const keybinding of promptKeyBindings.newline) {
+  editor.addCommand(keybinding, () => {
+    editor.trigger("honeybee", "type", { text: "\n" });
+  });
+}
+editor.onDidCompositionStart(() => {
+  isComposing = true;
 });
-editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.Enter, () => {
-  editor.trigger("honeybee", "type", { text: "\n" });
+editor.onDidCompositionEnd(() => {
+  isComposing = false;
 });
 
 editor.onDidChangeModelContent(() => {
@@ -196,7 +237,10 @@ const renderState = (state: ConsoleViewState): void => {
   activeSessionId = nextSessionId;
   connectionBadge.textContent = state.connectionStatus;
   connectionBadge.dataset.state = state.connectionStatus;
-  statusMessage.textContent = state.statusMessage;
+  statusMessage.textContent =
+    nextSessionId !== undefined && promptDelivery.isPending(nextSessionId)
+      ? "Sending Prompt..."
+      : state.statusMessage;
 
   const selected = state.selectedSession;
   sessionValue.textContent = selected?.title ?? "No session selected";
@@ -209,11 +253,7 @@ const renderState = (state: ConsoleViewState): void => {
   startButton.disabled = !state.canStart;
   interruptButton.disabled = !state.canInterrupt;
   stopButton.disabled = !state.canStop;
-  sendButton.disabled =
-    selected === null ||
-    state.connectionStatus !== "connected" ||
-    (selected.status !== "running" && selected.status !== "waiting_for_input");
-  editor.updateOptions({ readOnly: selected === null });
+  updatePromptControls();
 
   if (previousSessionId !== nextSessionId) {
     const draft =
@@ -222,12 +262,47 @@ const renderState = (state: ConsoleViewState): void => {
     editor.setValue(draft);
     suppressDraftMessage = false;
     fitTerminal();
-  } else if (nextSessionId !== undefined && editor.getValue() !== state.draft) {
+  } else if (
+    nextSessionId !== undefined &&
+    !promptDelivery.isPending(nextSessionId) &&
+    editor.getValue() !== state.draft
+  ) {
     localDrafts.set(nextSessionId, state.draft);
   }
 };
 
-window.addEventListener("message", (event: MessageEvent<ExtensionToConsoleMessage>) => {
+const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): void => {
+  const settlement = promptDelivery.settle(message);
+  if (settlement.status === "ignored") {
+    return;
+  }
+
+  const sessionId = settlement.prompt.sessionId;
+  const storedDraft = localDrafts.get(sessionId) ?? settlement.prompt.content;
+  const nextDraft = reconcileDraftAfterSettlement(storedDraft, settlement);
+  localDrafts.set(sessionId, nextDraft);
+
+  if (sessionId === selectedSessionId()) {
+    if (settlement.status === "accepted" && editor.getValue() === settlement.prompt.content) {
+      suppressDraftMessage = true;
+      editor.setValue(nextDraft);
+      suppressDraftMessage = false;
+    }
+    statusMessage.textContent =
+      settlement.status === "accepted"
+        ? settlement.acknowledgement.draftCleanup === "warning"
+          ? `Prompt sent. ${settlement.acknowledgement.warning}`
+          : "Prompt sent."
+        : `Prompt not sent. ${settlement.message}`;
+    updatePromptControls();
+    editor.focus();
+  }
+};
+
+window.addEventListener("message", (event: MessageEvent<unknown>) => {
+  if (!isExtensionToConsoleMessage(event.data)) {
+    return;
+  }
   const message = event.data;
   switch (message.type) {
     case "console.state":
@@ -245,6 +320,10 @@ window.addEventListener("message", (event: MessageEvent<ExtensionToConsoleMessag
       break;
     case "prompt.focus":
       editor.focus();
+      break;
+    case "prompt.accepted":
+    case "prompt.rejected":
+      handlePromptAcknowledgement(message);
       break;
   }
 });

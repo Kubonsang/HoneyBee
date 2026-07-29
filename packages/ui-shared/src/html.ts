@@ -66,7 +66,7 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
       <section class="prompt-panel" aria-label="Prompt editor">
         <div class="section-label">
           <span>PROMPT</span>
-          <span>Enter to send · Alt+Enter / Shift+Enter for newline</span>
+          <span>Enter / Ctrl+Enter to send · Alt+Enter / Shift+Enter for newline</span>
         </div>
         <div id="prompt-editor" aria-label="Prompt editor"></div>
         <div class="prompt-footer">
