@@ -1,0 +1,72 @@
+# Dependencies and build output
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# Local package-manager and registry credentials
+.npmrc
+.pnpmrc
+.yarnrc
+.yarnrc.yml
+
+# VS Code extension test/runtime state
+.vscode-test/
+.honeybee/
+/.vscode/settings.json
+/.vscode/tasks.json
+*.code-workspace
+
+# Honey Bee runtime state
+*.pty.log
+*.ndjson
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+logs/
+artifacts/
+
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+.secrets/
+secrets/
+credentials*.json
+service-account*.json
+*.pem
+*.key
+*.p8
+*.p12
+*.pfx
+*.jks
+*.keystore
+id_rsa
+id_rsa.*
+id_ed25519
+id_ed25519.*
+
+# Private source/reference documents. Public architecture is kept under docs/.
+Honey_Bee_*.docx
+docs/private/
+
+# Unity generated state
+[Ll]ibrary/
+[Tt]emp/
+[Oo]bj/
+[Bb]uild/
+[Bb]uilds/
+[Ll]ogs/
+[Uu]ser[Ss]ettings/
+
+# Native output
+native/storage-helper/target/
+
+# OS/editor
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*.orig
+*.rej
+.idea/

@@ -1,0 +1,8 @@
+# Security-sensitive repository controls
+/.github/ @Kubonsang
+/.githooks/ @Kubonsang
+/.gitignore @Kubonsang
+/scripts/security/ @Kubonsang
+/SECURITY.md @Kubonsang
+/LICENSE @Kubonsang
+/THIRD_PARTY_NOTICES.md @Kubonsang

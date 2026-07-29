@@ -1,0 +1,12 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+
+allowBuilds:
+  esbuild: true
+  node-pty: true
+
+minimumReleaseAge: 1440
+
+minimumReleaseAgeExclude:
+  - "@honeybee/*"

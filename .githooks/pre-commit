@@ -1,0 +1,5 @@
+#!/usr/bin/env sh
+set -eu
+
+node scripts/security/check-no-secrets.mjs --staged
+node scripts/security/check-licenses.mjs

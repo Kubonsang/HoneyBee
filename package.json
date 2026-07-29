@@ -1,0 +1,46 @@
+{
+  "name": "honey-bee",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-first VS Code workspace for AI agent sessions in Unity projects.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Kubonsang/HoneyBee.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Kubonsang/HoneyBee/issues"
+  },
+  "homepage": "https://github.com/Kubonsang/HoneyBee#readme",
+  "packageManager": "pnpm@11.18.0",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "build": "corepack pnpm -r --if-present build",
+    "clean": "corepack pnpm -r --if-present clean",
+    "deps:check": "depcruise --config dependency-cruiser.cjs apps packages",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "licenses:check": "node scripts/security/check-licenses.mjs",
+    "lint": "eslint . --max-warnings 0",
+    "security:install-hooks": "git config core.hooksPath .githooks",
+    "security:scan": "node scripts/security/check-no-secrets.mjs --all",
+    "test": "corepack pnpm build && vitest run",
+    "test:watch": "vitest",
+    "typecheck": "corepack pnpm -r --if-present typecheck",
+    "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
+    "test:run": "vitest run",
+    "test:vscode": "corepack pnpm build && corepack pnpm --filter honey-bee-vscode test:vscode"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/node": "^24.10.1",
+    "dependency-cruiser": "^17.3.3",
+    "eslint": "^9.39.2",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.52.0",
+    "vitest": "^4.0.18"
+  }
+}

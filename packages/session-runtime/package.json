@@ -1,0 +1,32 @@
+{
+  "name": "@honeybee/session-runtime",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "honeybee-session-runtime": "./dist/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --pretty false",
+    "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@honeybee/agent-adapters": "workspace:*",
+    "@honeybee/domain": "workspace:*",
+    "node-pty": "^1.1.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@honeybee/test-fixtures": "workspace:*"
+  },
+  "license": "MIT"
+}
