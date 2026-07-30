@@ -82,6 +82,30 @@ describe("Console message contracts", () => {
     ).toBe(false);
   });
 
+  it("requires a typed lifecycle state in protocol v5 Console state", () => {
+    const state = {
+      selectedSession: null,
+      draft: "",
+      recoveryIssue: null,
+      connectionStatus: "connected",
+      lifecycleState: "shutting-down",
+      statusMessage: "Honey Bee is shutting down.",
+      canStart: false,
+      canInterrupt: false,
+      canStop: false,
+    };
+    expect(isExtensionToConsoleMessage({ type: "console.state", state })).toBe(true);
+    const { lifecycleState: _lifecycleState, ...missingLifecycle } = state;
+    expect(isExtensionToConsoleMessage({ type: "console.state", state: missingLifecycle })).toBe(
+      false,
+    );
+    expect(
+      isExtensionToConsoleMessage({
+        type: "console.state",
+        state: { ...state, lifecycleState: "terminating" },
+      }),
+    ).toBe(false);
+  });
   it("distinguishes accepted durability outcomes from rejected delivery", () => {
     expect(
       isExtensionToConsoleMessage({

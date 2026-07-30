@@ -17,7 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import { fingerprintPromptContent } from "./prompt-content-fingerprint.js";
 import type {
   RuntimeClientEvent,
-  RuntimeClientPort,
+  PromptRuntimeInputPort,
   RuntimeConnectionState,
   RuntimeInputOutcome,
   RuntimeStartRequest,
@@ -49,7 +49,7 @@ const unknownAttempt = (): PromptDeliveryAttempt => {
   return unknown.value;
 };
 
-class RecoveryRuntime implements RuntimeClientPort {
+class RecoveryRuntime implements PromptRuntimeInputPort {
   public readonly inputs: string[] = [];
   public connectionState: RuntimeConnectionState = "connected";
   public outcome: RuntimeInputOutcome = { status: "accepted" };

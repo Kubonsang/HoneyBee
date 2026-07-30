@@ -124,7 +124,7 @@ const postForSelectedSession = (
   type: "session.start" | "session.interrupt" | "session.stop",
 ): void => {
   const sessionId = selectedSessionId();
-  if (sessionId !== undefined) {
+  if (sessionId !== undefined && activeState?.lifecycleState === "active") {
     vscode.postMessage({ type, sessionId });
   }
 };
@@ -136,11 +136,14 @@ const updatePromptControls = (): void => {
   const canSend =
     selected !== null &&
     activeState?.connectionStatus === "connected" &&
+    activeState.lifecycleState === "active" &&
     (selected.status === "running" || selected.status === "waiting_for_input");
   sendButton.disabled = !canSend || pending || recoveryLocked;
   sendButton.textContent = pending ? "Sending..." : recoveryLocked ? "Recovery required" : "Send";
   editorElement.dataset.pending = String(pending);
-  editor.updateOptions({ readOnly: selected === null || pending });
+  editor.updateOptions({
+    readOnly: selected === null || pending || activeState?.lifecycleState !== "active",
+  });
 };
 
 const submitPrompt = (): void => {
@@ -148,6 +151,7 @@ const submitPrompt = (): void => {
   const content = editor.getValue();
   if (
     sessionId === undefined ||
+    activeState?.lifecycleState !== "active" ||
     !shouldSubmitPrompt(content, isComposing, promptDelivery.isPending(sessionId))
   ) {
     return;
@@ -205,14 +209,19 @@ editor.onDidChangeModelContent(() => {
 
 terminal.onData((data) => {
   const sessionId = selectedSessionId();
-  if (sessionId !== undefined) {
+  if (sessionId !== undefined && activeState?.lifecycleState === "active") {
     vscode.postMessage({ type: "terminal.input", sessionId, data });
   }
 });
 
 const reportTerminalSize = (): void => {
   const sessionId = selectedSessionId();
-  if (sessionId === undefined || terminal.cols <= 0 || terminal.rows <= 0) {
+  if (
+    sessionId === undefined ||
+    activeState?.lifecycleState !== "active" ||
+    terminal.cols <= 0 ||
+    terminal.rows <= 0
+  ) {
     return;
   }
   vscode.postMessage({
@@ -261,7 +270,9 @@ const renderState = (state: ConsoleViewState): void => {
       recovery.draftMatch === "exact"
         ? `Request ${recovery.requestId} may have reached the Runtime. It will not be resent automatically.`
         : `Request ${recovery.requestId} is unresolved. The current Draft is ${recovery.draftMatch}.`;
-    retryPromptButton.disabled = recovery.draftMatch !== "exact";
+    assumeDeliveredButton.disabled = state.lifecycleState !== "active";
+    retryPromptButton.disabled =
+      recovery.draftMatch !== "exact" || state.lifecycleState !== "active";
   }
   const selected = state.selectedSession;
   sessionValue.textContent = selected?.title ?? "No session selected";
@@ -373,7 +384,14 @@ const postRecoveryAction = (
   type: "prompt.recovery.assume-delivered" | "prompt.recovery.retry",
 ): void => {
   const issue = activeState?.recoveryIssue;
-  if (issue === null || issue === undefined || issue.sessionId !== selectedSessionId()) return;
+  if (
+    activeState?.lifecycleState !== "active" ||
+    issue === null ||
+    issue === undefined ||
+    issue.sessionId !== selectedSessionId()
+  ) {
+    return;
+  }
   vscode.postMessage({ type, requestId: issue.requestId, sessionId: issue.sessionId });
 };
 

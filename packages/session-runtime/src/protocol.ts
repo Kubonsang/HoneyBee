@@ -1,7 +1,7 @@
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, RuntimeInstanceIdSchema, SessionIdSchema } from "@honeybee/domain";
 import { z } from "zod";
 
-export const RUNTIME_PROTOCOL_VERSION = 1 as const;
+export const RUNTIME_PROTOCOL_VERSION = 2 as const;
 
 export const RuntimeLaunchSpecSchema = z
   .object({
@@ -20,6 +20,27 @@ export const TerminalSizeSchema = z
   })
   .strict();
 
+export const RuntimeShutdownReasonSchema = z.enum(["extension-shutdown", "runtime-shutdown"]);
+export type RuntimeShutdownReason = z.infer<typeof RuntimeShutdownReasonSchema>;
+
+export const RuntimeHelloSchema = z
+  .object({
+    protocolVersion: z.literal(RUNTIME_PROTOCOL_VERSION),
+    runtimeInstanceId: RuntimeInstanceIdSchema,
+    pid: z.number().int().positive(),
+  })
+  .strict();
+export type RuntimeHello = z.infer<typeof RuntimeHelloSchema>;
+
+export const RuntimeShutdownResultSchema = z
+  .object({
+    state: z.literal("stopped"),
+    stoppedRuns: z.number().int().nonnegative(),
+    unresolvedRuns: z.number().int().nonnegative(),
+  })
+  .strict();
+export type RuntimeShutdownResult = z.infer<typeof RuntimeShutdownResultSchema>;
+
 const RequestBaseSchema = z
   .object({
     schemaVersion: z.literal(RUNTIME_PROTOCOL_VERSION),
@@ -28,11 +49,17 @@ const RequestBaseSchema = z
   })
   .strict();
 
+const RuntimeHelloRequestSchema = RequestBaseSchema.extend({
+  method: z.literal("runtime.hello"),
+  params: z.object({}).strict(),
+});
+
 const AgentStartRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.start"),
   params: z
     .object({
       sessionId: SessionIdSchema,
+      runId: RunIdSchema,
       launchSpec: RuntimeLaunchSpecSchema,
       size: TerminalSizeSchema,
       logFilePath: z.string().min(1).optional(),
@@ -40,37 +67,40 @@ const AgentStartRequestSchema = RequestBaseSchema.extend({
     .strict(),
 });
 
+const runIdentity = { sessionId: SessionIdSchema, runId: RunIdSchema } as const;
+
 const AgentInputRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.input"),
-  params: z.object({ sessionId: SessionIdSchema, data: z.string() }).strict(),
+  params: z.object({ ...runIdentity, data: z.string() }).strict(),
 });
 
 const AgentResizeRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.resize"),
-  params: z.object({ sessionId: SessionIdSchema, size: TerminalSizeSchema }).strict(),
+  params: z.object({ ...runIdentity, size: TerminalSizeSchema }).strict(),
 });
 
 const AgentInterruptRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.interrupt"),
-  params: z.object({ sessionId: SessionIdSchema }).strict(),
+  params: z.object(runIdentity).strict(),
 });
 
 const AgentStopRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.stop"),
-  params: z.object({ sessionId: SessionIdSchema, force: z.boolean().optional() }).strict(),
+  params: z.object({ ...runIdentity, force: z.boolean().optional() }).strict(),
 });
 
 const AgentSnapshotRequestSchema = RequestBaseSchema.extend({
   method: z.literal("agent.snapshot"),
-  params: z.object({ sessionId: SessionIdSchema }).strict(),
+  params: z.object(runIdentity).strict(),
 });
 
 const RuntimeShutdownRequestSchema = RequestBaseSchema.extend({
   method: z.literal("runtime.shutdown"),
-  params: z.object({}).strict(),
+  params: z.object({ reason: RuntimeShutdownReasonSchema }).strict(),
 });
 
 export const RuntimeRequestSchema = z.discriminatedUnion("method", [
+  RuntimeHelloRequestSchema,
   AgentStartRequestSchema,
   AgentInputRequestSchema,
   AgentResizeRequestSchema,
@@ -117,12 +147,17 @@ export const RuntimeResponseSchema = z.discriminatedUnion("ok", [
 ]);
 export type RuntimeResponse = z.infer<typeof RuntimeResponseSchema>;
 
+const runEventIdentity = {
+  sessionId: SessionIdSchema,
+  runId: RunIdSchema,
+} as const;
+
 const PtyStartedEventSchema = z
   .object({
     schemaVersion: z.literal(RUNTIME_PROTOCOL_VERSION),
     kind: z.literal("event"),
     event: z.literal("pty.started"),
-    sessionId: SessionIdSchema,
+    ...runEventIdentity,
     seq: z.number().int().nonnegative(),
     pid: z.number().int().nonnegative(),
     logFilePath: z.string().min(1),
@@ -134,7 +169,7 @@ const PtyDataEventSchema = z
     schemaVersion: z.literal(RUNTIME_PROTOCOL_VERSION),
     kind: z.literal("event"),
     event: z.literal("pty.data"),
-    sessionId: SessionIdSchema,
+    ...runEventIdentity,
     seq: z.number().int().nonnegative(),
     data: z.string(),
   })
@@ -145,11 +180,19 @@ const PtyExitEventSchema = z
     schemaVersion: z.literal(RUNTIME_PROTOCOL_VERSION),
     kind: z.literal("event"),
     event: z.literal("pty.exit"),
-    sessionId: SessionIdSchema,
+    ...runEventIdentity,
     seq: z.number().int().nonnegative(),
     exitCode: z.number().int().nullable(),
     signal: z.number().int().nullable(),
-    reason: z.enum(["exited", "interrupted", "stopped", "force-killed", "spawn-failed"]),
+    reason: z.enum([
+      "exited",
+      "interrupted",
+      "stopped",
+      "force-killed",
+      "spawn-failed",
+      "extension-shutdown",
+      "runtime-shutdown",
+    ]),
   })
   .strict();
 

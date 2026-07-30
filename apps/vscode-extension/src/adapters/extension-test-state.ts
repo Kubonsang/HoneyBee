@@ -5,10 +5,12 @@ import {
   PromptDeliveryAttemptSchema,
   PromptDeliveryReceiptSchema,
   SessionDraftSchema,
+  SessionRunRecordSchema,
   SessionIdSchema,
 } from "@honeybee/domain";
 
 import { PROMPT_DELIVERY_ATTEMPT_STORAGE_KEY } from "./global-state-prompt-attempt-repository.js";
+import { SESSION_RUN_STORAGE_KEY } from "./global-state-session-run-repository.js";
 import { PROMPT_DELIVERY_RECEIPT_STORAGE_KEY } from "./global-state-prompt-receipt-repository.js";
 import {
   DRAFT_STORAGE_KEY,
@@ -28,6 +30,12 @@ export interface PromptRecoveryExtensionTestState {
   readonly selectedDraftPresent: boolean;
   readonly attemptPhases: readonly { readonly requestId: string; readonly phase: string }[];
   readonly recoveryIssueRequestIds: readonly string[];
+  readonly sessionStatuses: readonly { readonly sessionId: string; readonly status: string }[];
+  readonly runPhases: readonly {
+    readonly runId: string;
+    readonly phase: string;
+    readonly terminationReason?: string;
+  }[];
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -54,6 +62,7 @@ export const applyPromptRecoveryTestFixture = async (
   const drafts = SessionDraftSchema.array().parse(value.drafts);
   const attempts = PromptDeliveryAttemptSchema.array().parse(value.attempts ?? []);
   const receipts = PromptDeliveryReceiptSchema.array().parse(value.receipts);
+  const runs = SessionRunRecordSchema.array().parse(value.runs ?? []);
   const selectedSessionId = SessionIdSchema.parse(value.selectedSessionId);
 
   await Promise.all([
@@ -61,6 +70,7 @@ export const applyPromptRecoveryTestFixture = async (
     context.globalState.update(DRAFT_STORAGE_KEY, drafts),
     context.globalState.update(PROMPT_DELIVERY_ATTEMPT_STORAGE_KEY, attempts),
     context.globalState.update(PROMPT_DELIVERY_RECEIPT_STORAGE_KEY, receipts),
+    context.globalState.update(SESSION_RUN_STORAGE_KEY, runs),
     context.globalState.update(SELECTED_SESSION_STORAGE_KEY, selectedSessionId),
   ]);
 };

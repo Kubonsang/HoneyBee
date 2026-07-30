@@ -13,7 +13,7 @@ import type {
 import { deliverPrompt, type PromptDeliveryResult } from "./prompt-delivery.js";
 import type { PromptRecoveryIssueRecord } from "./prompt-delivery-attempt-reconciler.js";
 import { receiptMatchesPromptContent } from "./prompt-content-fingerprint.js";
-import type { ClockPort, IdGeneratorPort, RuntimeClientPort } from "./ports.js";
+import type { ClockPort, IdGeneratorPort, PromptRuntimeInputPort } from "./ports.js";
 
 export type PromptRecoveryActionResult =
   | { readonly status: "resolved"; readonly draftCleared: boolean }
@@ -29,7 +29,7 @@ export interface PromptRecoveryServiceDependencies {
   readonly attempts: PromptDeliveryAttemptRepository;
   readonly drafts: DraftRepository;
   readonly receipts: PromptDeliveryReceiptRepository;
-  readonly runtime: RuntimeClientPort;
+  readonly runtime: PromptRuntimeInputPort;
   readonly clock: ClockPort;
   readonly ids: Pick<IdGeneratorPort, "requestId">;
   readonly initialIssues?: readonly PromptRecoveryIssueRecord[];

@@ -1,6 +1,8 @@
-export const CONSOLE_WEBVIEW_VERSION = 4 as const;
+export const CONSOLE_WEBVIEW_VERSION = 5 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
+export type ConsoleLifecycleState =
+  "activating" | "active" | "shutting-down" | "stopped" | "failed";
 
 export type ConsoleSessionStatus =
   "idle" | "starting" | "running" | "waiting_for_input" | "stopped" | "failed" | "completed";
@@ -29,6 +31,7 @@ export interface ConsoleViewState {
   readonly draft: string;
   readonly recoveryIssue: PromptRecoveryIssue | null;
   readonly connectionStatus: ConsoleConnectionStatus;
+  readonly lifecycleState: ConsoleLifecycleState;
   readonly statusMessage: string;
   readonly canStart: boolean;
   readonly canInterrupt: boolean;
@@ -132,6 +135,14 @@ const hasRequestAndSessionId = (
   readonly sessionId: string;
 } => typeof value.requestId === "string" && value.requestId.length > 0 && hasSessionId(value);
 
+const consoleLifecycleStates: readonly ConsoleLifecycleState[] = [
+  "activating",
+  "active",
+  "shutting-down",
+  "stopped",
+  "failed",
+];
+
 const consoleConnectionStatuses: readonly ConsoleConnectionStatus[] = [
   "connecting",
   "connected",
@@ -189,6 +200,8 @@ const isConsoleViewState = (value: unknown): value is ConsoleViewState =>
   (value.recoveryIssue === null || isPromptRecoveryIssue(value.recoveryIssue)) &&
   typeof value.connectionStatus === "string" &&
   consoleConnectionStatuses.includes(value.connectionStatus as ConsoleConnectionStatus) &&
+  typeof value.lifecycleState === "string" &&
+  consoleLifecycleStates.includes(value.lifecycleState as ConsoleLifecycleState) &&
   typeof value.statusMessage === "string" &&
   typeof value.canStart === "boolean" &&
   typeof value.canInterrupt === "boolean" &&

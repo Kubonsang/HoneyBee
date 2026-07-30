@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   AgentSessionSchema,
+  RunIdSchema,
+  SessionRunRecordSchema,
   err,
   type AgentSession,
   type Result,
@@ -12,6 +14,7 @@ import {
   InMemoryPromptDeliveryAttemptRepository,
   InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
+  InMemorySessionRunRepository,
   RepositoryError,
   type DraftRepository,
 } from "@honeybee/persistence";
@@ -31,6 +34,7 @@ import { SessionSelectionService } from "./session-selection.js";
 class PromptRuntimeClient implements RuntimeClientPort {
   readonly inputs: { readonly sessionId: SessionId; readonly data: string }[] = [];
   connectionState: RuntimeConnectionState = "connected";
+  readonly runtimeHello = undefined;
   sendInputImplementation: (() => Promise<RuntimeInputOutcome>) | undefined;
 
   public async connect(): Promise<void> {}
@@ -42,6 +46,13 @@ class PromptRuntimeClient implements RuntimeClientPort {
   public async resize(_sessionId: SessionId, _columns: number, _rows: number): Promise<void> {}
   public async interrupt(_sessionId: SessionId): Promise<void> {}
   public async stop(_sessionId: SessionId): Promise<void> {}
+  public async shutdown(): Promise<{
+    readonly state: "stopped";
+    readonly stoppedRuns: number;
+    readonly unresolvedRuns: number;
+  }> {
+    return { state: "stopped", stoppedRuns: 0, unresolvedRuns: 0 };
+  }
   public onEvent(_listener: (event: RuntimeClientEvent) => void): { dispose(): void } {
     return { dispose: () => undefined };
   }
@@ -76,6 +87,17 @@ const session = (id = "prompt-session"): AgentSession =>
     updatedAt: "2026-07-30T12:00:00.000Z",
   });
 
+const run = (sessionId: SessionId, runId: string) =>
+  SessionRunRecordSchema.parse({
+    runId,
+    sessionId,
+    runtimeInstanceId: "runtime-test",
+    phase: "running",
+    startedAt: "2026-07-30T12:00:00.000Z",
+    updatedAt: "2026-07-30T12:00:00.000Z",
+    schemaVersion: 1,
+  });
+
 const createService = (drafts: DraftRepository, runtime: PromptRuntimeClient) => {
   const selected = session();
   const other = session("other-session");
@@ -87,11 +109,18 @@ const createService = (drafts: DraftRepository, runtime: PromptRuntimeClient) =>
       drafts,
       new InMemoryPromptDeliveryAttemptRepository(),
       new InMemoryPromptDeliveryReceiptRepository(),
+      new InMemorySessionRunRepository([
+        run(selected.id, "run-selected"),
+        run(other.id, "run-other"),
+      ]),
       new SessionSelectionService(),
       runtime,
       profiles,
       clock,
-      { requestId: () => "replacement-request" },
+      {
+        requestId: () => "replacement-request",
+        runId: () => RunIdSchema.parse("run-unused"),
+      },
     ),
   };
 };

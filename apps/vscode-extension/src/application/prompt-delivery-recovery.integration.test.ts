@@ -11,7 +11,7 @@ import { deliverPrompt } from "./prompt-delivery.js";
 import { PromptDeliveryReconciler } from "./prompt-delivery-reconciler.js";
 import type {
   RuntimeClientEvent,
-  RuntimeClientPort,
+  PromptRuntimeInputPort,
   RuntimeConnectionState,
   RuntimeInputOutcome,
   RuntimeStartRequest,
@@ -42,7 +42,7 @@ class RecoveryMemento implements MementoPort {
   }
 }
 
-class RecoveryRuntime implements RuntimeClientPort {
+class RecoveryRuntime implements PromptRuntimeInputPort {
   public readonly connectionState: RuntimeConnectionState = "connected";
   public readonly inputs: string[] = [];
 

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema } from "@honeybee/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { RuntimeClientEvent } from "../application/ports.js";
@@ -63,11 +63,13 @@ windowsDescribe("VS Code JSONL client to runtime integration", () => {
       }
     });
     const sessionId = SessionIdSchema.parse("extension-integration");
+    const runId = RunIdSchema.parse("run-extension-integration");
 
     try {
       await client.connect();
       await client.start({
         sessionId,
+        runId,
         command: process.execPath,
         args: [echoFixturePath],
         cwd: temporaryDirectory,
@@ -80,26 +82,30 @@ windowsDescribe("VS Code JSONL client to runtime integration", () => {
         timeout: 10_000,
       });
 
-      await client.resize(sessionId, 110, 32);
-      await client.sendInput(sessionId, "ansi\r");
+      await client.resize(sessionId, 110, 32, runId);
+      await client.sendInput(sessionId, "ansi\r", runId);
       await vi.waitFor(() => {
         expect(output).toContain("ANSI-RED");
         expect(output).toContain("\u001b[");
       });
 
-      await client.sendInput(sessionId, "exit 0\r");
+      await client.sendInput(sessionId, "exit 0\r", runId);
       await vi.waitFor(
         () =>
           expect(events).toContainEqual({
             type: "session.status",
             sessionId,
+            runId,
             status: "completed",
+            reason: "process-exit-zero",
+            exitCode: 0,
             message: "Agent completed successfully.",
           }),
         { timeout: 10_000 },
       );
       expect(diagnostics.join("")).not.toContain("protocol");
     } finally {
+      await client.shutdown("extension-shutdown");
       await client.dispose();
       await rm(temporaryDirectory, {
         recursive: true,

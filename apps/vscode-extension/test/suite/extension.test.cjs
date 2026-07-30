@@ -25,13 +25,13 @@ const expectedCommands = [
 const digest = (content) =>
   "sha256:" + crypto.createHash("sha256").update(Buffer.from(content, "utf8")).digest("hex");
 
-const session = (id, title) => ({
+const session = (id, title, status = "idle") => ({
   id,
   title,
   agentProfileId: "custom",
   tags: [],
   relatedSessionIds: [],
-  status: "idle",
+  status,
   createdAt: "2026-07-30T11:00:00.000Z",
   updatedAt: "2026-07-30T11:00:00.000Z",
 });
@@ -51,7 +51,7 @@ suite("Honey Bee extension host", () => {
       sessions: [
         session(staleSessionId, "Stale receipt"),
         session(newSessionId, "New Draft"),
-        session(dispatchSessionId, "Unknown Attempt"),
+        session(dispatchSessionId, "Unknown Attempt", "running"),
         session(acceptedSessionId, "Accepted Attempt"),
       ],
       drafts: [
@@ -96,6 +96,17 @@ suite("Honey Bee extension host", () => {
           preparedAt: "2026-07-30T11:57:00.000Z",
           updatedAt: "2026-07-30T12:00:00.000Z",
           acceptedAt: "2026-07-30T12:00:00.000Z",
+          schemaVersion: 1,
+        },
+      ],
+      runs: [
+        {
+          runId: "run-stale-unknown",
+          sessionId: dispatchSessionId,
+          runtimeInstanceId: "runtime-previous",
+          phase: "running",
+          startedAt: "2026-07-30T11:50:00.000Z",
+          updatedAt: "2026-07-30T11:59:00.000Z",
           schemaVersion: 1,
         },
       ],
@@ -150,6 +161,19 @@ suite("Honey Bee extension host", () => {
     assert.deepEqual(api.promptRecoveryTestState.recoveryIssueRequestIds, ["attempt-dispatching"]);
     assert.deepEqual(api.promptRecoveryTestState.attemptPhases, [
       { requestId: "attempt-dispatching", phase: "unknown" },
+    ]);
+    assert.equal(
+      api.promptRecoveryTestState.sessionStatuses.find(
+        (item) => item.sessionId === dispatchSessionId,
+      ).status,
+      "stopped",
+    );
+    assert.deepEqual(api.promptRecoveryTestState.runPhases, [
+      {
+        runId: "run-stale-unknown",
+        phase: "interrupted",
+        terminationReason: "recovered-stale-run",
+      },
     ]);
     assert.equal(JSON.stringify(api).includes(dispatchContent), false);
     assert.equal(JSON.stringify(api).includes(acceptedContent), false);

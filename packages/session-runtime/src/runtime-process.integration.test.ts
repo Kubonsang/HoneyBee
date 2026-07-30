@@ -58,12 +58,24 @@ windowsDescribe("separate Runtime process JSONL integration", () => {
 
     try {
       send({
-        schemaVersion: 1,
+        schemaVersion: 2,
+        kind: "request",
+        id: "hello-process",
+        method: "runtime.hello",
+        params: {},
+      });
+      await vi.waitFor(() =>
+        expect(messages.some((message) => message.id === "hello-process" && message.ok)).toBe(true),
+      );
+
+      send({
+        schemaVersion: 2,
         kind: "request",
         id: "start-process",
         method: "agent.start",
         params: {
           sessionId: "process-session",
+          runId: "run-process",
           launchSpec: {
             command: process.execPath,
             args: [echoFixtureCliPath],
@@ -95,11 +107,11 @@ windowsDescribe("separate Runtime process JSONL integration", () => {
       );
 
       send({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: "request",
         id: "input-process",
         method: "agent.input",
-        params: { sessionId: "process-session", data: "exit 0\r" },
+        params: { sessionId: "process-session", runId: "run-process", data: "exit 0\r" },
       });
       await vi.waitFor(
         () => expect(messages.some((message) => message.event === "pty.exit")).toBe(true),
@@ -107,11 +119,11 @@ windowsDescribe("separate Runtime process JSONL integration", () => {
       );
 
       send({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: "request",
         id: "shutdown-process",
         method: "runtime.shutdown",
-        params: {},
+        params: { reason: "extension-shutdown" },
       });
       await vi.waitFor(() =>
         expect(messages.some((message) => message.id === "shutdown-process" && message.ok)).toBe(

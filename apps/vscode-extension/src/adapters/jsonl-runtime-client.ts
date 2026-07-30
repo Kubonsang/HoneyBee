@@ -1,20 +1,30 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawn } from "node:child_process";
 
-import { SessionIdSchema, type SessionId, type SessionStatus } from "@honeybee/domain";
-import type { RuntimeRequest } from "@honeybee/session-runtime";
+import { RunIdSchema, SessionIdSchema, type RunId, type SessionId } from "@honeybee/domain";
+import {
+  RUNTIME_PROTOCOL_VERSION,
+  RuntimeEventMessageSchema,
+  RuntimeHelloSchema,
+  RuntimeShutdownResultSchema,
+  type RuntimeRequest,
+} from "@honeybee/session-runtime";
 
 import { ApplicationError } from "../application/errors.js";
 import type {
   IdGeneratorPort,
   RuntimeClientEvent,
   RuntimeClientPort,
+  RuntimeConnectionCause,
   RuntimeConnectionState,
+  RuntimeHello,
   RuntimeInputOutcome,
+  RuntimeShutdownReason,
+  RuntimeShutdownResult,
   RuntimeStartRequest,
 } from "../application/ports.js";
 
-const PROTOCOL_VERSION = 1 as const;
+const PROTOCOL_VERSION = RUNTIME_PROTOCOL_VERSION;
 const DEFAULT_MAX_FRAME_SIZE = 1024 * 1024;
 
 export interface RuntimeTransportHandlers {
@@ -55,6 +65,7 @@ class RuntimeRequestFailure extends ApplicationError {
     super(code, message, details);
   }
 }
+
 export interface NodeRuntimeTransportOptions {
   readonly command: string;
   readonly args: readonly string[];
@@ -76,15 +87,12 @@ export class JsonLineDecoder {
         `Runtime protocol buffer exceeded ${this.maxFrameSize} characters.`,
       );
     }
-
     const frames: string[] = [];
     let newlineIndex = this.#buffer.indexOf("\n");
     while (newlineIndex >= 0) {
-      const line = this.#buffer.slice(0, newlineIndex).replace(/\r$/, "");
+      const line = this.#buffer.slice(0, newlineIndex).replace(/\r$/u, "");
       this.#buffer = this.#buffer.slice(newlineIndex + 1);
-      if (line.length > 0) {
-        frames.push(line);
-      }
+      if (line.length > 0) frames.push(line);
       newlineIndex = this.#buffer.indexOf("\n");
     }
     return frames;
@@ -97,9 +105,7 @@ export class NodeChildProcessRuntimeTransport implements RuntimeTransportPort {
   public constructor(private readonly options: NodeRuntimeTransportOptions) {}
 
   public async start(handlers: RuntimeTransportHandlers): Promise<void> {
-    if (this.#child !== undefined) {
-      return;
-    }
+    if (this.#child !== undefined) return;
     const child = spawn(this.options.command, [...this.options.args], {
       ...(this.options.cwd === undefined ? {} : { cwd: this.options.cwd }),
       ...(this.options.environment === undefined ? {} : { env: this.options.environment }),
@@ -109,12 +115,8 @@ export class NodeChildProcessRuntimeTransport implements RuntimeTransportPort {
     this.#child = child;
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      handlers.onData(chunk);
-    });
-    child.stderr.on("data", (chunk: string) => {
-      this.options.onDiagnostic?.(chunk);
-    });
+    child.stdout.on("data", (chunk: string) => handlers.onData(chunk));
+    child.stderr.on("data", (chunk: string) => this.options.onDiagnostic?.(chunk));
     child.on("error", handlers.onError);
     child.on("close", (code, signal) => {
       this.#child = undefined;
@@ -133,9 +135,8 @@ export class NodeChildProcessRuntimeTransport implements RuntimeTransportPort {
     }
     await new Promise<void>((resolve, reject) => {
       child.stdin.write(line.endsWith("\n") ? line : `${line}\n`, "utf8", (error) => {
-        if (error === null || error === undefined) {
-          resolve();
-        } else {
+        if (error === null || error === undefined) resolve();
+        else {
           reject(
             new RuntimeTransportWriteError("unknown", "Runtime transport write failed.", {
               cause: error,
@@ -145,12 +146,11 @@ export class NodeChildProcessRuntimeTransport implements RuntimeTransportPort {
       });
     });
   }
+
   public async stop(): Promise<void> {
     const child = this.#child;
     this.#child = undefined;
-    if (child === undefined) {
-      return;
-    }
+    if (child === undefined) return;
     const waitForClose = (timeoutMs: number): Promise<boolean> =>
       new Promise((resolve) => {
         if (child.exitCode !== null || child.signalCode !== null) {
@@ -202,6 +202,10 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
   readonly #listeners = new Set<(event: RuntimeClientEvent) => void>();
   readonly #pending = new Map<string, PendingRequest>();
   #connectionState: RuntimeConnectionState = "disconnected";
+  #runtimeHello: RuntimeHello | undefined;
+  #intentionalClose = false;
+  #shutdownPromise: Promise<RuntimeShutdownResult> | undefined;
+  #disposePromise: Promise<void> | undefined;
 
   public constructor(
     private readonly transport: RuntimeTransportPort,
@@ -216,21 +220,28 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     return this.#connectionState;
   }
 
+  public get runtimeHello(): RuntimeHello | undefined {
+    return this.#runtimeHello;
+  }
+
   public async connect(): Promise<void> {
-    if (this.#connectionState !== "disconnected") {
+    if (this.#runtimeHello !== undefined && this.#connectionState === "connected") {
       return;
     }
-    this.setConnection("connecting", "Connecting to the separate runtime…");
+    if (this.#connectionState !== "disconnected") {
+      throw new ApplicationError(
+        "runtime.connect-conflict",
+        "Runtime connection is already active.",
+      );
+    }
+    this.#intentionalClose = false;
+    this.setConnection("connecting", "connect", "Connecting to the separate runtime…");
     try {
       await this.transport.start({
-        onData: (chunk) => {
-          this.acceptChunk(chunk);
-        },
-        onClose: (reason) => {
-          this.handleDisconnect(reason);
-        },
+        onData: (chunk) => this.acceptChunk(chunk),
+        onClose: (reason) => this.handleDisconnect(reason),
         onError: (error) => {
-          this.setConnection("error", error.message);
+          this.setConnection("error", "runtime-error", error.message);
           this.emit({
             type: "runtime.error",
             code: "runtime.process",
@@ -239,10 +250,15 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
           });
         },
       });
-      this.setConnection("connected", "Runtime connected.");
+      const hello = RuntimeHelloSchema.parse(await this.request("runtime.hello", {}, true));
+      this.#runtimeHello = hello;
+      this.setConnection("connected", "connect", "Runtime connected.");
+      return;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.setConnection("error", message);
+      this.setConnection("error", "runtime-error", message);
+      this.#intentionalClose = true;
+      await this.transport.stop().catch(() => undefined);
       throw new ApplicationError("runtime.start-failed", message);
     }
   }
@@ -250,6 +266,7 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
   public async start(request: RuntimeStartRequest): Promise<void> {
     await this.request("agent.start", {
       sessionId: request.sessionId,
+      runId: request.runId,
       launchSpec: {
         command: request.command,
         args: [...request.args],
@@ -257,16 +274,17 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
         env: request.environment,
         shell: request.shell,
       },
-      size: {
-        cols: request.columns,
-        rows: request.rows,
-      },
+      size: { cols: request.columns, rows: request.rows },
     });
   }
 
-  public async sendInput(sessionId: SessionId, data: string): Promise<RuntimeInputOutcome> {
+  public async sendInput(
+    sessionId: SessionId,
+    data: string,
+    runId: RunId,
+  ): Promise<RuntimeInputOutcome> {
     try {
-      await this.request("agent.input", { sessionId, data });
+      await this.request("agent.input", { sessionId, runId, data });
       return { status: "accepted" };
     } catch (error) {
       if (error instanceof RuntimeRequestFailure) {
@@ -274,48 +292,56 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
           ? { status: "rejected", message: error.message }
           : { status: "unknown", reason: error.message };
       }
-      return {
-        status: "unknown",
-        reason: "The Runtime input outcome could not be determined.",
-      };
+      return { status: "unknown", reason: "The Runtime input outcome could not be determined." };
     }
   }
 
-  public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
+  public async resize(
+    sessionId: SessionId,
+    columns: number,
+    rows: number,
+    runId: RunId,
+  ): Promise<void> {
     await this.request("agent.resize", {
       sessionId,
-      size: {
-        cols: columns,
-        rows,
-      },
+      runId,
+      size: { cols: columns, rows },
     });
   }
 
-  public async interrupt(sessionId: SessionId): Promise<void> {
-    await this.request("agent.interrupt", { sessionId });
+  public async interrupt(sessionId: SessionId, runId: RunId): Promise<void> {
+    await this.request("agent.interrupt", { sessionId, runId });
   }
 
-  public async stop(sessionId: SessionId): Promise<void> {
-    await this.request("agent.stop", { sessionId });
+  public async stop(sessionId: SessionId, runId: RunId): Promise<void> {
+    await this.request("agent.stop", { sessionId, runId });
+  }
+
+  public shutdown(reason: RuntimeShutdownReason): Promise<RuntimeShutdownResult> {
+    this.#shutdownPromise ??= this.#shutdown(reason);
+    return this.#shutdownPromise;
+  }
+
+  async #shutdown(reason: RuntimeShutdownReason): Promise<RuntimeShutdownResult> {
+    this.#intentionalClose = true;
+    if (this.#connectionState !== "connected") {
+      return { state: "stopped", stoppedRuns: 0, unresolvedRuns: 0 };
+    }
+    return RuntimeShutdownResultSchema.parse(await this.request("runtime.shutdown", { reason }));
   }
 
   public onEvent(listener: (event: RuntimeClientEvent) => void): { dispose(): void } {
     this.#listeners.add(listener);
-    return {
-      dispose: () => {
-        this.#listeners.delete(listener);
-      },
-    };
+    return { dispose: () => this.#listeners.delete(listener) };
   }
 
-  public async dispose(): Promise<void> {
-    if (this.#connectionState === "connected") {
-      try {
-        await this.request("runtime.shutdown", {});
-      } catch {
-        // Closing stdin remains the final cleanup signal if graceful shutdown fails.
-      }
-    }
+  public dispose(): Promise<void> {
+    this.#disposePromise ??= this.#dispose();
+    return this.#disposePromise;
+  }
+
+  async #dispose(): Promise<void> {
+    this.#intentionalClose = true;
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(
@@ -328,17 +354,18 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     }
     this.#pending.clear();
     await this.transport.stop();
-    this.setConnection("disconnected", "Runtime disconnected.");
+    this.#runtimeHello = undefined;
+    if (this.#connectionState !== "disconnected") {
+      this.setConnection("disconnected", "intentional-shutdown", "Runtime disconnected.");
+    }
   }
 
   private acceptChunk(chunk: string): void {
     try {
-      for (const frame of this.#decoder.push(chunk)) {
-        this.acceptFrame(frame);
-      }
+      for (const frame of this.#decoder.push(chunk)) this.acceptFrame(frame);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.setConnection("error", message);
+      this.setConnection("error", "runtime-error", message);
       this.emit({
         type: "runtime.error",
         code: "protocol.invalid-frame",
@@ -408,80 +435,106 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
   }
 
   private acceptEvent(message: Readonly<Record<string, unknown>>): void {
-    if (typeof message.event !== "string") {
-      throw new ApplicationError("protocol.invalid-event", "Runtime event has no event name.");
+    const parsed = RuntimeEventMessageSchema.safeParse(message);
+    if (!parsed.success) {
+      throw new ApplicationError("protocol.invalid-event", "Runtime event failed validation.");
     }
-    if (message.event === "runtime.protocol-error") {
-      const protocolError = isRecord(message.error) ? message.error : {};
+    const event = parsed.data;
+    if (event.event === "runtime.protocol-error") {
       this.emit({
         type: "runtime.error",
-        code:
-          typeof protocolError.code === "string" ? protocolError.code : "runtime.protocol-error",
-        message:
-          typeof protocolError.message === "string"
-            ? protocolError.message
-            : "Runtime protocol error.",
-        recoverable: protocolError.retryable === true,
+        code: event.error.code,
+        message: event.error.message,
+        recoverable: event.error.retryable,
       });
       return;
     }
-    if (typeof message.sessionId !== "string") {
-      throw new ApplicationError("protocol.missing-session", "Runtime event has no session ID.");
-    }
-    const sessionId = SessionIdSchema.parse(message.sessionId);
-    if (message.event === "pty.data") {
-      if (typeof message.data !== "string" || typeof message.seq !== "number") {
-        throw new ApplicationError("protocol.invalid-pty-data", "PTY data event is invalid.");
-      }
+    const sessionId = SessionIdSchema.parse(event.sessionId);
+    const runId = RunIdSchema.parse(event.runId);
+    if (event.event === "pty.data") {
       this.emit({
         type: "pty.data",
         sessionId,
-        sequence: message.seq,
-        data: message.data,
+        runId,
+        sequence: event.seq,
+        data: event.data,
       });
       return;
     }
-    if (message.event === "pty.started") {
+    if (event.event === "pty.started") {
       this.emit({
         type: "session.status",
         sessionId,
+        runId,
         status: "running",
         message: "Agent is running.",
       });
       return;
     }
-    if (message.event === "pty.exit") {
-      const reason = typeof message.reason === "string" ? message.reason : "exited";
-      const status: SessionStatus =
-        reason === "stopped" || reason === "interrupted" || reason === "force-killed"
-          ? "stopped"
-          : message.exitCode === 0
-            ? "completed"
-            : "failed";
+
+    const exitCode = event.exitCode ?? undefined;
+    if (event.reason === "extension-shutdown" || event.reason === "runtime-shutdown") {
       this.emit({
         type: "session.status",
         sessionId,
-        status,
-        message:
-          status === "completed"
-            ? "Agent completed successfully."
-            : status === "stopped"
-              ? `Agent stopped (${reason}).`
-              : `Agent exited with code ${String(message.exitCode)} (${reason}).`,
+        runId,
+        status: "stopped",
+        reason: event.reason,
+        ...(exitCode === undefined ? {} : { exitCode }),
+        message: "Agent stopped during Runtime shutdown.",
       });
       return;
     }
-    throw new ApplicationError(
-      "protocol.unknown-event",
-      `Runtime emitted unknown event "${message.event}".`,
-    );
+    if (
+      event.reason === "stopped" ||
+      event.reason === "interrupted" ||
+      event.reason === "force-killed"
+    ) {
+      this.emit({
+        type: "session.status",
+        sessionId,
+        runId,
+        status: "stopped",
+        reason: "user-stop",
+        ...(exitCode === undefined ? {} : { exitCode }),
+        message: `Agent stopped (${event.reason}).`,
+      });
+      return;
+    }
+    if (event.reason === "spawn-failed") {
+      this.emit({
+        type: "session.status",
+        sessionId,
+        runId,
+        status: "failed",
+        reason: "start-failed",
+        message: "Agent process failed to start.",
+      });
+      return;
+    }
+    const completed = exitCode === 0;
+    this.emit({
+      type: "session.status",
+      sessionId,
+      runId,
+      status: completed ? "completed" : "failed",
+      reason: completed ? "process-exit-zero" : "process-exit-nonzero",
+      ...(exitCode === undefined ? {} : { exitCode }),
+      message: completed
+        ? "Agent completed successfully."
+        : `Agent exited with code ${String(event.exitCode)}.`,
+    });
   }
 
   private async request<Method extends RuntimeRequestMethod>(
     method: Method,
     params: RuntimeRequestFor<Method>["params"],
+    allowConnecting = false,
   ): Promise<unknown> {
-    if (this.#connectionState !== "connected") {
+    if (
+      this.#connectionState !== "connected" &&
+      !(allowConnecting && this.#connectionState === "connecting")
+    ) {
       throw new RuntimeRequestFailure("rejected", "runtime.not-ready", "The runtime is not ready.");
     }
     const id = this.ids.requestId();
@@ -536,23 +589,31 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     }
     return result;
   }
+
   private handleDisconnect(reason: string): void {
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timeout);
       pending.reject(new RuntimeRequestFailure("unknown", "runtime.disconnected", reason));
     }
     this.#pending.clear();
-    this.setConnection("disconnected", reason);
+    this.#runtimeHello = undefined;
+    this.setConnection(
+      "disconnected",
+      this.#intentionalClose ? "intentional-shutdown" : "unexpected-disconnect",
+      reason,
+    );
   }
 
-  private setConnection(state: RuntimeConnectionState, message: string): void {
+  private setConnection(
+    state: RuntimeConnectionState,
+    cause: RuntimeConnectionCause,
+    message: string,
+  ): void {
     this.#connectionState = state;
-    this.emit({ type: "connection", state, message });
+    this.emit({ type: "connection", state, cause, message });
   }
 
   private emit(event: RuntimeClientEvent): void {
-    for (const listener of this.#listeners) {
-      listener(event);
-    }
+    for (const listener of this.#listeners) listener(event);
   }
 }

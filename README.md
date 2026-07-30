@@ -34,6 +34,12 @@ Open the Honey Bee activity-bar view, create a session, select it, then use **St
 
 For a deterministic console smoke test, point `honeyBee.agent.command` to `node` and set `honeyBee.agent.args` to the absolute path of `packages/test-fixtures/dist/echo-cli.js`. Echo Fixture accepts `unicode`, `ansi`, `burst 10000`, `exit 7`, and `quit`; arbitrary input is echoed literally.
 
+## Session process recovery
+
+Honey Bee restores Session metadata and Drafts. It does not automatically restart Agent processes after an Extension Runtime restart. A Session that belonged to a previous ephemeral Runtime is shown as stopped, with its prior Run recorded as interrupted, so the user can decide when to start a new Run.
+
+A normal Extension shutdown first rejects new Runtime mutations, drains Prompt durability work, asks the Runtime to stop active PTYs, persists final Run status, and then disposes the transport. Cleanup is bounded; Windows process-tree termination remains best effort without a native Job Object helper.
+
 ## Quality and tests
 
 ```powershell

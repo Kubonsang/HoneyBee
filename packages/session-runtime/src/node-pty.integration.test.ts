@@ -4,7 +4,7 @@ import { copyFile, mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema } from "@honeybee/domain";
 import { echoFixtureCliPath } from "@honeybee/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 
@@ -73,6 +73,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       logDirectory: temporaryDirectory,
     });
     const sessionId = SessionIdSchema.parse("echo-integration");
+    const runId = RunIdSchema.parse("run-echo-integration");
     const events: PtySessionEvent[] = [];
     let output = "";
     manager.onEvent((event) => {
@@ -85,6 +86,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
     try {
       await manager.start({
         sessionId,
+        runId,
         launchSpec: {
           command: process.execPath,
           args: [copiedFixturePath],
@@ -99,11 +101,11 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       await vi.waitFor(() => expect(output).toContain("Honey Bee Echo 벌 🐝"), {
         timeout: 10_000,
       });
-      manager.resize(sessionId, { cols: 100, rows: 30 });
-      manager.input(sessionId, "unicode\r");
-      manager.input(sessionId, "ansi\r");
+      manager.resize(sessionId, runId, { cols: 100, rows: 30 });
+      manager.input(sessionId, runId, "unicode\r");
+      manager.input(sessionId, runId, "ansi\r");
       const literalInput = 'literal "quote" \\path & | ^ %PATH% $HOME';
-      manager.input(sessionId, literalInput + "\r");
+      manager.input(sessionId, runId, literalInput + "\r");
       await vi.waitFor(() => {
         expect(output).toContain("UTF8:한글:🐝");
         expect(output).toContain("ANSI-RED");
@@ -111,14 +113,14 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
         expect(output).toContain("ECHO:" + literalInput);
       });
 
-      manager.input(sessionId, "burst 10000\r");
+      manager.input(sessionId, runId, "burst 10000\r");
       await vi.waitFor(() => {
-        const snapshot = manager.getSnapshot(sessionId);
+        const snapshot = manager.getSnapshot(sessionId, runId);
         expect(snapshot.byteLength).toBeLessThanOrEqual(4096);
         expect(snapshot.truncatedBytes).toBeGreaterThan(0);
       });
 
-      manager.input(sessionId, "exit 7\r");
+      manager.input(sessionId, runId, "exit 7\r");
       await vi.waitFor(
         () =>
           expect(events.find((event) => event.type === "session.exited")).toMatchObject({
@@ -155,6 +157,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
         logDirectory: temporaryDirectory,
       });
       const sessionId = SessionIdSchema.parse("vim-integration");
+      const runId = RunIdSchema.parse("run-vim-integration");
       const events: PtySessionEvent[] = [];
       let output = "";
       manager.onEvent((event) => {
@@ -167,6 +170,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       try {
         await manager.start({
           sessionId,
+          runId,
           launchSpec: {
             command: gitBundledVim,
             args: ["-Nu", "NONE", "-n", "-i", "NONE"],
@@ -189,7 +193,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
           { timeout: 10_000 },
         );
 
-        manager.input(sessionId, "\u001b:q!\r");
+        manager.input(sessionId, runId, "\u001b:q!\r");
         await vi.waitFor(
           () =>
             expect(events.find((event) => event.type === "session.exited")).toMatchObject({
@@ -220,6 +224,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       logDirectory: temporaryDirectory,
     });
     const sessionId = SessionIdSchema.parse("interrupt-integration");
+    const runId = RunIdSchema.parse("run-interrupt-integration");
     const events: PtySessionEvent[] = [];
     let output = "";
     manager.onEvent((event) => {
@@ -232,6 +237,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
     try {
       await manager.start({
         sessionId,
+        runId,
         launchSpec: {
           command: process.execPath,
           args: [echoFixtureCliPath],
@@ -243,7 +249,7 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       });
       await vi.waitFor(() => expect(output).toContain("Honey Bee Echo"), { timeout: 10_000 });
 
-      manager.interrupt(sessionId);
+      manager.interrupt(sessionId, runId);
       await vi.waitFor(
         () => {
           expect(output).toContain("INTERRUPTED");
@@ -268,12 +274,14 @@ windowsDescribe("NodePtyFactory Windows ConPTY integration", () => {
       logDirectory: temporaryDirectory,
     });
     const sessionId = SessionIdSchema.parse("fast-exit");
+    const runId = RunIdSchema.parse("run-fast-exit");
     const events: PtySessionEvent[] = [];
     manager.onEvent((event) => events.push(event));
 
     try {
       await manager.start({
         sessionId,
+        runId,
         launchSpec: {
           command: process.execPath,
           args: ["-e", "process.exit(9)"],

@@ -8,6 +8,7 @@ export const domainErrorCodes = [
   "reference-not-found",
   "parent-cycle",
   "attempt-transition-conflict",
+  "session-run-transition-conflict",
 ] as const;
 
 export type DomainErrorCode = (typeof domainErrorCodes)[number];

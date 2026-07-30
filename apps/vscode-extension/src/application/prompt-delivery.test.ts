@@ -18,7 +18,7 @@ import {
 import { deliverPrompt, type PromptDeliveryDependencies } from "./prompt-delivery.js";
 import type {
   RuntimeClientEvent,
-  RuntimeClientPort,
+  PromptRuntimeInputPort,
   RuntimeConnectionState,
   RuntimeInputOutcome,
   RuntimeStartRequest,
@@ -86,7 +86,7 @@ class RecordingReceiptRepository extends InMemoryPromptDeliveryReceiptRepository
   }
 }
 
-class RecordingRuntime implements RuntimeClientPort {
+class RecordingRuntime implements PromptRuntimeInputPort {
   public readonly inputs: string[] = [];
   public connectionState: RuntimeConnectionState = "connected";
   public outcome: RuntimeInputOutcome = { status: "accepted" };

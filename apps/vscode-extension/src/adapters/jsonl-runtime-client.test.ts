@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema } from "@honeybee/domain";
 
 import type { RuntimeClientEvent } from "../application/ports.js";
 import {
@@ -15,17 +15,36 @@ class FakeTransport implements RuntimeTransportPort {
   readonly writes: string[] = [];
   handlers: RuntimeTransportHandlers | undefined;
   writeError: Error | undefined;
+  startError: Error | undefined;
+  helloResult: unknown = { protocolVersion: 2, runtimeInstanceId: "runtime-test", pid: 42 };
+  stopCount = 0;
 
   public async start(handlers: RuntimeTransportHandlers): Promise<void> {
     this.handlers = handlers;
+    if (this.startError !== undefined) throw this.startError;
   }
 
   public async write(line: string): Promise<void> {
+    const request = JSON.parse(line) as { readonly id: string; readonly method: string };
+    if (request.method === "runtime.hello") {
+      queueMicrotask(() => {
+        this.data({
+          schemaVersion: 2,
+          kind: "response",
+          id: request.id,
+          ok: true,
+          result: this.helloResult,
+        });
+      });
+      return;
+    }
     this.writes.push(line);
     if (this.writeError !== undefined) throw this.writeError;
   }
 
-  public async stop(): Promise<void> {}
+  public async stop(): Promise<void> {
+    this.stopCount += 1;
+  }
 
   public data(message: unknown): void {
     this.handlers?.onData(`${JSON.stringify(message)}\n`);
@@ -50,6 +69,28 @@ describe("JsonLineDecoder", () => {
 });
 
 describe("JsonlRuntimeClient", () => {
+  it("cleans up transport after launch and handshake failures", async () => {
+    const launchFailure = new FakeTransport();
+    launchFailure.startError = new Error("launch failed");
+    const launchClient = new JsonlRuntimeClient(
+      launchFailure,
+      { requestId: () => "hello-launch" },
+      1000,
+    );
+    await expect(launchClient.connect()).rejects.toMatchObject({ code: "runtime.start-failed" });
+    expect(launchFailure.stopCount).toBe(1);
+
+    const handshakeFailure = new FakeTransport();
+    handshakeFailure.helloResult = { protocolVersion: 1, runtimeInstanceId: "old", pid: 42 };
+    const handshakeClient = new JsonlRuntimeClient(
+      handshakeFailure,
+      { requestId: () => "hello-invalid" },
+      1000,
+    );
+    await expect(handshakeClient.connect()).rejects.toMatchObject({ code: "runtime.start-failed" });
+    expect(handshakeFailure.stopCount).toBe(1);
+    expect(handshakeClient.runtimeHello).toBeUndefined();
+  });
   it("correlates requests and projects PTY/status events with session identity", async () => {
     const transport = new FakeTransport();
     const client = new JsonlRuntimeClient(transport, { requestId: () => "request-1" }, 1000);
@@ -62,8 +103,10 @@ describe("JsonlRuntimeClient", () => {
     expect(client.connectionState).toBe("connected");
 
     const sessionId = SessionIdSchema.parse("session-1");
+    const runId = RunIdSchema.parse("run-1");
     const start = client.start({
       sessionId,
+      runId,
       command: "fake-agent",
       args: [],
       cwd: "C:\\workspace",
@@ -79,6 +122,7 @@ describe("JsonlRuntimeClient", () => {
       method: "agent.start",
       params: {
         sessionId: "session-1",
+        runId: "run-1",
         launchSpec: {
           command: "fake-agent",
           cwd: "C:\\workspace",
@@ -89,7 +133,7 @@ describe("JsonlRuntimeClient", () => {
       },
     });
     transport.data({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "response",
       id: "request-1",
       ok: true,
@@ -98,18 +142,20 @@ describe("JsonlRuntimeClient", () => {
     await start;
 
     transport.data({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "event",
       event: "pty.data",
       sessionId: "session-1",
+      runId: "run-1",
       seq: 7,
       data: "\u001b[32mready\u001b[0m\r\n",
     });
     transport.data({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "event",
       event: "pty.started",
       sessionId: "session-1",
+      runId: "run-1",
       seq: 8,
       pid: 42,
       logFilePath: "C:\\logs\\session-1.log",
@@ -118,12 +164,14 @@ describe("JsonlRuntimeClient", () => {
     expect(events).toContainEqual({
       type: "pty.data",
       sessionId,
+      runId,
       sequence: 7,
       data: "\u001b[32mready\u001b[0m\r\n",
     });
     expect(events).toContainEqual({
       type: "session.status",
       sessionId,
+      runId,
       status: "running",
       message: "Agent is running.",
     });
@@ -132,10 +180,14 @@ describe("JsonlRuntimeClient", () => {
     const transport = new FakeTransport();
     const client = new JsonlRuntimeClient(transport, { requestId: () => "input-accepted" }, 1000);
     await client.connect();
-    const pending = client.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    const pending = client.sendInput(
+      SessionIdSchema.parse("session-1"),
+      "hello\r",
+      RunIdSchema.parse("run-1"),
+    );
     await vi.waitFor(() => expect(transport.writes).toHaveLength(1));
     transport.data({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "response",
       id: "input-accepted",
       ok: true,
@@ -152,10 +204,14 @@ describe("JsonlRuntimeClient", () => {
       1000,
     );
     await explicit.connect();
-    const pending = explicit.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    const pending = explicit.sendInput(
+      SessionIdSchema.parse("session-1"),
+      "hello\r",
+      RunIdSchema.parse("run-1"),
+    );
     await vi.waitFor(() => expect(explicitTransport.writes).toHaveLength(1));
     explicitTransport.data({
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "response",
       id: "input-rejected",
       ok: false,
@@ -175,7 +231,7 @@ describe("JsonlRuntimeClient", () => {
     );
     await preWrite.connect();
     await expect(
-      preWrite.sendInput(SessionIdSchema.parse("session-1"), "hello\r"),
+      preWrite.sendInput(SessionIdSchema.parse("session-1"), "hello\r", RunIdSchema.parse("run-1")),
     ).resolves.toEqual({ status: "rejected", message: "Runtime is not connected." });
   });
 
@@ -188,7 +244,11 @@ describe("JsonlRuntimeClient", () => {
       10,
     );
     await timeoutClient.connect();
-    const timeout = timeoutClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    const timeout = timeoutClient.sendInput(
+      SessionIdSchema.parse("session-1"),
+      "hello\r",
+      RunIdSchema.parse("run-1"),
+    );
     await vi.advanceTimersByTimeAsync(11);
     await expect(timeout).resolves.toMatchObject({ status: "unknown" });
     vi.useRealTimers();
@@ -205,7 +265,11 @@ describe("JsonlRuntimeClient", () => {
     );
     await callbackClient.connect();
     await expect(
-      callbackClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r"),
+      callbackClient.sendInput(
+        SessionIdSchema.parse("session-1"),
+        "hello\r",
+        RunIdSchema.parse("run-1"),
+      ),
     ).resolves.toEqual({ status: "unknown", reason: "Write callback failed." });
 
     const disconnectTransport = new FakeTransport();
@@ -215,7 +279,11 @@ describe("JsonlRuntimeClient", () => {
       1000,
     );
     await disconnectClient.connect();
-    const disconnected = disconnectClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    const disconnected = disconnectClient.sendInput(
+      SessionIdSchema.parse("session-1"),
+      "hello\r",
+      RunIdSchema.parse("run-1"),
+    );
     await vi.waitFor(() => expect(disconnectTransport.writes).toHaveLength(1));
     disconnectTransport.close("Runtime process exited.");
     await expect(disconnected).resolves.toEqual({
