@@ -81,6 +81,17 @@ export class PromptDeliveryCoordinator {
     return delivery;
   }
 
+  /** Flushes the latest debounced Draft before an explicit recovery action. */
+  public async flushDraft(sessionId: SessionId): Promise<void> {
+    const state = this.getDraftState(sessionId);
+    const pending = state.pending;
+    if (pending !== undefined) {
+      clearTimeout(pending.timeout);
+      state.pending = undefined;
+      this.enqueueDraftSave(sessionId, state, pending);
+    }
+    await state.writeTail;
+  }
   public async dispose(): Promise<void> {
     for (const [sessionId, state] of this.#draftStates) {
       const pending = state.pending;
@@ -201,13 +212,30 @@ export class PromptDeliveryCoordinator {
   ): PromptAcknowledgementMessage {
     if (result.status === "rejected") {
       this.reportDiagnostic(
-        `Prompt rejected for Session ${message.sessionId}, request ${message.requestId}.`,
+        `Prompt rejected for Session ${message.sessionId}, request ${message.requestId} (${result.code}).`,
       );
+      if (result.warnings !== undefined && result.warnings.length > 0) {
+        this.reportDiagnostic(
+          `Prompt rejection recovery warning for Session ${message.sessionId}, request ${message.requestId}: ${result.warnings.join(", ")}.`,
+        );
+      }
       return {
         type: "prompt.rejected",
         requestId: message.requestId,
         sessionId: message.sessionId,
         message: result.message,
+      };
+    }
+    if (result.status === "unknown") {
+      this.reportDiagnostic(
+        `Prompt Runtime outcome unknown for Session ${message.sessionId}, request ${message.requestId} (runtime-input-outcome-unknown).`,
+      );
+      return {
+        type: "prompt.unknown",
+        requestId: message.requestId,
+        sessionId: message.sessionId,
+        message: result.message,
+        warnings: result.warnings,
       };
     }
     if (result.warnings.length > 0) {
@@ -219,6 +247,7 @@ export class PromptDeliveryCoordinator {
       type: "prompt.accepted",
       requestId: message.requestId,
       sessionId: message.sessionId,
+      attemptPersistence: result.attemptPersistence,
       receiptPersistence: result.receiptPersistence,
       draftCleanup: result.draftCleanup,
       warnings: result.warnings,

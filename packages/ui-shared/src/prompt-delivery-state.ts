@@ -13,16 +13,14 @@ export interface PendingPromptDelivery {
 
 /** Acknowledgement outcome after correlation with a currently pending Prompt. */
 export type PromptSettlement =
-  | {
-      readonly status: "ignored";
-    }
+  | { readonly status: "ignored" }
   | {
       readonly status: "accepted";
       readonly prompt: PendingPromptDelivery;
       readonly acknowledgement: PromptAcceptedMessage;
     }
   | {
-      readonly status: "rejected";
+      readonly status: "rejected" | "unknown";
       readonly prompt: PendingPromptDelivery;
       readonly message: string;
     };
@@ -32,9 +30,7 @@ export class PromptDeliveryTracker {
   readonly #pendingBySession = new Map<string, PendingPromptDelivery>();
 
   public begin(message: PromptSendMessage): boolean {
-    if (this.#pendingBySession.has(message.sessionId)) {
-      return false;
-    }
+    if (this.#pendingBySession.has(message.sessionId)) return false;
     this.#pendingBySession.set(message.sessionId, {
       requestId: message.requestId,
       sessionId: message.sessionId,
@@ -52,11 +48,15 @@ export class PromptDeliveryTracker {
     if (pending === undefined || pending.requestId !== message.requestId) {
       return { status: "ignored" };
     }
-
     this.#pendingBySession.delete(message.sessionId);
-    return message.type === "prompt.accepted"
-      ? { status: "accepted", prompt: pending, acknowledgement: message }
-      : { status: "rejected", prompt: pending, message: message.message };
+    if (message.type === "prompt.accepted") {
+      return { status: "accepted", prompt: pending, acknowledgement: message };
+    }
+    return {
+      status: message.type === "prompt.unknown" ? "unknown" : "rejected",
+      prompt: pending,
+      message: message.message,
+    };
   }
 }
 
@@ -68,8 +68,12 @@ export const reconcileDraftAfterSettlement = (
   settlement.status === "accepted" && currentDraft === settlement.prompt.content
     ? ""
     : currentDraft;
-/** Describes accepted Runtime input without implying Agent processing or exposing Prompt content. */
+
+/** Describes accepted Runtime input without implying Agent processing or exposing content. */
 export const promptAcceptedStatusMessage = (message: PromptAcceptedMessage): string => {
+  if (message.attemptPersistence === "warning") {
+    return "Prompt delivered to the Runtime. Local Attempt recovery warning.";
+  }
   if (message.receiptPersistence === "warning") {
     return "Prompt delivered to the Runtime. Local recovery receipt warning.";
   }

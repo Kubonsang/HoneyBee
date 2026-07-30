@@ -1,6 +1,7 @@
 import { SessionDraftSchema, SessionIdSchema, type SessionId } from "@honeybee/domain";
 import { describe, expect, it } from "vitest";
 
+import { GlobalStatePromptDeliveryAttemptRepository } from "../adapters/global-state-prompt-attempt-repository.js";
 import { GlobalStatePromptDeliveryReceiptRepository } from "../adapters/global-state-prompt-receipt-repository.js";
 import {
   GlobalStateDraftRepository,
@@ -12,6 +13,7 @@ import type {
   RuntimeClientEvent,
   RuntimeClientPort,
   RuntimeConnectionState,
+  RuntimeInputOutcome,
   RuntimeStartRequest,
 } from "./ports.js";
 
@@ -50,9 +52,9 @@ class RecoveryRuntime implements RuntimeClientPort {
   public start(_request: RuntimeStartRequest): Promise<void> {
     return Promise.resolve();
   }
-  public sendInput(_sessionId: SessionId, data: string): Promise<void> {
+  public sendInput(_sessionId: SessionId, data: string): Promise<RuntimeInputOutcome> {
     this.inputs.push(data);
-    return Promise.resolve();
+    return Promise.resolve({ status: "accepted" });
   }
   public resize(_sessionId: SessionId, _columns: number, _rows: number): Promise<void> {
     return Promise.resolve();
@@ -79,11 +81,12 @@ describe("Prompt delivery restart recovery integration", () => {
     const state = new RecoveryMemento();
     const runtime = new RecoveryRuntime();
     const drafts = new GlobalStateDraftRepository(state);
+    const attempts = new GlobalStatePromptDeliveryAttemptRepository(state);
     const receipts = new GlobalStatePromptDeliveryReceiptRepository(state);
     state.failNextDraftDelete = true;
 
     const delivery = await deliverPrompt(
-      { drafts, receipts, runtime, clock: firstClock },
+      { drafts, attempts, receipts, runtime, clock: firstClock },
       "request-restart",
       sessionId,
       "?? Prompt\r\nexact bytes",
@@ -115,11 +118,12 @@ describe("Prompt delivery restart recovery integration", () => {
     const state = new RecoveryMemento();
     const runtime = new RecoveryRuntime();
     const drafts = new GlobalStateDraftRepository(state);
+    const attempts = new GlobalStatePromptDeliveryAttemptRepository(state);
     const receipts = new GlobalStatePromptDeliveryReceiptRepository(state);
     state.failNextDraftDelete = true;
 
     await deliverPrompt(
-      { drafts, receipts, runtime, clock: firstClock },
+      { drafts, attempts, receipts, runtime, clock: firstClock },
       "request-new-draft",
       sessionId,
       "old delivered Prompt",

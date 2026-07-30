@@ -32,6 +32,11 @@ export interface AgentProfileResolverPort {
   ): Promise<AgentLaunchProfile>;
 }
 
+/** Local observation of one Runtime input request, including transport ambiguity. */
+export type RuntimeInputOutcome =
+  | { readonly status: "accepted" }
+  | { readonly status: "rejected"; readonly message: string }
+  | { readonly status: "unknown"; readonly reason: string };
 export type RuntimeConnectionState = "connecting" | "connected" | "disconnected" | "error";
 
 export type RuntimeClientEvent =
@@ -70,7 +75,7 @@ export interface RuntimeClientPort {
   readonly connectionState: RuntimeConnectionState;
   connect(): Promise<void>;
   start(request: RuntimeStartRequest): Promise<void>;
-  sendInput(sessionId: SessionId, data: string): Promise<void>;
+  sendInput(sessionId: SessionId, data: string): Promise<RuntimeInputOutcome>;
   resize(sessionId: SessionId, columns: number, rows: number): Promise<void>;
   interrupt(sessionId: SessionId): Promise<void>;
   stop(sessionId: SessionId): Promise<void>;

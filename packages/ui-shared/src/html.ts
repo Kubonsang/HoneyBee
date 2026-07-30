@@ -58,6 +58,21 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
         </div>
       </header>
 
+
+      <section id="recovery-banner" class="recovery-banner" role="alert" hidden>
+        <div>
+          <strong>Prompt delivery outcome unknown</strong>
+          <p id="recovery-message">
+            Honey Bee will not resend this Prompt automatically.
+          </p>
+        </div>
+        <div class="recovery-actions">
+          <button id="assume-delivered-button" type="button">Assume delivered</button>
+          <button id="retry-prompt-button" type="button" class="danger-button">
+            Retry with new ID
+          </button>
+        </div>
+      </section>
       <section class="terminal-panel" aria-label="Raw terminal">
         <div class="section-label"><span>RAW TERMINAL</span><span>ANSI / PTY STRING STREAM</span></div>
         <div id="terminal" tabindex="0" aria-label="Interactive agent terminal"></div>

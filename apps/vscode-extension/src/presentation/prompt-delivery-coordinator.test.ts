@@ -33,6 +33,7 @@ class FakePromptService implements PromptDeliveryServicePort {
     return (
       (await this.sendPromptImplementation?.()) ?? {
         status: "accepted",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "cleared",
         warnings: [],
@@ -65,6 +66,7 @@ describe("PromptDeliveryCoordinator", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-1",
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -82,6 +84,7 @@ describe("PromptDeliveryCoordinator", () => {
     const service = new FakePromptService();
     service.sendPromptImplementation = async () => ({
       status: "rejected",
+      code: "runtime-input-rejected",
       message: "Runtime input failed.",
     });
     const diagnostics: string[] = [];
@@ -99,6 +102,29 @@ describe("PromptDeliveryCoordinator", () => {
     expect(diagnostics.join("\n")).not.toContain("Prompt content");
   });
 
+  it("returns a correlated unknown acknowledgement without Prompt content", async () => {
+    const service = new FakePromptService();
+    service.sendPromptImplementation = async () => ({
+      status: "unknown",
+      code: "runtime-input-outcome-unknown",
+      message: "Runtime response was not observed.",
+      warnings: [],
+    });
+    const diagnostics: string[] = [];
+    const coordinator = new PromptDeliveryCoordinator(service, vi.fn(), (message) => {
+      diagnostics.push(message);
+    });
+
+    await expect(coordinator.deliver(request())).resolves.toEqual({
+      type: "prompt.unknown",
+      requestId: "request-1",
+      sessionId: "session-1",
+      message: "Runtime response was not observed.",
+      warnings: [],
+    });
+    expect(diagnostics.join("\n")).toContain("runtime-input-outcome-unknown");
+    expect(diagnostics.join("\n")).not.toContain("Prompt content");
+  });
   it("cancels a pending debounce before immediate delivery and blocks its stale write", async () => {
     vi.useFakeTimers();
     const service = new FakePromptService();
@@ -160,6 +186,7 @@ describe("PromptDeliveryCoordinator", () => {
         releaseDelivery = () => {
           resolve({
             status: "accepted",
+            attemptPersistence: "stored",
             receiptPersistence: "stored",
             draftCleanup: "cleared",
             warnings: [],
@@ -182,6 +209,18 @@ describe("PromptDeliveryCoordinator", () => {
     expect(service.deliveries).toHaveLength(1);
   });
 
+  it("flushes the newest debounced Draft before a recovery action", async () => {
+    vi.useFakeTimers();
+    const service = new FakePromptService();
+    const coordinator = new PromptDeliveryCoordinator(service, vi.fn(), vi.fn());
+    const sessionId = SessionIdSchema.parse("session-1");
+    coordinator.scheduleDraft(sessionId, "new recovery Draft");
+
+    await coordinator.flushDraft(sessionId);
+    await vi.runAllTimersAsync();
+
+    expect(service.drafts).toEqual([{ sessionId, content: "new recovery Draft" }]);
+  });
   it("flushes a pending Draft write before async disposal resolves", async () => {
     vi.useFakeTimers();
     const service = new FakePromptService();

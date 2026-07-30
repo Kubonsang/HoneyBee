@@ -2,11 +2,13 @@ import * as vscode from "vscode";
 
 import {
   AgentSessionSchema,
+  PromptDeliveryAttemptSchema,
   PromptDeliveryReceiptSchema,
   SessionDraftSchema,
   SessionIdSchema,
 } from "@honeybee/domain";
 
+import { PROMPT_DELIVERY_ATTEMPT_STORAGE_KEY } from "./global-state-prompt-attempt-repository.js";
 import { PROMPT_DELIVERY_RECEIPT_STORAGE_KEY } from "./global-state-prompt-receipt-repository.js";
 import {
   DRAFT_STORAGE_KEY,
@@ -24,6 +26,8 @@ export interface PromptRecoveryExtensionTestState {
     readonly draftCleanup: "pending" | "cleared";
   }[];
   readonly selectedDraftPresent: boolean;
+  readonly attemptPhases: readonly { readonly requestId: string; readonly phase: string }[];
+  readonly recoveryIssueRequestIds: readonly string[];
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -48,12 +52,14 @@ export const applyPromptRecoveryTestFixture = async (
   }
   const sessions = AgentSessionSchema.array().parse(value.sessions);
   const drafts = SessionDraftSchema.array().parse(value.drafts);
+  const attempts = PromptDeliveryAttemptSchema.array().parse(value.attempts ?? []);
   const receipts = PromptDeliveryReceiptSchema.array().parse(value.receipts);
   const selectedSessionId = SessionIdSchema.parse(value.selectedSessionId);
 
   await Promise.all([
     context.globalState.update(SESSION_STORAGE_KEY, sessions),
     context.globalState.update(DRAFT_STORAGE_KEY, drafts),
+    context.globalState.update(PROMPT_DELIVERY_ATTEMPT_STORAGE_KEY, attempts),
     context.globalState.update(PROMPT_DELIVERY_RECEIPT_STORAGE_KEY, receipts),
     context.globalState.update(SELECTED_SESSION_STORAGE_KEY, selectedSessionId),
   ]);

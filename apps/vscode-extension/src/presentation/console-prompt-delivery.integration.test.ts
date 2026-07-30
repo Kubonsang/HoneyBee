@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
 import {
   InMemoryDraftRepository,
+  InMemoryPromptDeliveryAttemptRepository,
   InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
 } from "@honeybee/persistence";
@@ -13,6 +14,7 @@ import type {
   RuntimeClientEvent,
   RuntimeClientPort,
   RuntimeConnectionState,
+  RuntimeInputOutcome,
   RuntimeStartRequest,
 } from "../application/ports.js";
 import { ConsoleApplicationService } from "../application/console-service.js";
@@ -28,11 +30,11 @@ class DeliveryRuntime implements RuntimeClientPort {
   public async connect(): Promise<void> {}
   public async start(_request: RuntimeStartRequest): Promise<void> {}
 
-  public async sendInput(sessionId: SessionId, data: string): Promise<void> {
+  public async sendInput(sessionId: SessionId, data: string): Promise<RuntimeInputOutcome> {
     this.inputs.push({ sessionId, data });
-    if (this.failInput) {
-      throw new Error("Injected integration Runtime failure.");
-    }
+    return this.failInput
+      ? { status: "rejected", message: "Injected integration Runtime rejection." }
+      : { status: "accepted" };
   }
 
   public async resize(_sessionId: SessionId, _columns: number, _rows: number): Promise<void> {}
@@ -80,11 +82,13 @@ const setup = (failInput: boolean) => {
   const service = new ConsoleApplicationService(
     new InMemorySessionRepository([selected]),
     drafts,
+    new InMemoryPromptDeliveryAttemptRepository(),
     receipts,
     new SessionSelectionService(),
     runtime,
     profiles,
     clock,
+    { requestId: () => "replacement" },
   );
   const coordinator = new PromptDeliveryCoordinator(
     service,
@@ -121,6 +125,7 @@ describe("Console Prompt delivery integration", () => {
       type: "prompt.accepted",
       requestId: "integration-success",
       sessionId: selected.id,
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -144,7 +149,7 @@ describe("Console Prompt delivery integration", () => {
       type: "prompt.rejected",
       requestId: "integration-failure",
       sessionId: selected.id,
-      message: "The Runtime rejected the Prompt input.",
+      message: "Injected integration Runtime rejection.",
     });
 
     expect(runtime.inputs).toEqual([{ sessionId: selected.id, data: "Keep after failure\r" }]);

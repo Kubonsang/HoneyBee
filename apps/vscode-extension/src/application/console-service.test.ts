@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
 import {
   InMemoryDraftRepository,
+  InMemoryPromptDeliveryAttemptRepository,
   InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
 } from "@honeybee/persistence";
@@ -14,6 +15,7 @@ import type {
   RuntimeClientEvent,
   RuntimeClientPort,
   RuntimeConnectionState,
+  RuntimeInputOutcome,
   RuntimeStartRequest,
 } from "./ports.js";
 import { ConsoleApplicationService } from "./console-service.js";
@@ -39,8 +41,9 @@ class FakeRuntimeClient implements RuntimeClientPort {
     this.starts.push(request);
   }
 
-  public async sendInput(sessionId: SessionId, data: string): Promise<void> {
+  public async sendInput(sessionId: SessionId, data: string): Promise<RuntimeInputOutcome> {
     this.inputs.push({ sessionId, data });
+    return { status: "accepted" };
   }
 
   public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
@@ -104,11 +107,13 @@ describe("ConsoleApplicationService", () => {
     const service = new ConsoleApplicationService(
       sessions,
       drafts,
+      new InMemoryPromptDeliveryAttemptRepository(),
       new InMemoryPromptDeliveryReceiptRepository(),
       selection,
       runtime,
       profiles,
       clock,
+      { requestId: () => "replacement" },
     );
     const messages: ExtensionToConsoleMessage[] = [];
     service.onMessage((message) => {

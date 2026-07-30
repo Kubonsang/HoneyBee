@@ -7,6 +7,7 @@ export const domainErrorCodes = [
   "duplicate-relationship",
   "reference-not-found",
   "parent-cycle",
+  "attempt-transition-conflict",
 ] as const;
 
 export type DomainErrorCode = (typeof domainErrorCodes)[number];
