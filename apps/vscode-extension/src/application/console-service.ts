@@ -4,7 +4,11 @@ import {
   type SessionId,
   type SessionStatus,
 } from "@honeybee/domain";
-import type { DraftRepository, SessionRepository } from "@honeybee/persistence";
+import type {
+  DraftRepository,
+  PromptDeliveryReceiptRepository,
+  SessionRepository,
+} from "@honeybee/persistence";
 import {
   initialConsoleViewState,
   reduceConsoleViewState,
@@ -51,6 +55,7 @@ export class ConsoleApplicationService {
   public constructor(
     private readonly sessions: SessionRepository,
     private readonly drafts: DraftRepository,
+    private readonly receipts: PromptDeliveryReceiptRepository,
     selection: SessionSelectionService,
     private readonly runtime: RuntimeClientPort,
     private readonly profiles: AgentProfileResolverPort,
@@ -195,9 +200,19 @@ export class ConsoleApplicationService {
     }
   }
 
-  public async sendPrompt(sessionId: SessionId, content: string): Promise<PromptDeliveryResult> {
+  public async sendPrompt(
+    requestId: string,
+    sessionId: SessionId,
+    content: string,
+  ): Promise<PromptDeliveryResult> {
     const result = await deliverPrompt(
-      { drafts: this.drafts, runtime: this.runtime, clock: this.clock },
+      {
+        drafts: this.drafts,
+        receipts: this.receipts,
+        runtime: this.runtime,
+        clock: this.clock,
+      },
+      requestId,
       sessionId,
       content,
     );

@@ -26,7 +26,11 @@ export type ParsedPromptSendMessage = Omit<PromptSendMessage, "sessionId"> & {
 /** Narrow application boundary needed to coordinate Draft writes and Prompt delivery. */
 export interface PromptDeliveryServicePort {
   saveDraft(sessionId: SessionId, content: string): Promise<void>;
-  sendPrompt(sessionId: SessionId, content: string): Promise<PromptDeliveryResult>;
+  sendPrompt(
+    requestId: string,
+    sessionId: SessionId,
+    content: string,
+  ): Promise<PromptDeliveryResult>;
 }
 
 /** Serializes per-Session Draft writes and correlates each Prompt acknowledgement. */
@@ -35,6 +39,7 @@ export class PromptDeliveryCoordinator {
   readonly #pendingRequests = new Map<SessionId, string>();
   readonly #seenRequestIds = new Set<string>();
   readonly #requestOrder: string[] = [];
+  readonly #activeDeliveries = new Set<Promise<PromptAcknowledgementMessage | undefined>>();
 
   public constructor(
     private readonly service: PromptDeliveryServicePort,
@@ -64,7 +69,36 @@ export class PromptDeliveryCoordinator {
     state.pending = { content, revision, timeout };
   }
 
-  public async deliver(
+  public deliver(
+    message: ParsedPromptSendMessage,
+  ): Promise<PromptAcknowledgementMessage | undefined> {
+    const delivery = this.deliverOnce(message);
+    this.#activeDeliveries.add(delivery);
+    void delivery.then(
+      () => this.#activeDeliveries.delete(delivery),
+      () => this.#activeDeliveries.delete(delivery),
+    );
+    return delivery;
+  }
+
+  public async dispose(): Promise<void> {
+    for (const [sessionId, state] of this.#draftStates) {
+      const pending = state.pending;
+      if (pending === undefined) {
+        continue;
+      }
+      clearTimeout(pending.timeout);
+      state.pending = undefined;
+      this.enqueueDraftSave(sessionId, state, pending);
+    }
+
+    await Promise.allSettled([
+      ...[...this.#draftStates.values()].map((state) => state.writeTail),
+      ...this.#activeDeliveries,
+    ]);
+  }
+
+  private async deliverOnce(
     message: ParsedPromptSendMessage,
   ): Promise<PromptAcknowledgementMessage | undefined> {
     if (this.#seenRequestIds.has(message.requestId)) {
@@ -85,7 +119,11 @@ export class PromptDeliveryCoordinator {
     this.#pendingRequests.set(message.sessionId, message.requestId);
     try {
       await this.cancelPendingDraftAndDrain(message.sessionId);
-      const result = await this.service.sendPrompt(message.sessionId, message.content);
+      const result = await this.service.sendPrompt(
+        message.requestId,
+        message.sessionId,
+        message.content,
+      );
       return this.toAcknowledgement(message, result);
     } catch (error) {
       this.reportError(
@@ -98,24 +136,12 @@ export class PromptDeliveryCoordinator {
         type: "prompt.rejected",
         requestId: message.requestId,
         sessionId: message.sessionId,
-        message: "Prompt delivery failed before the runtime could acknowledge it.",
+        message: "Prompt delivery failed before the Runtime could acknowledge it.",
       };
     } finally {
       if (this.#pendingRequests.get(message.sessionId) === message.requestId) {
         this.#pendingRequests.delete(message.sessionId);
       }
-    }
-  }
-
-  public dispose(): void {
-    for (const [sessionId, state] of this.#draftStates) {
-      const pending = state.pending;
-      if (pending === undefined) {
-        continue;
-      }
-      clearTimeout(pending.timeout);
-      state.pending = undefined;
-      this.enqueueDraftSave(sessionId, state, pending);
     }
   }
 
@@ -184,23 +210,18 @@ export class PromptDeliveryCoordinator {
         message: result.message,
       };
     }
-    if (result.draftCleanup === "warning") {
+    if (result.warnings.length > 0) {
       this.reportDiagnostic(
-        `Prompt accepted with Draft cleanup warning for Session ${message.sessionId}, request ${message.requestId}.`,
+        `Prompt accepted with local recovery warning for Session ${message.sessionId}, request ${message.requestId}: ${result.warnings.join(", ")}.`,
       );
-      return {
-        type: "prompt.accepted",
-        requestId: message.requestId,
-        sessionId: message.sessionId,
-        draftCleanup: "warning",
-        warning: result.warning,
-      };
     }
     return {
       type: "prompt.accepted",
       requestId: message.requestId,
       sessionId: message.sessionId,
-      draftCleanup: "cleared",
+      receiptPersistence: result.receiptPersistence,
+      draftCleanup: result.draftCleanup,
+      warnings: result.warnings,
     };
   }
 }

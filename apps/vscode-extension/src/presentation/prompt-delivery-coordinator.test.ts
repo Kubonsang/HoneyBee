@@ -11,7 +11,11 @@ import {
 
 class FakePromptService implements PromptDeliveryServicePort {
   readonly drafts: { readonly sessionId: SessionId; readonly content: string }[] = [];
-  readonly deliveries: { readonly sessionId: SessionId; readonly content: string }[] = [];
+  readonly deliveries: {
+    readonly requestId: string;
+    readonly sessionId: SessionId;
+    readonly content: string;
+  }[] = [];
   saveDraftImplementation: (() => Promise<void>) | undefined;
   sendPromptImplementation: (() => Promise<PromptDeliveryResult>) | undefined;
 
@@ -20,12 +24,18 @@ class FakePromptService implements PromptDeliveryServicePort {
     await this.saveDraftImplementation?.();
   }
 
-  public async sendPrompt(sessionId: SessionId, content: string): Promise<PromptDeliveryResult> {
-    this.deliveries.push({ sessionId, content });
+  public async sendPrompt(
+    requestId: string,
+    sessionId: SessionId,
+    content: string,
+  ): Promise<PromptDeliveryResult> {
+    this.deliveries.push({ requestId, sessionId, content });
     return (
       (await this.sendPromptImplementation?.()) ?? {
         status: "accepted",
+        receiptPersistence: "stored",
         draftCleanup: "cleared",
+        warnings: [],
       }
     );
   }
@@ -55,10 +65,16 @@ describe("PromptDeliveryCoordinator", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-1",
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
     expect(service.deliveries).toEqual([
-      { sessionId: SessionIdSchema.parse("session-1"), content: "Prompt content" },
+      {
+        requestId: "request-1",
+        sessionId: SessionIdSchema.parse("session-1"),
+        content: "Prompt content",
+      },
     ]);
   });
 
@@ -94,7 +110,9 @@ describe("PromptDeliveryCoordinator", () => {
     await vi.runAllTimersAsync();
 
     expect(service.drafts).toEqual([]);
-    expect(service.deliveries).toEqual([{ sessionId, content: "submitted content" }]);
+    expect(service.deliveries).toEqual([
+      { requestId: "request-1", sessionId, content: "submitted content" },
+    ]);
   });
 
   it("drains an in-flight Draft write before delivering the exact Prompt", async () => {
@@ -117,7 +135,9 @@ describe("PromptDeliveryCoordinator", () => {
     releaseSave?.();
     await delivery;
     expect(service.drafts).toEqual([{ sessionId, content: "older Draft" }]);
-    expect(service.deliveries).toEqual([{ sessionId, content: "submitted content" }]);
+    expect(service.deliveries).toEqual([
+      { requestId: "request-1", sessionId, content: "submitted content" },
+    ]);
   });
 
   it("ignores a duplicate request ID without delivering twice", async () => {
@@ -138,7 +158,12 @@ describe("PromptDeliveryCoordinator", () => {
     service.sendPromptImplementation = () =>
       new Promise<PromptDeliveryResult>((resolve) => {
         releaseDelivery = () => {
-          resolve({ status: "accepted", draftCleanup: "cleared" });
+          resolve({
+            status: "accepted",
+            receiptPersistence: "stored",
+            draftCleanup: "cleared",
+            warnings: [],
+          });
         };
       });
     const coordinator = new PromptDeliveryCoordinator(service, vi.fn(), vi.fn());
@@ -155,5 +180,30 @@ describe("PromptDeliveryCoordinator", () => {
     releaseDelivery?.();
     await first;
     expect(service.deliveries).toHaveLength(1);
+  });
+
+  it("flushes a pending Draft write before async disposal resolves", async () => {
+    vi.useFakeTimers();
+    const service = new FakePromptService();
+    let releaseSave: (() => void) | undefined;
+    service.saveDraftImplementation = () =>
+      new Promise<void>((resolve) => {
+        releaseSave = resolve;
+      });
+    const coordinator = new PromptDeliveryCoordinator(service, vi.fn(), vi.fn());
+    const sessionId = SessionIdSchema.parse("session-1");
+    coordinator.scheduleDraft(sessionId, "shutdown Draft");
+
+    let disposed = false;
+    const disposing = coordinator.dispose().then(() => {
+      disposed = true;
+    });
+    await vi.waitFor(() => expect(service.drafts).toHaveLength(1));
+    expect(disposed).toBe(false);
+
+    releaseSave?.();
+    await disposing;
+    expect(disposed).toBe(true);
+    expect(service.drafts).toEqual([{ sessionId, content: "shutdown Draft" }]);
   });
 });
