@@ -30,3 +30,21 @@ jobs:
       - run: pnpm security:scan
       - run: pnpm licenses:check
       - run: pnpm audit --audit-level=low
+  codeql:
+    name: CodeQL (JavaScript/TypeScript)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          languages: javascript-typescript
+      - uses: github/codeql-action/analyze@3b0bd1d116c0bde30213346b22d4f634d96a2fb0 # v3
+        with:
+          category: /language:javascript-typescript
