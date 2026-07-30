@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
+import {
+  AgentSessionSchema,
+  RunIdSchema,
+  SessionRunRecordSchema,
+  type AgentSession,
+  type SessionId,
+} from "@honeybee/domain";
 import {
   InMemoryDraftRepository,
   InMemoryPromptDeliveryAttemptRepository,
   InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
+  InMemorySessionRunRepository,
 } from "@honeybee/persistence";
 
 import type {
@@ -24,6 +31,7 @@ import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 class DeliveryRuntime implements RuntimeClientPort {
   readonly inputs: { readonly sessionId: SessionId; readonly data: string }[] = [];
   connectionState: RuntimeConnectionState = "connected";
+  readonly runtimeHello = undefined;
 
   public constructor(private readonly failInput: boolean) {}
 
@@ -40,6 +48,14 @@ class DeliveryRuntime implements RuntimeClientPort {
   public async resize(_sessionId: SessionId, _columns: number, _rows: number): Promise<void> {}
   public async interrupt(_sessionId: SessionId): Promise<void> {}
   public async stop(_sessionId: SessionId): Promise<void> {}
+
+  public async shutdown(): Promise<{
+    readonly state: "stopped";
+    readonly stoppedRuns: number;
+    readonly unresolvedRuns: number;
+  }> {
+    return { state: "stopped", stoppedRuns: 0, unresolvedRuns: 0 };
+  }
 
   public onEvent(_listener: (event: RuntimeClientEvent) => void): { dispose(): void } {
     return { dispose: () => undefined };
@@ -79,16 +95,29 @@ const setup = (failInput: boolean) => {
   const drafts = new InMemoryDraftRepository();
   const runtime = new DeliveryRuntime(failInput);
   const receipts = new InMemoryPromptDeliveryReceiptRepository();
+  const run = SessionRunRecordSchema.parse({
+    runId: "run-delivery",
+    sessionId: selected.id,
+    runtimeInstanceId: "runtime-test",
+    phase: "running",
+    startedAt: "2026-07-30T13:00:00.000Z",
+    updatedAt: "2026-07-30T13:00:00.000Z",
+    schemaVersion: 1,
+  });
   const service = new ConsoleApplicationService(
     new InMemorySessionRepository([selected]),
     drafts,
     new InMemoryPromptDeliveryAttemptRepository(),
     receipts,
+    new InMemorySessionRunRepository([run]),
     new SessionSelectionService(),
     runtime,
     profiles,
     clock,
-    { requestId: () => "replacement" },
+    {
+      requestId: () => "replacement",
+      runId: () => RunIdSchema.parse("run-unused"),
+    },
   );
   const coordinator = new PromptDeliveryCoordinator(
     service,

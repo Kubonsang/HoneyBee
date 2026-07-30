@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { AgentSessionSchema, SessionIdSchema, type SessionId } from "@honeybee/domain";
+import { AgentSessionSchema, RunIdSchema, SessionIdSchema, type SessionId } from "@honeybee/domain";
 import { InMemoryDraftRepository, InMemorySessionRepository } from "@honeybee/persistence";
 
 import type { ClockPort, IdGeneratorPort } from "./ports.js";
@@ -19,8 +19,8 @@ class SequenceIds implements IdGeneratorPort {
     return SessionIdSchema.parse(`session-${this.#next++}`);
   }
 
-  public runId(): string {
-    return "run-1";
+  public runId(): ReturnType<typeof RunIdSchema.parse> {
+    return RunIdSchema.parse("run-1");
   }
 
   public requestId(): string {

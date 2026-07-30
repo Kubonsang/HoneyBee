@@ -7,6 +7,8 @@ export type RuntimeErrorCode =
   | "protocol.line-limit"
   | "runtime.duplicate-session"
   | "runtime.session-not-found"
+  | "runtime.shutting-down"
+  | "runtime.stale-run"
   | "runtime.spawn-failed"
   | "runtime.internal"
   | "pty.write-failed"

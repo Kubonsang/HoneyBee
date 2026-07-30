@@ -19,3 +19,9 @@ export type ToolProfileId = z.infer<typeof ToolProfileIdSchema>;
 
 export const EventIdSchema = identifierSchema.brand<"EventId">();
 export type EventId = z.infer<typeof EventIdSchema>;
+
+export const RunIdSchema = identifierSchema.brand<"RunId">();
+export type RunId = z.infer<typeof RunIdSchema>;
+
+export const RuntimeInstanceIdSchema = identifierSchema.brand<"RuntimeInstanceId">();
+export type RuntimeInstanceId = z.infer<typeof RuntimeInstanceIdSchema>;

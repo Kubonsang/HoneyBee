@@ -22,7 +22,11 @@ describe("reduceConsoleViewState", () => {
     });
     expect(selected.canStart).toBe(false);
 
-    const connected = reduceConsoleViewState(selected, {
+    const active = reduceConsoleViewState(selected, {
+      type: "lifecycle.changed",
+      state: "active",
+    });
+    const connected = reduceConsoleViewState(active, {
       type: "connection.changed",
       status: "connected",
       message: "Runtime connected.",
@@ -38,6 +42,15 @@ describe("reduceConsoleViewState", () => {
     expect(running.canStart).toBe(false);
     expect(running.canInterrupt).toBe(true);
     expect(running.canStop).toBe(true);
+
+    const shuttingDown = reduceConsoleViewState(running, {
+      type: "lifecycle.changed",
+      state: "shutting-down",
+    });
+    expect(shuttingDown.canStart).toBe(false);
+    expect(shuttingDown.canInterrupt).toBe(false);
+    expect(shuttingDown.canStop).toBe(false);
+    expect(shuttingDown.statusMessage).toContain("shutting down");
   });
 
   it("keeps session-specific draft content with a selection", () => {

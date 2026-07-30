@@ -6,6 +6,7 @@ import {
 } from "./adapters/extension-test-state.js";
 import { GlobalStatePromptDeliveryAttemptRepository } from "./adapters/global-state-prompt-attempt-repository.js";
 import { GlobalStatePromptDeliveryReceiptRepository } from "./adapters/global-state-prompt-receipt-repository.js";
+import { GlobalStateSessionRunRepository } from "./adapters/global-state-session-run-repository.js";
 import {
   GlobalStateDraftRepository,
   GlobalStateSelectionRepository,
@@ -22,6 +23,7 @@ import {
   SystemClock,
 } from "./adapters/system-adapters.js";
 import { ConsoleApplicationService } from "./application/console-service.js";
+import { ExtensionLifecycleCoordinator } from "./application/extension-lifecycle-coordinator.js";
 import {
   PromptDeliveryAttemptReconciler,
   type PromptAttemptReconciliationReport,
@@ -30,13 +32,13 @@ import {
   PromptDeliveryReconciler,
   type PromptDeliveryReconciliationReport,
 } from "./application/prompt-delivery-reconciler.js";
+import { SessionRunReconciler } from "./application/session-run-reconciler.js";
 import { SessionSelectionService } from "./application/session-selection.js";
 import { SessionApplicationService } from "./application/session-service.js";
 import { ConsoleViewProvider } from "./presentation/console-view-provider.js";
 import { registerSessionCommands } from "./presentation/session-commands.js";
 import { SessionTreeProvider } from "./presentation/session-tree-provider.js";
 
-const SHUTDOWN_TIMEOUT_MS = 5_000;
 let activeShutdown: (() => Promise<void>) | undefined;
 
 const readStringArray = (
@@ -123,23 +125,6 @@ const reportAttemptReconciliation = (
 export interface HoneyBeeExtensionApi {
   readonly promptRecoveryTestState?: PromptRecoveryExtensionTestState;
 }
-const boundedShutdown = async (work: Promise<void>, onTimeout: () => void): Promise<void> => {
-  let timeout: ReturnType<typeof setTimeout> | undefined;
-  const timeoutResult = new Promise<void>((resolve) => {
-    timeout = setTimeout(() => {
-      onTimeout();
-      resolve();
-    }, SHUTDOWN_TIMEOUT_MS);
-  });
-  try {
-    await Promise.race([work, timeoutResult]);
-  } finally {
-    if (timeout !== undefined) {
-      clearTimeout(timeout);
-    }
-  }
-};
-
 export const activate = async (context: vscode.ExtensionContext): Promise<HoneyBeeExtensionApi> => {
   const output = vscode.window.createOutputChannel("Honey Bee");
   const reportError = (error: unknown): void => {
@@ -157,6 +142,7 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
   const drafts = new GlobalStateDraftRepository(context.globalState);
   const attempts = new GlobalStatePromptDeliveryAttemptRepository(context.globalState);
   const receipts = new GlobalStatePromptDeliveryReceiptRepository(context.globalState);
+  const runs = new GlobalStateSessionRunRepository(context.globalState);
   const selectionState = new GlobalStateSelectionRepository(context.globalState);
   const clock = new SystemClock();
   const ids = new RandomIdGenerator();
@@ -171,6 +157,29 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
   if (attemptRecoveryFailure || reportReconciliation(reconciliation, output)) {
     void vscode.window.showWarningMessage(
       "Honey Bee could not fully reconcile local Prompt recovery records. Drafts were preserved where delivery state was uncertain.",
+    );
+  }
+
+  const runReconciliation = await new SessionRunReconciler(sessions, runs, clock).reconcile();
+  for (const event of runReconciliation.events) {
+    if (event.type === "recovered") {
+      output.appendLine(
+        `[lifecycle] Recovered stale Run ${event.runId} for Session ${event.sessionId}.`,
+      );
+    } else if (event.type === "recovered-legacy-status") {
+      output.appendLine(
+        `[lifecycle] Recovered legacy active status for Session ${event.sessionId}.`,
+      );
+    } else {
+      output.appendLine(
+        `[lifecycle] Session Run reconciliation failed (${event.code})` +
+          (event.sessionId === undefined ? "." : ` for Session ${event.sessionId}.`),
+      );
+    }
+  }
+  if (runReconciliation.recoveredRuns + runReconciliation.recoveredLegacySessions > 0) {
+    void vscode.window.showInformationMessage(
+      "Honey Bee recovered Sessions that were active under the previous Runtime. They were not restarted automatically.",
     );
   }
 
@@ -217,12 +226,18 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
     drafts,
     attempts,
     receipts,
+    runs,
     selection,
     runtime,
     profiles,
     clock,
     ids,
     attemptReconciliation.issues,
+    (code, sessionId, runId) => {
+      output.appendLine(
+        `[lifecycle] ${code}${sessionId === undefined ? "" : ` for Session ${sessionId}`}${runId === undefined ? "" : `, Run ${runId}`}.`,
+      );
+    },
   );
   const tree = new SessionTreeProvider(sessionService);
   const consoleView = new ConsoleViewProvider(
@@ -232,72 +247,89 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
     reportPromptDiagnostic,
   );
 
-  let shutdownPromise: Promise<void> | undefined;
-  const shutdown = (): Promise<void> => {
-    shutdownPromise ??= boundedShutdown(
-      (async () => {
-        await consoleView.shutdown();
-        await attempts.flush();
-        await receipts.flush();
-        await consoleService.dispose();
-      })(),
-      () => output.appendLine("[warning] Honey Bee shutdown exceeded 5000 ms."),
-    );
-    return shutdownPromise;
-  };
-  activeShutdown = shutdown;
-
-  context.subscriptions.push(
-    output,
-    tree,
-    consoleView,
-    selection.onDidSelect((sessionId) => {
-      void selectionState.save(sessionId).catch(reportError);
-    }),
-    vscode.window.registerTreeDataProvider("honeyBee.sessions", tree),
-    vscode.window.registerWebviewViewProvider("honeyBee.console", consoleView, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-    consoleService.onMessage((message) => {
-      if (message.type === "console.state") {
-        tree.refresh();
-      }
-    }),
-    {
-      dispose: () => {
-        void shutdown().catch(reportError);
-      },
-    },
-  );
-
-  registerSessionCommands(context, {
-    service: sessionService,
-    selection,
-    consoleService,
-    tree,
-    consoleView,
-    defaultAgentProfile: () =>
-      vscode.workspace.getConfiguration("honeyBee.agent").get<string>("defaultProfile", "codex"),
-    defaultToolProfile: () =>
-      vscode.workspace.getConfiguration("honeyBee.tool").get<string>("defaultProfile", "default"),
-    reportError,
+  const lifecycle = new ExtensionLifecycleCoordinator({
+    console: consoleService,
+    view: consoleView,
+    attempts,
+    receipts,
+    runs,
+    diagnostic: (code) => output.appendLine(`[lifecycle] ${code}.`),
   });
+  const shutdown = async (
+    reason: "extension-deactivate" | "context-dispose" | "activation-failure",
+  ): Promise<void> => {
+    const report = await lifecycle.shutdown(reason);
+    output.appendLine(
+      `[lifecycle] Shutdown ${report.status}; stopped=${report.stoppedRuns}, unresolved=${report.unresolvedRuns}, persistenceFlushed=${String(report.persistenceFlushed)}, runtimeDisposed=${String(report.runtimeDisposed)}.`,
+    );
+  };
+  activeShutdown = () => shutdown("extension-deactivate");
 
-  await tree.load();
-  if (restoredSessionId !== undefined) {
-    await consoleService.select(restoredSessionId);
+  try {
+    context.subscriptions.push(
+      output,
+      tree,
+      consoleView,
+      selection.onDidSelect((sessionId) => {
+        void selectionState.save(sessionId).catch(reportError);
+      }),
+      vscode.window.registerTreeDataProvider("honeyBee.sessions", tree),
+      vscode.window.registerWebviewViewProvider("honeyBee.console", consoleView, {
+        webviewOptions: { retainContextWhenHidden: true },
+      }),
+      consoleService.onMessage((message) => {
+        if (message.type === "console.state") {
+          tree.refresh();
+        }
+      }),
+      {
+        dispose: () => {
+          void shutdown("context-dispose").catch(reportError);
+        },
+      },
+    );
+
+    registerSessionCommands(context, {
+      service: sessionService,
+      selection,
+      consoleService,
+      tree,
+      consoleView,
+      defaultAgentProfile: () =>
+        vscode.workspace.getConfiguration("honeyBee.agent").get<string>("defaultProfile", "codex"),
+      defaultToolProfile: () =>
+        vscode.workspace.getConfiguration("honeyBee.tool").get<string>("defaultProfile", "default"),
+      reportError,
+    });
+
+    await tree.load();
+    if (restoredSessionId !== undefined) {
+      await consoleService.select(restoredSessionId);
+    }
+    await consoleService.initialize();
+    lifecycle.activate();
+  } catch (error) {
+    await shutdown("activation-failure");
+    throw error;
   }
-  void consoleService.initialize().catch(reportError);
 
   if (context.extensionMode !== vscode.ExtensionMode.Test) {
     return {};
   }
-  const [draftResult, attemptResult, receiptResult] = await Promise.all([
+  const [draftResult, attemptResult, receiptResult, runResult, sessionResult] = await Promise.all([
     drafts.list(),
     attempts.list(),
     receipts.list(),
+    runs.list(),
+    sessions.list(),
   ]);
-  if (!draftResult.ok || !attemptResult.ok || !receiptResult.ok) {
+  if (
+    !draftResult.ok ||
+    !attemptResult.ok ||
+    !receiptResult.ok ||
+    !runResult.ok ||
+    !sessionResult.ok
+  ) {
     throw new Error("Prompt recovery test state could not be read.");
   }
   return {
@@ -313,6 +345,17 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
         phase: attempt.phase,
       })),
       recoveryIssueRequestIds: attemptReconciliation.issues.map((issue) => issue.requestId),
+      sessionStatuses: sessionResult.value.map((session) => ({
+        sessionId: session.id,
+        status: session.status,
+      })),
+      runPhases: runResult.value.map((run) => ({
+        runId: run.runId,
+        phase: run.phase,
+        ...(run.terminationReason === undefined
+          ? {}
+          : { terminationReason: run.terminationReason }),
+      })),
     },
   };
 };

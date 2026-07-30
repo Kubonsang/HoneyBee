@@ -4,7 +4,9 @@ import type {
   PromptDeliveryReceipt,
   Result,
   SessionDraft,
+  RunId,
   SessionId,
+  SessionRunRecord,
   SessionStatus,
 } from "@honeybee/domain";
 
@@ -67,5 +69,17 @@ export interface PromptDeliveryReceiptRepository {
   save(receipt: PromptDeliveryReceipt): Promise<Result<PromptDeliveryReceipt, RepositoryError>>;
   delete(requestId: string): Promise<Result<void, RepositoryError>>;
   prune(policy: PromptReceiptRetentionPolicy): Promise<Result<number, RepositoryError>>;
+  flush(): Promise<void>;
+}
+
+/** Durable storage boundary for correlated Agent Session Runs. */
+export interface SessionRunRepository {
+  getByRunId(runId: RunId): Promise<Result<SessionRunRecord | undefined, RepositoryError>>;
+  getActiveBySessionId(
+    sessionId: SessionId,
+  ): Promise<Result<SessionRunRecord | undefined, RepositoryError>>;
+  list(): Promise<Result<readonly SessionRunRecord[], RepositoryError>>;
+  listActive(): Promise<Result<readonly SessionRunRecord[], RepositoryError>>;
+  save(run: SessionRunRecord): Promise<Result<SessionRunRecord, RepositoryError>>;
   flush(): Promise<void>;
 }

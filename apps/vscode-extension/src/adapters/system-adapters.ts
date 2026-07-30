@@ -1,8 +1,10 @@
 import { randomUUID } from "node:crypto";
 
 import {
+  RunIdSchema,
   SessionIdSchema,
   type AgentProfileId,
+  type RunId,
   type SessionId,
   type ToolProfileId,
   type WorkspaceId,
@@ -26,8 +28,8 @@ export class RandomIdGenerator implements IdGeneratorPort {
     return SessionIdSchema.parse(`session-${randomUUID()}`);
   }
 
-  public runId(): string {
-    return `run-${randomUUID()}`;
+  public runId(): RunId {
+    return RunIdSchema.parse(`run-${randomUUID()}`);
   }
 
   public requestId(): string {

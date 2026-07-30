@@ -15,7 +15,7 @@ import type {
 } from "@honeybee/persistence";
 
 import { fingerprintPromptContent } from "./prompt-content-fingerprint.js";
-import type { ClockPort, RuntimeClientPort, RuntimeInputOutcome } from "./ports.js";
+import type { ClockPort, PromptRuntimeInputPort, RuntimeInputOutcome } from "./ports.js";
 
 export const DEFAULT_PROMPT_RECEIPT_RETENTION_POLICY: PromptReceiptRetentionPolicy = {
   maxClearedReceipts: 1_000,
@@ -70,7 +70,7 @@ export interface PromptDeliveryDependencies {
   readonly drafts: DraftRepository;
   readonly attempts: PromptDeliveryAttemptRepository;
   readonly receipts: PromptDeliveryReceiptRepository;
-  readonly runtime: RuntimeClientPort;
+  readonly runtime: PromptRuntimeInputPort;
   readonly clock: ClockPort;
   readonly attemptRetentionPolicy?: PromptAttemptRetentionPolicy;
   readonly receiptRetentionPolicy?: PromptReceiptRetentionPolicy;
@@ -115,7 +115,7 @@ const beforeDispatchFailure = (
 });
 
 const classifyRuntimeOutcome = async (
-  runtime: RuntimeClientPort,
+  runtime: PromptRuntimeInputPort,
   sessionId: SessionId,
   content: string,
 ): Promise<RuntimeInputOutcome> => {

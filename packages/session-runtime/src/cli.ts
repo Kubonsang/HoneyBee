@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
 import path from "node:path";
+
+import { RuntimeInstanceIdSchema } from "@honeybee/domain";
 
 import { NodePtyFactory } from "./node-pty-adapter.js";
 import { RuntimeJsonlServer } from "./server.js";
@@ -18,6 +21,7 @@ const manager = new PtySessionManager(new NodePtyFactory(), {
 });
 const server = new RuntimeJsonlServer(manager, {
   diagnostic,
+  runtimeInstanceId: RuntimeInstanceIdSchema.parse(`runtime-${randomUUID()}`),
   onShutdown: () => {
     process.stdin.pause();
     process.stdout.write("", () => process.exit(0));

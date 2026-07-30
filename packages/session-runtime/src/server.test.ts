@@ -1,6 +1,6 @@
 import { PassThrough } from "node:stream";
 
-import type { SessionIdSchema } from "@honeybee/domain";
+import { RuntimeInstanceIdSchema, type SessionIdSchema } from "@honeybee/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionLog, SessionLogFactory } from "./log.js";
@@ -70,15 +70,18 @@ interface CapturedMessage {
   readonly event?: string;
   readonly error?: { readonly code?: string };
   readonly data?: string;
+  readonly reason?: string;
+  readonly runId?: string;
 }
 
 const startRequest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   kind: "request",
   id: "start-1",
   method: "agent.start",
   params: {
     sessionId: "session-1",
+    runId: "run-1",
     launchSpec: {
       command: "agent.exe",
       args: [],
@@ -113,7 +116,9 @@ describe("RuntimeJsonlServer", () => {
   it("handles split/coalesced requests and wraps PTY output as JSONL only", async () => {
     const factory = new ServerFakeFactory();
     const manager = new PtySessionManager(factory, { logFactory: new ServerMemoryLogs() });
-    const server = new RuntimeJsonlServer(manager);
+    const server = new RuntimeJsonlServer(manager, {
+      runtimeInstanceId: RuntimeInstanceIdSchema.parse("runtime-test"),
+    });
     const input = new PassThrough();
     const output = new PassThrough();
     const messages = capture(output);
@@ -132,18 +137,18 @@ describe("RuntimeJsonlServer", () => {
     factory.process.emitData("\u001b[32m한글🐝\u001b[0m\r\n");
 
     const inputRequest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "request",
       id: "input-1",
       method: "agent.input",
-      params: { sessionId: "session-1", data: "hello" },
+      params: { sessionId: "session-1", runId: "run-1", data: "hello" },
     };
     const resizeRequest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       kind: "request",
       id: "resize-1",
       method: "agent.resize",
-      params: { sessionId: "session-1", size: { cols: 100, rows: 30 } },
+      params: { sessionId: "session-1", runId: "run-1", size: { cols: 100, rows: 30 } },
     };
     input.write(`${JSON.stringify(inputRequest)}\n${JSON.stringify(resizeRequest)}\n`);
 
@@ -159,11 +164,38 @@ describe("RuntimeJsonlServer", () => {
     await server.stop();
   });
 
+  it("treats stdin EOF as best-effort Runtime shutdown for every active PTY", async () => {
+    const factory = new ServerFakeFactory();
+    const manager = new PtySessionManager(factory, { logFactory: new ServerMemoryLogs() });
+    const server = new RuntimeJsonlServer(manager, {
+      runtimeInstanceId: RuntimeInstanceIdSchema.parse("runtime-eof"),
+    });
+    const input = new PassThrough();
+    const output = new PassThrough();
+    const messages = capture(output);
+    server.start(input, output);
+    input.write(`${JSON.stringify(startRequest)}\n`);
+    await vi.waitFor(() => expect(manager.activeSessionCount).toBe(1));
+
+    input.end();
+
+    await vi.waitFor(() => expect(manager.activeSessionCount).toBe(0));
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        event: "pty.exit",
+        runId: "run-1",
+        reason: "runtime-shutdown",
+      }),
+    );
+    await server.stop();
+  });
   it("returns typed errors for duplicate ids, unknown versions, and malformed JSON", async () => {
     const manager = new PtySessionManager(new ServerFakeFactory(), {
       logFactory: new ServerMemoryLogs(),
     });
-    const server = new RuntimeJsonlServer(manager);
+    const server = new RuntimeJsonlServer(manager, {
+      runtimeInstanceId: RuntimeInstanceIdSchema.parse("runtime-test"),
+    });
     const input = new PassThrough();
     const output = new PassThrough();
     const messages = capture(output);

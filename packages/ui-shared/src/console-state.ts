@@ -3,6 +3,7 @@ import type {
   ConsoleSessionSummary,
   ConsoleViewState,
   PromptRecoveryIssue,
+  ConsoleLifecycleState,
 } from "./contracts.js";
 
 export type ConsoleStateAction =
@@ -12,6 +13,7 @@ export type ConsoleStateAction =
       readonly draft: string;
       readonly recoveryIssue: PromptRecoveryIssue | null;
     }
+  | { readonly type: "lifecycle.changed"; readonly state: ConsoleLifecycleState }
   | { readonly type: "draft.updated"; readonly draft: string }
   | {
       readonly type: "recovery.changed";
@@ -34,6 +36,7 @@ export const initialConsoleViewState = (): ConsoleViewState => ({
   draft: "",
   recoveryIssue: null,
   connectionStatus: "disconnected",
+  lifecycleState: "activating",
   statusMessage: "Select a session to open its console.",
   canStart: false,
   canInterrupt: false,
@@ -43,8 +46,9 @@ export const initialConsoleViewState = (): ConsoleViewState => ({
 const controlsForStatus = (
   session: ConsoleSessionSummary | null,
   connectionStatus: ConsoleConnectionStatus,
+  lifecycleState: ConsoleLifecycleState,
 ): Pick<ConsoleViewState, "canStart" | "canInterrupt" | "canStop"> => {
-  if (session === null || connectionStatus !== "connected") {
+  if (session === null || connectionStatus !== "connected" || lifecycleState !== "active") {
     return { canStart: false, canInterrupt: false, canStop: false };
   }
   const active =
@@ -64,7 +68,7 @@ const controlsForStatus = (
 
 const withControls = (state: Omit<ConsoleViewState, "canStart" | "canInterrupt" | "canStop">) => ({
   ...state,
-  ...controlsForStatus(state.selectedSession, state.connectionStatus),
+  ...controlsForStatus(state.selectedSession, state.connectionStatus, state.lifecycleState),
 });
 
 export const reduceConsoleViewState = (
@@ -72,6 +76,15 @@ export const reduceConsoleViewState = (
   action: ConsoleStateAction,
 ): ConsoleViewState => {
   switch (action.type) {
+    case "lifecycle.changed":
+      return withControls({
+        ...state,
+        lifecycleState: action.state,
+        statusMessage:
+          action.state === "shutting-down"
+            ? "Honey Bee is shutting down. Runtime controls are disabled."
+            : state.statusMessage,
+      });
     case "session.selected":
       return withControls({
         ...state,

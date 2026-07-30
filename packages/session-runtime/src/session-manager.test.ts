@@ -1,4 +1,4 @@
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema } from "@honeybee/domain";
 import { describe, expect, it, vi } from "vitest";
 
 import type { SessionLog, SessionLogFactory } from "./log.js";
@@ -84,6 +84,7 @@ class MemoryLogFactory implements SessionLogFactory {
 }
 
 const sessionId = SessionIdSchema.parse("session-1");
+const runId = RunIdSchema.parse("run-1");
 const launchSpec = {
   command: "agent.exe",
   args: ["--safe"],
@@ -92,8 +93,33 @@ const launchSpec = {
   shell: false,
 } as const;
 
+class MultiPtyFactory implements PtyFactoryPort {
+  public readonly processes = [new FakePtyProcess(), new FakePtyProcess()];
+  #index = 0;
+
+  public spawn(): PtyProcessPort {
+    const process = this.processes[this.#index];
+    this.#index += 1;
+    if (process === undefined) throw new Error("No fake PTY remains.");
+    return process;
+  }
+}
+
+class SelectiveHangingLogFactory implements SessionLogFactory {
+  public async create(sessionId: ReturnType<typeof SessionIdSchema.parse>): Promise<SessionLog> {
+    return {
+      filePath: `memory://${sessionId}.pty.log`,
+      write: () => undefined,
+      close:
+        sessionId === "session-1"
+          ? () => new Promise<void>(() => undefined)
+          : async () => undefined,
+    };
+  }
+}
 const startRequest = {
   sessionId,
+  runId,
   launchSpec,
   size: { cols: 80, rows: 24 },
 } as const;
@@ -109,10 +135,10 @@ describe("PtySessionManager", () => {
     const started = await manager.start(startRequest);
     factory.process.emitData("old");
     factory.process.emitData("\u001b[31m벌\u001b[0m");
-    manager.input(sessionId, "hello");
-    manager.resize(sessionId, { cols: 120, rows: 40 });
+    manager.input(sessionId, runId, "hello");
+    manager.resize(sessionId, runId, { cols: 120, rows: 40 });
 
-    const snapshot = manager.getSnapshot(sessionId);
+    const snapshot = manager.getSnapshot(sessionId, runId);
     expect(started.logFilePath).toBe("memory://session-1.pty.log");
     expect(snapshot.byteLength).toBeLessThanOrEqual(12);
     expect(snapshot.data).not.toContain("�");
@@ -143,12 +169,12 @@ describe("PtySessionManager", () => {
       await manager.start(startRequest);
 
       if (testCase.action === "interrupt") {
-        manager.interrupt(sessionId);
+        manager.interrupt(sessionId, runId);
         expect(factory.process.writes).toEqual(["\u0003"]);
       } else if (testCase.action === "stop") {
-        manager.stop(sessionId);
+        manager.stop(sessionId, runId);
       } else if (testCase.action === "force") {
-        manager.stop(sessionId, true);
+        manager.stop(sessionId, runId, true);
       }
       factory.process.emitExit({ exitCode: testCase.action === "natural" ? 7 : 0, signal: 1 });
 
@@ -163,6 +189,50 @@ describe("PtySessionManager", () => {
     }
   });
 
+  it("rejects stale Run actions and shuts down idempotently with a lifecycle reason", async () => {
+    const factory = new FakePtyFactory();
+    const manager = new PtySessionManager(factory, { logFactory: new MemoryLogFactory() });
+    const events: PtySessionEvent[] = [];
+    manager.onEvent((event) => events.push(event));
+    await manager.start(startRequest);
+
+    expect(() => manager.input(sessionId, RunIdSchema.parse("run-stale"), "secret")).toThrowError(
+      expect.objectContaining({ code: "runtime.stale-run" }),
+    );
+    expect(factory.process.writes).toEqual([]);
+
+    const first = manager.shutdown("extension-shutdown");
+    const second = manager.shutdown("runtime-shutdown");
+    expect(first).toBe(second);
+    await expect(first).resolves.toEqual({ stoppedRuns: 1, unresolvedRuns: 0 });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        type: "session.exited",
+        sessionId,
+        runId,
+        reason: "extension-shutdown",
+      }),
+    );
+  });
+  it("bounds one stuck Session cleanup while other Sessions still stop", async () => {
+    const factory = new MultiPtyFactory();
+    const manager = new PtySessionManager(factory, {
+      logFactory: new SelectiveHangingLogFactory(),
+      shutdownTimeoutMs: 20,
+    });
+    await manager.start(startRequest);
+    await manager.start({
+      ...startRequest,
+      sessionId: SessionIdSchema.parse("session-2"),
+      runId: RunIdSchema.parse("run-2"),
+    });
+
+    await expect(manager.shutdown("extension-shutdown")).resolves.toEqual({
+      stoppedRuns: 1,
+      unresolvedRuns: 1,
+    });
+    expect(factory.processes.map((process) => process.killCount)).toEqual([1, 1]);
+  });
   it("rejects duplicate sessions and maps spawn errors", async () => {
     const manager = new PtySessionManager(new FakePtyFactory(), {
       logFactory: new MemoryLogFactory(),
@@ -185,6 +255,7 @@ describe("PtySessionManager", () => {
     expect(failedEvents).toContainEqual({
       type: "session.exited",
       sessionId,
+      runId,
       seq: 0,
       exitCode: null,
       signal: null,

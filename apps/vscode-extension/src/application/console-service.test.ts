@@ -1,11 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 
-import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
+import {
+  AgentSessionSchema,
+  RunIdSchema,
+  RuntimeInstanceIdSchema,
+  type AgentSession,
+  type SessionId,
+} from "@honeybee/domain";
 import {
   InMemoryDraftRepository,
   InMemoryPromptDeliveryAttemptRepository,
   InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
+  InMemorySessionRunRepository,
 } from "@honeybee/persistence";
 import type { ExtensionToConsoleMessage } from "@honeybee/ui-shared";
 
@@ -30,11 +37,21 @@ class FakeRuntimeClient implements RuntimeClientPort {
   }[] = [];
   starts: RuntimeStartRequest[] = [];
   connectionState: RuntimeConnectionState = "disconnected";
+  readonly runtimeHello = {
+    protocolVersion: 2,
+    runtimeInstanceId: RuntimeInstanceIdSchema.parse("runtime-test"),
+    pid: 42,
+  };
   #listener: ((event: RuntimeClientEvent) => void) | undefined;
 
   public async connect(): Promise<void> {
     this.connectionState = "connected";
-    this.emit({ type: "connection", state: "connected", message: "Runtime connected." });
+    this.emit({
+      type: "connection",
+      state: "connected",
+      cause: "connect",
+      message: "Runtime connected.",
+    });
   }
 
   public async start(request: RuntimeStartRequest): Promise<void> {
@@ -53,6 +70,14 @@ class FakeRuntimeClient implements RuntimeClientPort {
   public async interrupt(_sessionId: SessionId): Promise<void> {}
 
   public async stop(_sessionId: SessionId): Promise<void> {}
+
+  public async shutdown(): Promise<{
+    readonly state: "stopped";
+    readonly stoppedRuns: number;
+    readonly unresolvedRuns: number;
+  }> {
+    return { state: "stopped", stoppedRuns: 0, unresolvedRuns: 0 };
+  }
 
   public onEvent(listener: (event: RuntimeClientEvent) => void): { dispose(): void } {
     this.#listener = listener;
@@ -109,11 +134,15 @@ describe("ConsoleApplicationService", () => {
       drafts,
       new InMemoryPromptDeliveryAttemptRepository(),
       new InMemoryPromptDeliveryReceiptRepository(),
+      new InMemorySessionRunRepository(),
       selection,
       runtime,
       profiles,
       clock,
-      { requestId: () => "replacement" },
+      {
+        requestId: () => "replacement",
+        runId: () => RunIdSchema.parse("run-1"),
+      },
     );
     const messages: ExtensionToConsoleMessage[] = [];
     service.onMessage((message) => {
@@ -128,15 +157,18 @@ describe("ConsoleApplicationService", () => {
     expect(runtime.resizes).toEqual([]);
 
     await service.start(selected.id);
-    expect(runtime.starts[0]).toMatchObject({
+    const started = runtime.starts[0];
+    expect(started).toMatchObject({
       sessionId: selected.id,
       command: "fake-agent",
       columns: 100,
       rows: 30,
     });
+    if (started === undefined) throw new Error("Runtime start was not recorded.");
     runtime.emit({
       type: "session.status",
       sessionId: selected.id,
+      runId: started.runId,
       status: "running",
       message: "Agent is running.",
     });
@@ -154,6 +186,7 @@ describe("ConsoleApplicationService", () => {
     runtime.emit({
       type: "pty.data",
       sessionId: selected.id,
+      runId: started.runId,
       sequence: 1,
       data: "\u001b[32mready\u001b[0m\r\n",
     });

@@ -1,14 +1,15 @@
 import {
   SessionDraftSchema,
   type AgentSession,
+  type RunId,
   type SessionId,
-  type SessionStatus,
 } from "@honeybee/domain";
 import type {
   DraftRepository,
   PromptDeliveryAttemptRepository,
   PromptDeliveryReceiptRepository,
   SessionRepository,
+  SessionRunRepository,
 } from "@honeybee/persistence";
 import {
   initialConsoleViewState,
@@ -32,7 +33,10 @@ import type {
   IdGeneratorPort,
   RuntimeClientEvent,
   RuntimeClientPort,
+  RuntimeShutdownReason,
+  RuntimeShutdownResult,
 } from "./ports.js";
+import { SessionRunController, type CorrelatedRuntimeStatus } from "./session-run-controller.js";
 import type { SessionSelectionService } from "./session-selection.js";
 
 const MAX_SESSION_OUTPUT = 512_000;
@@ -62,6 +66,7 @@ const recoveryView = (issue: PromptRecoveryIssueRecord | undefined): PromptRecov
         draftMatch: issue.draftMatch,
         occurredAt: issue.occurredAt,
       };
+
 export class ConsoleApplicationService {
   readonly #listeners = new Set<(message: ExtensionToConsoleMessage) => void>();
   readonly #outputs = new Map<SessionId, string>();
@@ -69,6 +74,7 @@ export class ConsoleApplicationService {
   readonly #runtimeSubscription: { dispose(): void };
   readonly #selectionSubscription: { dispose(): void };
   readonly #recovery: PromptRecoveryService;
+  readonly #runController: SessionRunController;
   #state: ConsoleViewState = initialConsoleViewState();
 
   public constructor(
@@ -76,27 +82,28 @@ export class ConsoleApplicationService {
     private readonly drafts: DraftRepository,
     private readonly attempts: PromptDeliveryAttemptRepository,
     private readonly receipts: PromptDeliveryReceiptRepository,
+    runs: SessionRunRepository,
     selection: SessionSelectionService,
-    private readonly runtime: RuntimeClientPort,
+    runtime: RuntimeClientPort,
     private readonly profiles: AgentProfileResolverPort,
     private readonly clock: ClockPort,
-    ids: Pick<IdGeneratorPort, "requestId">,
+    ids: Pick<IdGeneratorPort, "requestId" | "runId">,
     initialRecoveryIssues: readonly PromptRecoveryIssueRecord[] = [],
+    diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void = () => undefined,
   ) {
+    this.#runController = new SessionRunController(sessions, runs, runtime, clock, ids, diagnostic);
     this.#recovery = new PromptRecoveryService({
       attempts,
       drafts,
       receipts,
-      runtime,
+      runtime: this.#runController,
       clock,
       ids,
       initialIssues: initialRecoveryIssues,
     });
-    this.#runtimeSubscription = runtime.onEvent((event) => {
-      this.handleRuntimeEvent(event);
-    });
+    this.#runtimeSubscription = runtime.onEvent((event) => this.handleRuntimeEvent(event));
     this.#selectionSubscription = selection.onDidSelect((sessionId) => {
-      this.select(sessionId);
+      void this.select(sessionId).catch(() => undefined);
     });
   }
 
@@ -112,28 +119,23 @@ export class ConsoleApplicationService {
         message: "Connecting to the separate runtime...",
       }),
     );
-    await this.runtime.connect();
+    await this.#runController.connect();
+    this.setState(
+      reduceConsoleViewState(this.#state, { type: "lifecycle.changed", state: "active" }),
+    );
   }
 
   public onMessage(listener: (message: ExtensionToConsoleMessage) => void): { dispose(): void } {
     this.#listeners.add(listener);
-    return {
-      dispose: () => {
-        this.#listeners.delete(listener);
-      },
-    };
+    return { dispose: () => this.#listeners.delete(listener) };
   }
 
   public replayState(): void {
     this.emit({ type: "console.state", state: this.#state });
     const sessionId = this.#state.selectedSession?.id;
-    if (sessionId === undefined) {
-      return;
-    }
+    if (sessionId === undefined) return;
     const output = this.#outputs.get(this.parseSessionId(sessionId));
-    if (output !== undefined) {
-      this.emit({ type: "terminal.data", sessionId, data: output });
-    }
+    if (output !== undefined) this.emit({ type: "terminal.data", sessionId, data: output });
   }
 
   public async select(sessionId: SessionId | undefined): Promise<void> {
@@ -178,9 +180,7 @@ export class ConsoleApplicationService {
       }),
     );
     const output = this.#outputs.get(sessionId);
-    if (output !== undefined) {
-      this.emit({ type: "terminal.data", sessionId, data: output });
-    }
+    if (output !== undefined) this.emit({ type: "terminal.data", sessionId, data: output });
   }
 
   public async saveDraft(sessionId: SessionId, content: string): Promise<void> {
@@ -197,10 +197,7 @@ export class ConsoleApplicationService {
     if (this.#state.selectedSession?.id === sessionId) {
       this.setState(
         reduceConsoleViewState(
-          reduceConsoleViewState(this.#state, {
-            type: "draft.updated",
-            draft: content,
-          }),
+          reduceConsoleViewState(this.#state, { type: "draft.updated", draft: content }),
           {
             type: "recovery.changed",
             recoveryIssue: recoveryView(this.#recovery.issueFor(sessionId)),
@@ -215,6 +212,7 @@ export class ConsoleApplicationService {
   }
 
   public async start(sessionId: SessionId): Promise<void> {
+    this.#runController.assertMutationAllowed();
     const session = await this.getSession(sessionId);
     const profile = await this.profiles.resolve(
       session.agentProfileId,
@@ -222,24 +220,27 @@ export class ConsoleApplicationService {
       session.workspaceId,
     );
     const size = this.#terminalSizes.get(sessionId) ?? { columns: 80, rows: 24 };
-    await this.updateStatus(session, "starting", "Starting agent...");
-    try {
-      await this.runtime.start({
-        sessionId,
-        command: profile.command,
-        args: profile.args,
-        cwd: profile.cwd,
-        environment: profile.environment,
-        shell: profile.shell,
-        columns: size.columns,
-        rows: size.rows,
-      });
-    } catch (error) {
-      await this.updateStatus(
-        await this.getSession(sessionId),
-        "failed",
-        error instanceof Error ? error.message : String(error),
+    if (this.#state.selectedSession?.id === sessionId) {
+      this.setState(
+        reduceConsoleViewState(this.#state, {
+          type: "session.status",
+          status: "starting",
+          message: "Starting agent...",
+        }),
       );
+    }
+    try {
+      await this.#runController.start(session, profile, size);
+    } catch (error) {
+      if (this.#state.selectedSession?.id === sessionId) {
+        this.setState(
+          reduceConsoleViewState(this.#state, {
+            type: "session.status",
+            status: "failed",
+            message: error instanceof Error ? error.message : String(error),
+          }),
+        );
+      }
       throw error;
     }
   }
@@ -249,6 +250,7 @@ export class ConsoleApplicationService {
     sessionId: SessionId,
     content: string,
   ): Promise<PromptDeliveryResult> {
+    this.#runController.assertMutationAllowed();
     if (this.#recovery.issueFor(sessionId) !== undefined) {
       return {
         status: "rejected",
@@ -261,16 +263,14 @@ export class ConsoleApplicationService {
         drafts: this.drafts,
         attempts: this.attempts,
         receipts: this.receipts,
-        runtime: this.runtime,
+        runtime: this.#runController,
         clock: this.clock,
       },
       requestId,
       sessionId,
       content,
     );
-    if (result.status === "unknown") {
-      await this.#recovery.registerUnknown(requestId, sessionId);
-    }
+    if (result.status === "unknown") await this.#recovery.registerUnknown(requestId, sessionId);
     if (this.#state.selectedSession?.id === sessionId) {
       const draft = result.status === "accepted" ? "" : this.#state.draft;
       this.setState(
@@ -294,6 +294,7 @@ export class ConsoleApplicationService {
     requestId: string,
     sessionId: SessionId,
   ): Promise<PromptRecoveryActionResult> {
+    this.#runController.assertMutationAllowed();
     const result = await this.#recovery.assumeDelivered(requestId, sessionId);
     await this.refreshRecoveryView(sessionId, "Unknown Prompt marked as assumed delivered.");
     return result;
@@ -303,6 +304,7 @@ export class ConsoleApplicationService {
     requestId: string,
     sessionId: SessionId,
   ): Promise<PromptRecoveryActionResult> {
+    this.#runController.assertMutationAllowed();
     const result = await this.#recovery.retry(requestId, sessionId);
     await this.refreshRecoveryView(
       sessionId,
@@ -314,7 +316,7 @@ export class ConsoleApplicationService {
   }
 
   public async sendTerminalInput(sessionId: SessionId, data: string): Promise<void> {
-    const outcome = await this.runtime.sendInput(sessionId, data);
+    const outcome = await this.#runController.sendInput(sessionId, data);
     if (outcome.status !== "accepted") {
       throw new ApplicationError(
         outcome.status === "rejected" ? "runtime.input-rejected" : "runtime.input-unknown",
@@ -324,6 +326,7 @@ export class ConsoleApplicationService {
   }
 
   public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
+    this.#runController.assertMutationAllowed();
     this.#terminalSizes.set(sessionId, { columns, rows });
     const session = await this.getSession(sessionId);
     if (
@@ -331,23 +334,59 @@ export class ConsoleApplicationService {
       session.status === "running" ||
       session.status === "waiting_for_input"
     ) {
-      await this.runtime.resize(sessionId, columns, rows);
+      await this.#runController.resize(sessionId, columns, rows);
     }
   }
 
-  public async interrupt(sessionId: SessionId): Promise<void> {
-    await this.runtime.interrupt(sessionId);
+  public interrupt(sessionId: SessionId): Promise<void> {
+    return this.#runController.interrupt(sessionId);
   }
 
-  public async stop(sessionId: SessionId): Promise<void> {
-    await this.runtime.stop(sessionId);
+  public stop(sessionId: SessionId): Promise<void> {
+    return this.#runController.stop(sessionId);
   }
 
-  public async dispose(): Promise<void> {
+  public beginShutdown(): void {
+    this.#runController.beginShutdown();
+    this.setState(
+      reduceConsoleViewState(this.#state, {
+        type: "lifecycle.changed",
+        state: "shutting-down",
+      }),
+    );
+  }
+
+  public markActiveRunsStopping(): Promise<void> {
+    return this.#runController.markActiveRunsStopping();
+  }
+
+  public shutdownRuntime(reason: RuntimeShutdownReason): Promise<RuntimeShutdownResult> {
+    return this.#runController.shutdownRuntime(reason);
+  }
+
+  public interruptRemaining(reason: "runtime-disconnected" | "shutdown-timeout"): Promise<number> {
+    return this.#runController.interruptRemaining(reason);
+  }
+
+  public flushRunState(): Promise<void> {
+    return this.#runController.flush();
+  }
+
+  public disposeRuntime(): Promise<void> {
+    return this.#runController.dispose();
+  }
+
+  public disposeListeners(): void {
     this.#runtimeSubscription.dispose();
     this.#selectionSubscription.dispose();
-    await this.runtime.dispose();
     this.#listeners.clear();
+  }
+
+  /** Backward-compatible complete disposal used by focused unit tests. */
+  public async dispose(): Promise<void> {
+    this.beginShutdown();
+    this.disposeListeners();
+    await this.disposeRuntime();
   }
 
   private handleRuntimeEvent(event: RuntimeClientEvent): void {
@@ -360,75 +399,58 @@ export class ConsoleApplicationService {
             message: event.message,
           }),
         );
-        break;
+        if (event.cause === "unexpected-disconnect") {
+          void this.#runController
+            .handleUnexpectedDisconnect()
+            .then(async () => {
+              const selected = this.#state.selectedSession?.id;
+              if (selected !== undefined) await this.select(this.parseSessionId(selected));
+            })
+            .catch(() => undefined);
+        }
+        return;
       case "pty.data": {
+        if (!this.#runController.isCurrentRun(event.sessionId, event.runId)) return;
         const current = this.#outputs.get(event.sessionId) ?? "";
         this.#outputs.set(event.sessionId, `${current}${event.data}`.slice(-MAX_SESSION_OUTPUT));
         if (this.#state.selectedSession?.id === event.sessionId) {
-          this.emit({
-            type: "terminal.data",
-            sessionId: event.sessionId,
-            data: event.data,
-          });
+          this.emit({ type: "terminal.data", sessionId: event.sessionId, data: event.data });
         }
-        break;
+        return;
       }
       case "session.status":
-        this.applyRuntimeStatus(event.sessionId, event.status, event.message);
-        break;
+        void this.applyRuntimeStatus(event);
+        return;
       case "runtime.error":
-        if (event.sessionId !== undefined) {
-          this.applyRuntimeStatus(event.sessionId, "failed", event.message);
-        } else {
-          this.setState(
-            reduceConsoleViewState(this.#state, {
-              type: "connection.changed",
-              status: "error",
-              message: event.message,
-            }),
-          );
-        }
-        break;
+        this.setState(
+          reduceConsoleViewState(this.#state, {
+            type: "connection.changed",
+            status: "error",
+            message: event.message,
+          }),
+        );
+        return;
     }
   }
 
-  private async applyRuntimeStatus(
-    sessionId: SessionId,
-    status: SessionStatus,
-    message: string,
-  ): Promise<void> {
+  private async applyRuntimeStatus(event: CorrelatedRuntimeStatus): Promise<void> {
     try {
-      await this.updateStatus(await this.getSession(sessionId), status, message);
+      const applied = await this.#runController.handleStatus(event);
+      if (applied !== undefined && this.#state.selectedSession?.id === event.sessionId) {
+        this.setState(
+          reduceConsoleViewState(this.#state, {
+            type: "session.status",
+            status: applied.status,
+            message: applied.message,
+          }),
+        );
+      }
     } catch (error) {
       this.setState(
         reduceConsoleViewState(this.#state, {
           type: "connection.changed",
           status: "error",
           message: error instanceof Error ? error.message : String(error),
-        }),
-      );
-    }
-  }
-
-  private async updateStatus(
-    session: AgentSession,
-    status: SessionStatus,
-    message: string,
-  ): Promise<void> {
-    const result = await this.sessions.save({
-      ...session,
-      status,
-      updatedAt: this.clock.now(),
-    });
-    if (!result.ok) {
-      throw new ApplicationError(result.error.code, result.error.message, result.error.details);
-    }
-    if (this.#state.selectedSession?.id === session.id) {
-      this.setState(
-        reduceConsoleViewState(this.#state, {
-          type: "session.status",
-          status,
-          message,
         }),
       );
     }
@@ -449,6 +471,7 @@ export class ConsoleApplicationService {
       ),
     );
   }
+
   private async getSession(sessionId: SessionId): Promise<AgentSession> {
     const result = await this.sessions.getById(sessionId);
     if (!result.ok) {
@@ -467,8 +490,6 @@ export class ConsoleApplicationService {
   }
 
   private emit(message: ExtensionToConsoleMessage): void {
-    for (const listener of this.#listeners) {
-      listener(message);
-    }
+    for (const listener of this.#listeners) listener(message);
   }
 }

@@ -1,6 +1,8 @@
-import type { Disposable } from "./pty-port.js";
+import type { RuntimeInstanceId } from "@honeybee/domain";
+
 import { RuntimeOperationError } from "./errors.js";
 import { JsonlDecoder, type JsonlDecoderOptions } from "./jsonl.js";
+import type { Disposable } from "./pty-port.js";
 import {
   RUNTIME_PROTOCOL_VERSION,
   RuntimeRequestSchema,
@@ -16,6 +18,8 @@ import type { PtySessionEvent } from "./types.js";
 export interface RuntimeJsonlServerOptions extends JsonlDecoderOptions {
   readonly diagnostic?: (message: string, error?: unknown) => void;
   readonly onShutdown?: () => void | Promise<void>;
+  readonly runtimeInstanceId: RuntimeInstanceId;
+  readonly pid?: number;
 }
 
 const errorPayload = (error: unknown): RuntimeErrorPayload => {
@@ -35,9 +39,7 @@ const errorPayload = (error: unknown): RuntimeErrorPayload => {
 };
 
 const requestId = (value: unknown): string | undefined => {
-  if (typeof value !== "object" || value === null || !("id" in value)) {
-    return undefined;
-  }
+  if (typeof value !== "object" || value === null || !("id" in value)) return undefined;
   return typeof value.id === "string" && value.id.length > 0 ? value.id : undefined;
 };
 
@@ -52,11 +54,10 @@ export class RuntimeJsonlServer {
   #input: NodeJS.ReadableStream | undefined;
   #output: NodeJS.WritableStream | undefined;
   #ending = false;
+  #acceptingRequests = true;
 
   readonly #onData = (chunk: unknown): void => {
-    if (this.#ending) {
-      return;
-    }
+    if (this.#ending) return;
     try {
       const value =
         typeof chunk === "string" || Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk));
@@ -71,21 +72,21 @@ export class RuntimeJsonlServer {
   };
 
   readonly #onEnd = (): void => {
-    if (this.#ending) {
-      return;
-    }
+    if (this.#ending) return;
     this.#ending = true;
+    this.#acceptingRequests = false;
     try {
       this.#decoder.finish();
     } catch (error: unknown) {
       this.#sendProtocolError(error);
     }
     this.#pending = this.#pending
-      .then(() => this.#manager.shutdown())
+      .then(() => this.#manager.shutdown("runtime-shutdown"))
+      .then(() => undefined)
       .catch((error: unknown) => this.#diagnostic("Runtime EOF cleanup failed.", error));
   };
 
-  public constructor(manager: PtySessionManager, options: RuntimeJsonlServerOptions = {}) {
+  public constructor(manager: PtySessionManager, options: RuntimeJsonlServerOptions) {
     this.#manager = manager;
     this.#options = options;
     this.#decoder = new JsonlDecoder(options);
@@ -110,8 +111,11 @@ export class RuntimeJsonlServer {
   public async stop(): Promise<void> {
     if (!this.#ending) {
       this.#ending = true;
+      this.#acceptingRequests = false;
       await this.#pending;
-      await this.#manager.shutdown();
+      await this.#manager.shutdown("runtime-shutdown");
+    } else {
+      await this.#pending;
     }
     this.#input?.removeListener("data", this.#onData);
     this.#input?.removeListener("end", this.#onEnd);
@@ -149,11 +153,8 @@ export class RuntimeJsonlServer {
         false,
         { issues: parsed.error.issues },
       );
-      if (id === undefined) {
-        this.#sendProtocolError(error);
-      } else {
-        this.#sendFailure(id, error);
-      }
+      if (id === undefined) this.#sendProtocolError(error);
+      else this.#sendFailure(id, error);
       return;
     }
 
@@ -170,6 +171,18 @@ export class RuntimeJsonlServer {
     }
     this.#seenRequestIds.add(parsed.data.id);
 
+    if (!this.#acceptingRequests && parsed.data.method !== "runtime.hello") {
+      this.#sendFailure(
+        parsed.data.id,
+        new RuntimeOperationError(
+          "runtime.shutting-down",
+          "The Runtime is shutting down and rejects new requests.",
+          false,
+        ),
+      );
+      return;
+    }
+
     try {
       await this.#handleRequest(parsed.data);
     } catch (error: unknown) {
@@ -179,9 +192,17 @@ export class RuntimeJsonlServer {
 
   async #handleRequest(request: RuntimeRequest): Promise<void> {
     switch (request.method) {
+      case "runtime.hello":
+        this.#sendSuccess(request.id, {
+          protocolVersion: RUNTIME_PROTOCOL_VERSION,
+          runtimeInstanceId: this.#options.runtimeInstanceId,
+          pid: this.#options.pid ?? process.pid,
+        });
+        return;
       case "agent.start": {
         const snapshot = await this.#manager.start({
           sessionId: request.params.sessionId,
+          runId: request.params.runId,
           launchSpec: request.params.launchSpec,
           size: request.params.size,
           ...(request.params.logFilePath === undefined
@@ -190,36 +211,46 @@ export class RuntimeJsonlServer {
         });
         this.#sendSuccess(request.id, {
           state: "running",
+          runId: snapshot.runId,
           logFilePath: snapshot.logFilePath,
         });
         return;
       }
       case "agent.input":
-        this.#manager.input(request.params.sessionId, request.params.data);
+        this.#manager.input(request.params.sessionId, request.params.runId, request.params.data);
         this.#sendSuccess(request.id, { accepted: true });
         return;
       case "agent.resize":
-        this.#manager.resize(request.params.sessionId, request.params.size);
+        this.#manager.resize(request.params.sessionId, request.params.runId, request.params.size);
         this.#sendSuccess(request.id, { accepted: true });
         return;
       case "agent.interrupt":
-        this.#manager.interrupt(request.params.sessionId);
+        this.#manager.interrupt(request.params.sessionId, request.params.runId);
         this.#sendSuccess(request.id, { accepted: true });
         return;
       case "agent.stop":
-        this.#manager.stop(request.params.sessionId, request.params.force ?? false);
+        this.#manager.stop(
+          request.params.sessionId,
+          request.params.runId,
+          request.params.force ?? false,
+        );
         this.#sendSuccess(request.id, {
           state: request.params.force === true ? "force-stopping" : "stopping",
         });
         return;
       case "agent.snapshot":
-        this.#sendSuccess(request.id, this.#manager.getSnapshot(request.params.sessionId));
+        this.#sendSuccess(
+          request.id,
+          this.#manager.getSnapshot(request.params.sessionId, request.params.runId),
+        );
         return;
-      case "runtime.shutdown":
-        this.#sendSuccess(request.id, { state: "stopped" });
-        await this.#manager.shutdown();
+      case "runtime.shutdown": {
+        this.#acceptingRequests = false;
+        const report = await this.#manager.shutdown(request.params.reason);
+        this.#sendSuccess(request.id, { state: "stopped", ...report });
         await this.#options.onShutdown?.();
         return;
+      }
     }
   }
 
@@ -231,6 +262,7 @@ export class RuntimeJsonlServer {
           kind: "event",
           event: "pty.started",
           sessionId: event.sessionId,
+          runId: event.runId,
           seq: event.seq,
           pid: event.pid,
           logFilePath: event.logFilePath,
@@ -242,6 +274,7 @@ export class RuntimeJsonlServer {
           kind: "event",
           event: "pty.data",
           sessionId: event.sessionId,
+          runId: event.runId,
           seq: event.seq,
           data: event.data,
         });
@@ -252,6 +285,7 @@ export class RuntimeJsonlServer {
           kind: "event",
           event: "pty.exit",
           sessionId: event.sessionId,
+          runId: event.runId,
           seq: event.seq,
           exitCode: event.exitCode,
           signal: event.signal,
@@ -262,35 +296,32 @@ export class RuntimeJsonlServer {
   }
 
   #sendSuccess(id: string, result: unknown): void {
-    const response: RuntimeResponse = {
+    this.#send({
       schemaVersion: RUNTIME_PROTOCOL_VERSION,
       kind: "response",
       id,
       ok: true,
       result,
-    };
-    this.#send(response);
+    });
   }
 
   #sendFailure(id: string, error: unknown): void {
-    const response: RuntimeResponse = {
+    this.#send({
       schemaVersion: RUNTIME_PROTOCOL_VERSION,
       kind: "response",
       id,
       ok: false,
       error: errorPayload(error),
-    };
-    this.#send(response);
+    });
   }
 
   #sendProtocolError(error: unknown): void {
-    const event: RuntimeEventMessage = {
+    this.#send({
       schemaVersion: RUNTIME_PROTOCOL_VERSION,
       kind: "event",
       event: "runtime.protocol-error",
       error: errorPayload(error),
-    };
-    this.#send(event);
+    });
   }
 
   #send(message: RuntimeResponse | RuntimeEventMessage): void {
