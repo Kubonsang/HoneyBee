@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import type { PromptSendMessage } from "./contracts.js";
-import { PromptDeliveryTracker, reconcileDraftAfterSettlement } from "./prompt-delivery-state.js";
+import {
+  PromptDeliveryTracker,
+  promptAcceptedStatusMessage,
+  reconcileDraftAfterSettlement,
+} from "./prompt-delivery-state.js";
 
 const prompt = (
   requestId = "request-1",
@@ -28,7 +32,9 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: submitted.requestId,
       sessionId: submitted.sessionId,
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
     expect(reconcileDraftAfterSettlement(submitted.content, accepted)).toBe("");
   });
@@ -64,7 +70,9 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-2",
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
 
     expect(otherSession).toEqual({ status: "ignored" });
@@ -83,7 +91,9 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "old-request",
         sessionId: "session-1",
+        receiptPersistence: "stored",
         draftCleanup: "cleared",
+        warnings: [],
       }),
     ).toEqual({ status: "ignored" });
 
@@ -91,7 +101,9 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "current-request",
       sessionId: "session-1",
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
     expect(accepted.status).toBe("accepted");
     expect(
@@ -99,7 +111,9 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "current-request",
         sessionId: "session-1",
+        receiptPersistence: "stored",
         draftCleanup: "cleared",
+        warnings: [],
       }),
     ).toEqual({ status: "ignored" });
   });
@@ -111,9 +125,34 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-1",
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
 
     expect(reconcileDraftAfterSettlement("new content", accepted)).toBe("new content");
+  });
+
+  it("describes local Receipt and cleanup warnings without Prompt content", () => {
+    expect(
+      promptAcceptedStatusMessage({
+        type: "prompt.accepted",
+        requestId: "request-1",
+        sessionId: "session-1",
+        receiptPersistence: "warning",
+        draftCleanup: "cleared",
+        warnings: ["receipt-save-failed"],
+      }),
+    ).toBe("Prompt delivered to the Runtime. Local recovery receipt warning.");
+    expect(
+      promptAcceptedStatusMessage({
+        type: "prompt.accepted",
+        requestId: "request-2",
+        sessionId: "session-1",
+        receiptPersistence: "stored",
+        draftCleanup: "pending",
+        warnings: ["draft-delete-failed"],
+      }),
+    ).toBe("Prompt delivered to the Runtime. Draft cleanup will retry after restart.");
   });
 });

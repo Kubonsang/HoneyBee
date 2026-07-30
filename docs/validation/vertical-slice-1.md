@@ -4,7 +4,7 @@ Date: 2026-07-30 (Asia/Seoul)
 
 ## Outcome
 
-The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 86 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
+The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 127 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
 
 ## Environment
 
@@ -19,33 +19,33 @@ The automated Windows vertical slice is green: repository quality gates, archite
 
 ## Required 12-case matrix
 
-| ID    | Status  | Scope and evidence                                                                                                                                                                                                                                                                                                           |
-| ----- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 90 source modules and 98 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.             |
-| VS-02 | PASS    | Domain/persistence tests cover session creation, tag rules, parent/related integrity, cycle/self-reference rejection, CRUD, query ordering, and delete detachment: `packages/domain`, `packages/persistence`, and extension application tests all passed.                                                                    |
-| VS-03 | PASS    | `GlobalStateSessionRepository`, per-session drafts, and selected Session ID survive new repository instances. Missing or schema-invalid selected IDs are cleared and fall back to no selection; draft `session-2` restores as `second`.                                                                                      |
-| VS-04 | PASS    | The default runtime is built into `apps/vscode-extension/dist/runtime/cli.cjs`, resolved from the absolute extension root, and packaged with node-pty workers, license, and Windows x64/arm64 native assets. Explicit command and argv (including quotes, metacharacters, spaces, and Korean) remain separate and unchanged. |
-| VS-05 | PASS    | `CustomCommandAgentAdapter` normalizes `C:\프로젝트 파일\Hive (A)\child\..\worktree`, preserves `literal "quote" & \| ^ %PATH%` as one argv item, merges the Windows environment case-insensitively, and keeps `shell: false`.                                                                                               |
-| VS-06 | PASS    | JSONL tests cover fragmented/multiple lines, malformed JSON, strict schemas, correlated typed errors, request timeout/exit behavior, and separation of protocol-only stdout from diagnostic stderr.                                                                                                                          |
-| VS-07 | PASS    | Real Windows ConPTY launches a copied Echo Fixture from `Honey Bee 한글 PTY ...\도구 경로 (공백)\Echo 벌 Fixture.js`; greeting, ANSI, UTF-8 `한글`/bee emoji, resize, literal metacharacters, exit 7, and full log all passed.                                                                                               |
-| VS-08 | PASS    | A 10,000-character Echo Fixture burst causes the 4,096-byte in-memory ring snapshot to report truncation while the full PTY log retains at least 10,000 payload characters; terminal control sequences are allowed between rendered runs.                                                                                    |
-| VS-09 | PASS    | Real PTY tests cover natural non-zero exit 7, immediate exit 9, and Ctrl+C interrupt with `INTERRUPTED`, exit code 130, `reason: interrupted`, and zero active sessions afterward; unit tests retain stop/force-kill coverage.                                                                                               |
-| VS-10 | PASS    | The extension JSONL client starts the packaged sidecar from an unrelated temporary cwd, launches Echo Fixture, resizes, sends ANSI input, observes successful PTY exit, and keeps diagnostics protocol-clean.                                                                                                                |
-| VS-11 | PASS    | esbuild produced the webview JS/CSS, `extension.cjs`, and packaged runtime; `@vscode/test-cli`/`@vscode/test-electron` launched VS Code 1.131.0, activated `honeybee.honey-bee-vscode`, found all 13 public commands, executed refresh, and exited 0.                                                                        |
-| VS-12 | BLOCKED | Git for Windows bundled Vim passed a real 100x30 ConPTY smoke with ANSI and alternate-screen output, `-Nu NONE -n -i NONE`, `Esc :q!`, exit code 0, and no active session afterward. Neovim is absent, and rendered GUI layout plus Korean IME composition still require the manual checks below.                            |
+| ID    | Status  | Scope and evidence                                                                                                                                                                                                                                                                                                                                 |
+| ----- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 103 source modules and 122 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.                                 |
+| VS-02 | PASS    | Domain/persistence tests cover session creation, tag rules, parent/related integrity, cycle/self-reference rejection, CRUD, query ordering, and delete detachment: `packages/domain`, `packages/persistence`, and extension application tests all passed.                                                                                          |
+| VS-03 | PASS    | `GlobalStateSessionRepository`, per-session drafts, and selected Session ID survive new repository instances. Missing or schema-invalid selected IDs are cleared and fall back to no selection; draft `session-2` restores as `second`.                                                                                                            |
+| VS-04 | PASS    | The default runtime is built into `apps/vscode-extension/dist/runtime/cli.cjs`, resolved from the absolute extension root, and packaged with node-pty workers, license, and Windows x64/arm64 native assets. Explicit command and argv (including quotes, metacharacters, spaces, and Korean) remain separate and unchanged.                       |
+| VS-05 | PASS    | `CustomCommandAgentAdapter` normalizes `C:\프로젝트 파일\Hive (A)\child\..\worktree`, preserves `literal "quote" & \| ^ %PATH%` as one argv item, merges the Windows environment case-insensitively, and keeps `shell: false`.                                                                                                                     |
+| VS-06 | PASS    | JSONL tests cover fragmented/multiple lines, malformed JSON, strict schemas, correlated typed errors, request timeout/exit behavior, and separation of protocol-only stdout from diagnostic stderr.                                                                                                                                                |
+| VS-07 | PASS    | Real Windows ConPTY launches a copied Echo Fixture from `Honey Bee 한글 PTY ...\도구 경로 (공백)\Echo 벌 Fixture.js`; greeting, ANSI, UTF-8 `한글`/bee emoji, resize, literal metacharacters, exit 7, and full log all passed.                                                                                                                     |
+| VS-08 | PASS    | A 10,000-character Echo Fixture burst causes the 4,096-byte in-memory ring snapshot to report truncation while the full PTY log retains at least 10,000 payload characters; terminal control sequences are allowed between rendered runs.                                                                                                          |
+| VS-09 | PASS    | Real PTY tests cover natural non-zero exit 7, immediate exit 9, and Ctrl+C interrupt with `INTERRUPTED`, exit code 130, `reason: interrupted`, and zero active sessions afterward; unit tests retain stop/force-kill coverage.                                                                                                                     |
+| VS-10 | PASS    | The extension JSONL client starts the packaged sidecar from an unrelated temporary cwd, launches Echo Fixture, resizes, sends ANSI input, observes successful PTY exit, and keeps diagnostics protocol-clean.                                                                                                                                      |
+| VS-11 | PASS    | esbuild produced the webview JS/CSS, `extension.cjs`, and packaged runtime; `@vscode/test-cli`/`@vscode/test-electron` launched VS Code 1.131.0, activated `honeybee.honey-bee-vscode`, reconciled persisted Receipt/Draft fixtures before Console restore, preserved a newer Draft, found all 13 public commands, executed refresh, and exited 0. |
+| VS-12 | BLOCKED | Git for Windows bundled Vim passed a real 100x30 ConPTY smoke with ANSI and alternate-screen output, `-Nu NONE -n -i NONE`, `Esc :q!`, exit code 0, and no active session afterward. Neovim is absent, and rendered GUI layout plus Korean IME composition still require the manual checks below.                                                  |
 
 ## Command ledger
 
-| Command                                                                                                     | Result                                                                                                                                      |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `corepack pnpm install --frozen-lockfile --offline`                                                         | PASS; all 11 workspace projects, lockfile current, no network required.                                                                     |
-| `corepack pnpm format` then `corepack pnpm format:check`                                                    | PASS; mechanically corrected the 11 baseline formatting failures and formatted new artifacts.                                               |
-| `corepack pnpm exec vitest run packages/session-runtime/src/node-pty.integration.test.ts`                   | PASS; 1 file, 4 real Windows PTY tests, including Git-bundled Vim.                                                                          |
-| `corepack pnpm exec vitest run apps/vscode-extension/src/adapters/jsonl-runtime-client.integration.test.ts` | PASS; packaged sidecar and real PTY round trip.                                                                                             |
-| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 28 files/86 tests, and dependency-cruiser (90 modules/98 dependencies). |
-| `corepack pnpm test:vscode`                                                                                 | PASS; official VS Code 1.131.0 Extension Host, 1 test, exit code 0.                                                                         |
-| `code --version`                                                                                            | PASS; 1.116.0 x64.                                                                                                                          |
-| `Get-Command code,vim,nvim` plus Git-root derivation                                                        | `code` found; `vim` is not on PATH but Git-bundled Vim was found and passed; `nvim` NOT FOUND.                                              |
+| Command                                                                                                     | Result                                                                                                                                         |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `corepack pnpm install --frozen-lockfile --offline`                                                         | PASS; all 11 workspace projects, lockfile current, no network required.                                                                        |
+| `corepack pnpm format` then `corepack pnpm format:check`                                                    | PASS; mechanically corrected the 11 baseline formatting failures and formatted new artifacts.                                                  |
+| `corepack pnpm exec vitest run packages/session-runtime/src/node-pty.integration.test.ts`                   | PASS; 1 file, 4 real Windows PTY tests, including Git-bundled Vim.                                                                             |
+| `corepack pnpm exec vitest run apps/vscode-extension/src/adapters/jsonl-runtime-client.integration.test.ts` | PASS; packaged sidecar and real PTY round trip.                                                                                                |
+| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 35 files/127 tests, and dependency-cruiser (103 modules/122 dependencies). |
+| `corepack pnpm test:vscode`                                                                                 | PASS; official VS Code 1.131.0 Extension Host, 1 test, exit code 0.                                                                            |
+| `code --version`                                                                                            | PASS; 1.116.0 x64.                                                                                                                             |
+| `Get-Command code,vim,nvim` plus Git-root derivation                                                        | `code` found; `vim` is not on PATH but Git-bundled Vim was found and passed; `nvim` NOT FOUND.                                                 |
 
 The Extension Host emitted non-fatal upstream warnings for Chromium `cached-data` and a built-in Mermaid proposal; Honey Bee's test still passed and the host exited 0.
 
@@ -56,34 +56,83 @@ The Extension Host emitted non-fatal upstream warnings for Chromium `cached-data
 - The first packaged runtime bundled node-pty's worker code into one file and hung because node-pty resolves a worker by path. The build now externalizes node-pty into `dist/runtime/node_modules` with its workers/native assets; the packaged sidecar PTY test passes.
 - A full verify after downloading VS Code initially let dependency-cruiser enter `.vscode-test` and hit a stack overflow in a built-in minified extension. Source exclusions were added, and the final dependency gate passes.
 
-## Console delivery correctness (2026-07-30)
+## Console delivery correctness and restart recovery (2026-07-30)
 
-### Resolved race
+### PR #1 acknowledgement and Draft race fix
 
-The former Webview submitted `prompt.send`, immediately cleared Monaco and its local Draft, and posted an empty `draft.changed`. That empty write raced the Provider's independent 250 ms debounce, while the Extension had no way to tell the Webview whether `RuntimeClientPort.sendInput` succeeded. A failed Runtime write could therefore leave persisted and visible Draft state disagreeing or make the Prompt appear lost.
+The former Webview cleared Monaco immediately after posting `prompt.send`, allowing an empty `draft.changed` write to race the Provider's independent debounce even when Runtime input failed. Protocol version 2 introduced correlated request IDs, accepted/rejected acknowledgements, Session-scoped revisions, serialized Draft writes, accepted-only editor clearing, pending-submit blocking, and IME composition guards.
 
-Protocol version 2 resolves the race with centrally validated, correlated messages:
+Protocol version 3 retains those request correlation and revision rules while reporting local durability as two typed dimensions: `receiptPersistence` and `draftCleanup`. A Runtime failure still returns `prompt.rejected` and preserves the exact Draft. Once Runtime input succeeds, later persistence failures return `prompt.accepted`; the Webview clears only the correlated submitted text and does not invite a duplicate retry.
 
-- `prompt.send` requires `requestId`, `sessionId`, and non-empty `content`.
-- `prompt.accepted` carries the same IDs and distinguishes `draftCleanup: cleared` from `draftCleanup: warning`.
-- `prompt.rejected` carries the same IDs and a safe display message.
-- The Webview clears only when both IDs match its current pending Prompt and the current Draft still equals the submitted content. Cross-Session, stale, and duplicate acknowledgements are ignored.
+### Stale Draft problem remaining after PR #1
 
-The Provider now owns a Session-scoped revision, debounce timer, serialized Draft-write tail, active request, and bounded request-ID history. Submission cancels the scheduled debounce, drains an already-started write, then the Application Service persists the exact submitted content before attempting Runtime input. Runtime success is followed by Draft deletion; Runtime failure preserves the exact Draft. Pending input is read-only and Send/Enter/Ctrl+Enter are disabled until acknowledgement. Alt+Enter and Shift+Enter remain newline commands.
+PR #1 still allowed this restart sequence:
+
+```text
+Runtime sendInput succeeds
+-> Draft deletion fails
+-> prompt.accepted with a cleanup warning
+-> VS Code restarts
+-> the already-delivered persisted Draft is restored as ordinary input
+```
+
+The current implementation closes that recovery gap when a delivery Receipt was persisted before the cleanup failure.
+
+### Receipt meaning and data minimization
+
+A `PromptDeliveryReceipt` means only that `RuntimeClientPort.sendInput()` returned successfully. It does not prove that the PTY program consumed or understood the input, and it does not track Agent completion.
+
+The strict version-1 Receipt stores request ID, Session ID, delivery timestamp, cleanup state, exact UTF-8 byte length, and SHA-256 digest formatted as `sha256:<lowercase-hex>`. It never stores Prompt content. Hashing performs no trim, newline conversion, or Unicode normalization. Receipt, Output Channel, warning, and reconciliation report paths contain identifiers and typed status only so Prompt bodies and embedded secrets are not copied into recovery metadata.
+
+### Delivery and cleanup ordering
+
+```text
+validate non-empty Prompt
+-> persist exact Draft
+-> call Runtime sendInput exactly once
+-> persist pending Receipt
+-> attempt Draft deletion
+-> on deletion success, update Receipt to cleared
+-> prune old cleared Receipts
+-> return correlated acknowledgement
+```
+
+Runtime failure creates no Receipt. Receipt save failure, Draft deletion failure, Receipt cleanup-state update failure, and retention failure remain distinct typed warnings. Receipt/Draft persistence failures after Runtime success never cause automatic resend or reclassification as rejected.
+
+### Startup reconciliation
+
+Reconciliation runs after Repository construction and before selected Session or Console Draft restoration.
+
+| Receipt and Draft state                                                                                | Startup action                                                                    |
+| ------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| pending or cleared Receipt + same Session, digest, UTF-8 byte length, and pre-delivery Draft timestamp | Delete the stale Draft; mark a pending Receipt cleared after successful deletion. |
+| pending Receipt + no Draft                                                                             | Mark the Receipt cleared.                                                         |
+| cleared Receipt + no Draft                                                                             | No action.                                                                        |
+| Receipt + different content or a Draft written after delivery                                          | Preserve the user Draft and resolve the old pending Receipt as cleared.           |
+| invalid Receipt store or Repository operation failure                                                  | Preserve Drafts and emit an identifier-only warning; never guess or auto-delete.  |
+
+The Reconciler has no Runtime dependency and never sends input during activation. A persisted Receipt for another Session cannot delete a Draft even when the content bytes are identical.
+
+### Retention and shutdown
+
+The default bounded policy retains the newest 1,000 cleared Receipts globally and prunes the oldest cleared entries first. Pending Receipts are never automatically pruned. The globalState Receipt adapter serializes save/update/delete/prune mutations within the Repository instance so parallel read-modify-write operations do not overwrite one another.
+
+Coordinator shutdown cancels and flushes pending Draft debounce work, awaits Session write tails and active deliveries, then Extension deactivation awaits the Receipt write queue and Runtime disposal. The whole shutdown path has a five-second bound and records a generic timeout warning rather than waiting forever.
 
 ### Automated evidence
 
-- Contract tests require request IDs and distinguish cleared, warning, and rejected acknowledgements.
-- Webview-state tests cover pre-ack preservation, rejection preservation, accepted-only clearing, cross-Session acknowledgement, stale acknowledgement, duplicate acknowledgement, and content written after submission.
-- Input-policy tests cover Enter/Ctrl+Enter submit, Alt+Enter/Shift+Enter newline, empty Prompt rejection, pending submission rejection, and composition-time rejection.
-- Coordinator tests cover immediate submit before debounce, stale timer cancellation, in-flight Draft-write draining, duplicate request IDs, concurrent Session delivery rejection, and diagnostic redaction.
-- Application and Fake Runtime integration tests cover exactly one PTY input followed by accepted/Draft deletion, plus exactly one failed input followed by rejected/exact Draft preservation.
+- Domain/hash tests accept strict receipts, reject invalid digest/date/state/version values, distinguish exact newline/space/Unicode bytes, verify UTF-8 byte length, and verify that the fingerprint contains no Prompt source.
+- In-memory and globalState Repository tests cover round-trip CRUD, validation, deterministic request-ID update/conflict behavior, parallel saves, write-tail flush, cleared retention, and pending retention.
+- Delivery tests prove `Draft save -> Runtime -> pending Receipt -> Draft delete -> cleared Receipt`, no Receipt on Runtime failure, all Receipt/Draft failure combinations, no Runtime resend, and redacted results.
+- Reconciliation tests cover pending/cleared exact matches, missing Draft, different/newer Draft, cross-Session content, delete/update/store/prune failures, and fail-safe preservation.
+- Restart Integration tests inject Draft cleanup failure, recreate globalState adapters, remove only the exact stale Draft, preserve a newer Draft, and observe zero additional Runtime writes.
+- The VS Code Extension Host test seeds matching and newer persisted states before activation, confirms reconciliation precedes Console restore, and exposes only a sanitized Test-mode snapshot.
 
-### Cleanup warning policy and manual IME validation
+### Remaining crash window and manual validation
 
-A Runtime write that succeeds is never reclassified as failed because local Draft deletion failed. The Extension returns `prompt.accepted` with `draftCleanup: warning`, the Webview treats the command as delivered and does not invite a retry, and the Output Channel logs only Session/request identifiers plus a generic cleanup warning, never the Prompt body. The in-memory Console state is cleared; if the storage backend remains unavailable, its stale persisted Draft may still require operator cleanup after restart.
+End-to-end exactly-once delivery is not claimed. If the process crashes after `sendInput()` succeeds but before the pending Receipt is durably stored, Honey Bee cannot determine the outcome because the Runtime has no durable acknowledgement or deduplication. A pre-delivery attempt journal and unknown-outcome recovery UX remain follow-up work.
 
-Monaco composition start/end now gates submission, and the pure input policy is tested. Korean Windows IME behavior remains a manual GUI item because this environment cannot automate real OS composition events; verify that intermediate composition Enter presses neither submit nor duplicate characters.
+Monaco composition start/end gates submission and the pure policy is automated, but Korean Windows IME remains a manual GUI check. A real storage outage also remains manual: verify accepted warning wording, identifier-only logs, restart cleanup when a Receipt exists, and preservation when recovery state is uncertain.
 
 ## Manual GUI, IME, and Neovim checklist
 
@@ -95,13 +144,13 @@ Run these on a Windows 11 workstation with a human-observable Extension Developm
 4. Configure Echo Fixture as the agent, start it, and confirm ANSI colors, `Honey Bee Echo 벌 🐝`, literal input, resize/reflow, non-zero exit, and interrupt are visible in xterm.
 5. Verify Enter and Ctrl+Enter submit; Shift+Enter and Alt+Enter insert a newline. Compose Korean text with the Windows IME and confirm intermediate composition does not submit or duplicate characters.
 6. Switch repeatedly between two sessions and confirm draft text and console output remain associated with the correct Session.
-7. Force Runtime input failure with a non-empty Draft and confirm `prompt.rejected`, preserved editor text, restored focus, and an accessible status error. Then inject Draft cleanup failure after a successful write and confirm `prompt.accepted` with a cleanup warning and no retry invitation.
+7. Force Runtime input failure with a non-empty Draft and confirm `prompt.rejected`, preserved editor text, restored focus, and an accessible status error. Then inject Draft cleanup failure after a successful write and confirm `prompt.accepted`, a pending Receipt, no retry invitation, and automatic exact-Draft cleanup after restart. Inject a Receipt-store outage separately and confirm Runtime success is not reclassified while recovery uncertainty is clearly warned.
 8. Optionally inspect Git-bundled Vim interactively beyond its passing automated smoke. Install Neovim (`nvim`), repeat insert/normal mode, arrow/function keys, resize, `:q`, and Ctrl+C through the PTY, and record any ConPTY escape-sequence differences.
 
 ## Remaining risks and intentional limits
 
 - Visual layout, accessibility focus order, screen-reader behavior, Korean IME composition, and Neovim behavior are BLOCKED in this environment; no automated success is substituted. Git-bundled Vim is PASS through the real ConPTY smoke.
-- The optimistic-clear Prompt loss risk is resolved by protocol-version-2 acknowledgements and the new failure-preserves-Draft tests. A genuine storage outage after successful Runtime delivery remains an explicit `accepted/warning` condition; the Webview avoids duplicate resend, but stale persistent data may require operator cleanup after restart.
+- The optimistic-clear race and the persisted-Receipt cleanup/restart gap are resolved by protocol-version-3 acknowledgements and startup reconciliation. The remaining ambiguous window is `Runtime sendInput` success followed by process crash before Receipt persistence; no exactly-once claim or automatic retry is made.
 - No signed/installed VSIX was produced. The built `dist` layout and native packaged runtime were executed in both Vitest and the official development Extension Host; Marketplace/VSIX installation remains release validation.
 - Source-size debt remains: `jsonl-runtime-client.ts` is 490 lines, `console-service.ts` 352, `session-commands.ts` 335, and `server.ts` 303. The 490-line client especially combines transport, decoding, and orchestration and should be split before expansion.
 - The UI exposes bounded in-memory output but no explicit truncation marker. The PTY file log retains the full output; a future UI should surface truncation state.

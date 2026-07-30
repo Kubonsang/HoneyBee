@@ -1,4 +1,4 @@
-export const CONSOLE_WEBVIEW_VERSION = 2 as const;
+export const CONSOLE_WEBVIEW_VERSION = 3 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -33,21 +33,22 @@ export interface PromptSendMessage {
   readonly content: string;
 }
 
-/** Confirms that the runtime accepted a prompt, independently of local Draft cleanup. */
-export type PromptAcceptedMessage = {
+/** Local durability warning codes returned after Runtime input succeeded. */
+export type PromptDeliveryWarningCode =
+  | "receipt-save-failed"
+  | "draft-delete-failed"
+  | "receipt-cleanup-update-failed"
+  | "receipt-prune-failed";
+
+/** Confirms Runtime input success while reporting Receipt and Draft durability separately. */
+export interface PromptAcceptedMessage {
   readonly type: "prompt.accepted";
   readonly requestId: string;
   readonly sessionId: string;
-} & (
-  | {
-      readonly draftCleanup: "cleared";
-      readonly warning?: never;
-    }
-  | {
-      readonly draftCleanup: "warning";
-      readonly warning: string;
-    }
-);
+  readonly receiptPersistence: "stored" | "warning";
+  readonly draftCleanup: "cleared" | "pending" | "warning";
+  readonly warnings: readonly PromptDeliveryWarningCode[];
+}
 
 /** Reports that a prompt was not delivered to the runtime. */
 export interface PromptRejectedMessage {
@@ -137,6 +138,12 @@ const consoleSessionStatuses: readonly ConsoleSessionStatus[] = [
   "failed",
   "completed",
 ];
+const promptDeliveryWarningCodes: readonly PromptDeliveryWarningCode[] = [
+  "receipt-save-failed",
+  "draft-delete-failed",
+  "receipt-cleanup-update-failed",
+  "receipt-prune-failed",
+];
 
 const isConsoleSessionSummary = (value: unknown): value is ConsoleSessionSummary =>
   isRecord(value) &&
@@ -216,14 +223,19 @@ export const isExtensionToConsoleMessage = (value: unknown): value is ExtensionT
     case "prompt.focus":
       return true;
     case "prompt.accepted":
-      if (!hasRequestAndSessionId(value)) {
-        return false;
-      }
-      return value.draftCleanup === "cleared"
-        ? value.warning === undefined
-        : value.draftCleanup === "warning" &&
-            typeof value.warning === "string" &&
-            value.warning.length > 0;
+      return (
+        hasRequestAndSessionId(value) &&
+        (value.receiptPersistence === "stored" || value.receiptPersistence === "warning") &&
+        (value.draftCleanup === "cleared" ||
+          value.draftCleanup === "pending" ||
+          value.draftCleanup === "warning") &&
+        Array.isArray(value.warnings) &&
+        value.warnings.every(
+          (warning) =>
+            typeof warning === "string" &&
+            promptDeliveryWarningCodes.includes(warning as PromptDeliveryWarningCode),
+        )
+      );
     case "prompt.rejected":
       return (
         hasRequestAndSessionId(value) &&

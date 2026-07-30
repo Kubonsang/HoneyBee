@@ -22,14 +22,16 @@ export interface MementoPort {
   update(key: string, value: unknown): Thenable<void>;
 }
 
-const SESSION_STORAGE_KEY = "honeyBee.sessions.v1";
-const DRAFT_STORAGE_KEY = "honeyBee.drafts.v1";
-const SELECTED_SESSION_STORAGE_KEY = "honeyBee.selectedSessionId.v1";
+export const SESSION_STORAGE_KEY = "honeyBee.sessions.v1";
+export const DRAFT_STORAGE_KEY = "honeyBee.drafts.v1";
+export const SELECTED_SESSION_STORAGE_KEY = "honeyBee.selectedSessionId.v1";
 
 const validationError = (
   message: string,
   details: Readonly<Record<string, unknown>>,
 ): RepositoryError => new RepositoryError("validation", message, { details });
+const draftStorageError = (operation: string, cause: unknown): RepositoryError =>
+  new RepositoryError("unknown", `Draft ${operation} failed.`, { cause });
 
 const readSessions = (memento: MementoPort): Result<readonly AgentSession[], RepositoryError> => {
   const stored = memento.get<unknown>(SESSION_STORAGE_KEY, []);
@@ -205,8 +207,12 @@ export class GlobalStateDraftRepository implements DraftRepository {
     const next = drafts.value.filter((candidate) => candidate.sessionId !== parsed.data.sessionId);
     next.push(parsed.data);
     next.sort((left, right) => left.sessionId.localeCompare(right.sessionId));
-    await this.memento.update(DRAFT_STORAGE_KEY, next);
-    return ok(SessionDraftSchema.parse(parsed.data));
+    try {
+      await this.memento.update(DRAFT_STORAGE_KEY, next);
+      return ok(SessionDraftSchema.parse(parsed.data));
+    } catch (cause) {
+      return err(draftStorageError("save", cause));
+    }
   }
 
   public async delete(sessionId: SessionId): Promise<Result<void, RepositoryError>> {
@@ -214,11 +220,15 @@ export class GlobalStateDraftRepository implements DraftRepository {
     if (!drafts.ok) {
       return drafts;
     }
-    await this.memento.update(
-      DRAFT_STORAGE_KEY,
-      drafts.value.filter((draft) => draft.sessionId !== sessionId),
-    );
-    return ok(undefined);
+    try {
+      await this.memento.update(
+        DRAFT_STORAGE_KEY,
+        drafts.value.filter((draft) => draft.sessionId !== sessionId),
+      );
+      return ok(undefined);
+    } catch (cause) {
+      return err(draftStorageError("delete", cause));
+    }
   }
 }
 export class GlobalStateSelectionRepository {

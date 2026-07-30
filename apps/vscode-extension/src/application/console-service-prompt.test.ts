@@ -9,6 +9,7 @@ import {
 } from "@honeybee/domain";
 import {
   InMemoryDraftRepository,
+  InMemoryPromptDeliveryReceiptRepository,
   InMemorySessionRepository,
   RepositoryError,
   type DraftRepository,
@@ -88,6 +89,7 @@ const createService = (drafts: DraftRepository, runtime: PromptRuntimeClient) =>
     service: new ConsoleApplicationService(
       new InMemorySessionRepository([selected]),
       drafts,
+      new InMemoryPromptDeliveryReceiptRepository(),
       new SessionSelectionService(),
       runtime,
       profiles,
@@ -118,12 +120,17 @@ describe("ConsoleApplicationService Prompt delivery", () => {
       });
     const { selected, service } = createService(drafts, runtime);
 
-    const delivery = service.sendPrompt(selected.id, "exact content");
+    const delivery = service.sendPrompt("request-success", selected.id, "exact content");
     await vi.waitFor(() => expect(runtime.attempts).toHaveLength(1));
     expect(await readDraft(drafts, selected.id)).toBe("exact content");
 
     releaseRuntime?.();
-    await expect(delivery).resolves.toEqual({ status: "accepted", draftCleanup: "cleared" });
+    await expect(delivery).resolves.toEqual({
+      status: "accepted",
+      receiptPersistence: "stored",
+      draftCleanup: "cleared",
+      warnings: [],
+    });
     expect(await readDraft(drafts, selected.id)).toBeUndefined();
     expect(runtime.attempts).toEqual([{ sessionId: selected.id, data: "exact content\r" }]);
   });
@@ -136,9 +143,11 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     };
     const { selected, service } = createService(drafts, runtime);
 
-    await expect(service.sendPrompt(selected.id, "retry this")).resolves.toEqual({
+    await expect(
+      service.sendPrompt("request-runtime-failure", selected.id, "retry this"),
+    ).resolves.toEqual({
       status: "rejected",
-      message: "Injected Runtime write failure.",
+      message: "The Runtime rejected the Prompt input.",
     });
     expect(await readDraft(drafts, selected.id)).toBe("retry this");
     expect(runtime.attempts).toHaveLength(1);
@@ -149,10 +158,13 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     const runtime = new PromptRuntimeClient();
     const { selected, service } = createService(drafts, runtime);
 
-    await expect(service.sendPrompt(selected.id, "delivered once")).resolves.toEqual({
+    await expect(
+      service.sendPrompt("request-cleanup-failure", selected.id, "delivered once"),
+    ).resolves.toEqual({
       status: "accepted",
-      draftCleanup: "warning",
-      warning: "The Prompt was delivered, but its persisted Draft could not be cleared.",
+      receiptPersistence: "stored",
+      draftCleanup: "pending",
+      warnings: ["draft-delete-failed"],
     });
     expect(runtime.attempts).toHaveLength(1);
     expect(await readDraft(drafts, selected.id)).toBe("delivered once");
@@ -163,7 +175,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     const runtime = new PromptRuntimeClient();
     const { selected, service } = createService(drafts, runtime);
 
-    await expect(service.sendPrompt(selected.id, "  \n ")).resolves.toEqual({
+    await expect(service.sendPrompt("request-empty", selected.id, "  \n ")).resolves.toEqual({
       status: "rejected",
       message: "Prompt content must not be empty.",
     });

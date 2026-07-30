@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
-import { InMemoryDraftRepository, InMemorySessionRepository } from "@honeybee/persistence";
+import {
+  InMemoryDraftRepository,
+  InMemoryPromptDeliveryReceiptRepository,
+  InMemorySessionRepository,
+} from "@honeybee/persistence";
 import type { ExtensionToConsoleMessage } from "@honeybee/ui-shared";
 
 import type {
@@ -100,6 +104,7 @@ describe("ConsoleApplicationService", () => {
     const service = new ConsoleApplicationService(
       sessions,
       drafts,
+      new InMemoryPromptDeliveryReceiptRepository(),
       selection,
       runtime,
       profiles,
@@ -138,7 +143,7 @@ describe("ConsoleApplicationService", () => {
       rows: 36,
     });
 
-    await service.sendPrompt(selected.id, "hello");
+    await service.sendPrompt("request-1", selected.id, "hello");
     expect(runtime.inputs).toContainEqual({ sessionId: selected.id, data: "hello\r" });
     expect((await drafts.getBySessionId(selected.id)).ok).toBe(true);
     runtime.emit({

@@ -18,6 +18,7 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
   readonly #delivery: PromptDeliveryCoordinator;
   readonly #serviceSubscription: { dispose(): void };
   #view: vscode.WebviewView | undefined;
+  #shutdownPromise: Promise<void> | undefined;
 
   public constructor(
     private readonly extensionUri: vscode.Uri,
@@ -67,8 +68,16 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   public dispose(): void {
-    this.#serviceSubscription.dispose();
-    this.#delivery.dispose();
+    void this.shutdown().catch(this.reportError);
+  }
+
+  /** Flushes pending Draft and delivery work before releasing the Console subscription. */
+  public shutdown(): Promise<void> {
+    this.#shutdownPromise ??= (async () => {
+      this.#serviceSubscription.dispose();
+      await this.#delivery.dispose();
+    })();
+    return this.#shutdownPromise;
   }
 
   private handleMessage(message: ConsoleToExtensionMessage): void {

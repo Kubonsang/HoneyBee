@@ -58,13 +58,15 @@ describe("Console message contracts", () => {
     ).toBe(false);
   });
 
-  it("distinguishes accepted, cleanup-warning, and rejected acknowledgements", () => {
+  it("distinguishes accepted durability outcomes from rejected delivery", () => {
     expect(
       isExtensionToConsoleMessage({
         type: "prompt.accepted",
         requestId: "prompt-1",
         sessionId: "session-1",
+        receiptPersistence: "stored",
         draftCleanup: "cleared",
+        warnings: [],
       }),
     ).toBe(true);
     expect(
@@ -72,8 +74,9 @@ describe("Console message contracts", () => {
         type: "prompt.accepted",
         requestId: "prompt-2",
         sessionId: "session-1",
-        draftCleanup: "warning",
-        warning: "Draft cleanup failed.",
+        receiptPersistence: "stored",
+        draftCleanup: "pending",
+        warnings: ["draft-delete-failed"],
       }),
     ).toBe(true);
     expect(
@@ -89,7 +92,17 @@ describe("Console message contracts", () => {
         type: "prompt.accepted",
         requestId: "prompt-4",
         sessionId: "session-1",
+        receiptPersistence: "warning",
         draftCleanup: "warning",
+        warnings: ["not-a-warning-code"],
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.accepted",
+        requestId: "prompt-5",
+        sessionId: "session-1",
+        draftCleanup: "cleared",
       }),
     ).toBe(false);
     expect(

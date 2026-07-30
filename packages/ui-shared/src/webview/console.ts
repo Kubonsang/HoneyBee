@@ -10,7 +10,11 @@ import {
   type ConsoleViewState,
   type PromptAcknowledgementMessage,
 } from "../contracts.js";
-import { PromptDeliveryTracker, reconcileDraftAfterSettlement } from "../prompt-delivery-state.js";
+import {
+  PromptDeliveryTracker,
+  promptAcceptedStatusMessage,
+  reconcileDraftAfterSettlement,
+} from "../prompt-delivery-state.js";
 import { createPromptKeyBindings, shouldSubmitPrompt } from "../prompt-input-policy.js";
 import "./console.css";
 
@@ -290,9 +294,7 @@ const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): voi
     }
     statusMessage.textContent =
       settlement.status === "accepted"
-        ? settlement.acknowledgement.draftCleanup === "warning"
-          ? `Prompt sent. ${settlement.acknowledgement.warning}`
-          : "Prompt sent."
+        ? promptAcceptedStatusMessage(settlement.acknowledgement)
         : `Prompt not sent. ${settlement.message}`;
     updatePromptControls();
     editor.focus();

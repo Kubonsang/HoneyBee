@@ -68,3 +68,19 @@ export const reconcileDraftAfterSettlement = (
   settlement.status === "accepted" && currentDraft === settlement.prompt.content
     ? ""
     : currentDraft;
+/** Describes accepted Runtime input without implying Agent processing or exposing Prompt content. */
+export const promptAcceptedStatusMessage = (message: PromptAcceptedMessage): string => {
+  if (message.receiptPersistence === "warning") {
+    return "Prompt delivered to the Runtime. Local recovery receipt warning.";
+  }
+  if (message.draftCleanup === "pending") {
+    return "Prompt delivered to the Runtime. Draft cleanup will retry after restart.";
+  }
+  if (message.draftCleanup === "warning") {
+    return "Prompt delivered to the Runtime. Local Draft cleanup warning.";
+  }
+  if (message.warnings.length > 0) {
+    return "Prompt delivered to the Runtime. Local recovery maintenance warning.";
+  }
+  return "Prompt delivered to the Runtime.";
+};

@@ -1,6 +1,11 @@
 import * as vscode from "vscode";
 
 import {
+  applyPromptRecoveryTestFixture,
+  type PromptRecoveryExtensionTestState,
+} from "./adapters/extension-test-state.js";
+import { GlobalStatePromptDeliveryReceiptRepository } from "./adapters/global-state-prompt-receipt-repository.js";
+import {
   GlobalStateDraftRepository,
   GlobalStateSelectionRepository,
   GlobalStateSessionRepository,
@@ -16,11 +21,18 @@ import {
   SystemClock,
 } from "./adapters/system-adapters.js";
 import { ConsoleApplicationService } from "./application/console-service.js";
+import {
+  PromptDeliveryReconciler,
+  type PromptDeliveryReconciliationReport,
+} from "./application/prompt-delivery-reconciler.js";
 import { SessionSelectionService } from "./application/session-selection.js";
 import { SessionApplicationService } from "./application/session-service.js";
 import { ConsoleViewProvider } from "./presentation/console-view-provider.js";
 import { registerSessionCommands } from "./presentation/session-commands.js";
 import { SessionTreeProvider } from "./presentation/session-tree-provider.js";
+
+const SHUTDOWN_TIMEOUT_MS = 5_000;
+let activeShutdown: (() => Promise<void>) | undefined;
 
 const readStringArray = (
   configuration: vscode.WorkspaceConfiguration,
@@ -49,22 +61,85 @@ const processEnvironment = (): Readonly<Record<string, string>> => {
   return environment;
 };
 
-export const activate = async (context: vscode.ExtensionContext): Promise<void> => {
+const reportReconciliation = (
+  report: PromptDeliveryReconciliationReport,
+  output: vscode.OutputChannel,
+): boolean => {
+  let hasFailure = false;
+  for (const event of report.events) {
+    if (event.type === "reconciled") {
+      output.appendLine(
+        `[prompt] Reconciled delivered Draft for Session ${event.sessionId}, request ${event.requestId}.`,
+      );
+      continue;
+    }
+    if (event.type === "preserved") {
+      output.appendLine(
+        `[prompt] Preserved a newer Draft that does not match delivered receipt ${event.requestId} for Session ${event.sessionId}.`,
+      );
+      continue;
+    }
+    hasFailure = true;
+    const identity =
+      event.sessionId === undefined || event.requestId === undefined
+        ? ""
+        : ` for Session ${event.sessionId}, request ${event.requestId}`;
+    output.appendLine(`[prompt] Could not reconcile delivered Draft${identity} (${event.code}).`);
+  }
+  if (report.prunedReceipts > 0) {
+    output.appendLine(`[prompt] Pruned ${report.prunedReceipts} cleared delivery receipts.`);
+  }
+  return hasFailure;
+};
+
+/** Extension exports are empty in production and expose sanitized recovery state in Test mode. */
+export interface HoneyBeeExtensionApi {
+  readonly promptRecoveryTestState?: PromptRecoveryExtensionTestState;
+}
+const boundedShutdown = async (work: Promise<void>, onTimeout: () => void): Promise<void> => {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const timeoutResult = new Promise<void>((resolve) => {
+    timeout = setTimeout(() => {
+      onTimeout();
+      resolve();
+    }, SHUTDOWN_TIMEOUT_MS);
+  });
+  try {
+    await Promise.race([work, timeoutResult]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+};
+
+export const activate = async (context: vscode.ExtensionContext): Promise<HoneyBeeExtensionApi> => {
   const output = vscode.window.createOutputChannel("Honey Bee");
   const reportError = (error: unknown): void => {
     const message = error instanceof Error ? error.message : String(error);
     output.appendLine(`[error] ${message}`);
-    vscode.window.showErrorMessage(`Honey Bee: ${message}`);
+    void vscode.window.showErrorMessage(`Honey Bee: ${message}`);
   };
   const reportPromptDiagnostic = (message: string): void => {
     output.appendLine(`[prompt] ${message}`);
   };
 
+  await applyPromptRecoveryTestFixture(context);
+
   const sessions = new GlobalStateSessionRepository(context.globalState);
   const drafts = new GlobalStateDraftRepository(context.globalState);
+  const receipts = new GlobalStatePromptDeliveryReceiptRepository(context.globalState);
   const selectionState = new GlobalStateSelectionRepository(context.globalState);
   const clock = new SystemClock();
   const ids = new RandomIdGenerator();
+
+  const reconciliation = await new PromptDeliveryReconciler({ drafts, receipts }).reconcile();
+  if (reportReconciliation(reconciliation, output)) {
+    void vscode.window.showWarningMessage(
+      "Honey Bee could not fully reconcile local Prompt recovery records. Drafts were preserved where delivery state was uncertain.",
+    );
+  }
+
   const sessionService = new SessionApplicationService(sessions, drafts, clock, ids);
   const restoredSessionId = await selectionState.restore(await sessionService.list());
   const selection = new SessionSelectionService(restoredSessionId);
@@ -106,6 +181,7 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
   const consoleService = new ConsoleApplicationService(
     sessions,
     drafts,
+    receipts,
     selection,
     runtime,
     profiles,
@@ -118,6 +194,20 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
     reportError,
     reportPromptDiagnostic,
   );
+
+  let shutdownPromise: Promise<void> | undefined;
+  const shutdown = (): Promise<void> => {
+    shutdownPromise ??= boundedShutdown(
+      (async () => {
+        await consoleView.shutdown();
+        await receipts.flush();
+        await consoleService.dispose();
+      })(),
+      () => output.appendLine("[warning] Honey Bee shutdown exceeded 5000 ms."),
+    );
+    return shutdownPromise;
+  };
+  activeShutdown = shutdown;
 
   context.subscriptions.push(
     output,
@@ -137,7 +227,7 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
     }),
     {
       dispose: () => {
-        consoleService.dispose();
+        void shutdown().catch(reportError);
       },
     },
   );
@@ -159,7 +249,29 @@ export const activate = async (context: vscode.ExtensionContext): Promise<void> 
   if (restoredSessionId !== undefined) {
     await consoleService.select(restoredSessionId);
   }
-  consoleService.initialize().catch(reportError);
+  void consoleService.initialize().catch(reportError);
+
+  if (context.extensionMode !== vscode.ExtensionMode.Test) {
+    return {};
+  }
+  const [draftResult, receiptResult] = await Promise.all([drafts.list(), receipts.list()]);
+  if (!draftResult.ok || !receiptResult.ok) {
+    throw new Error("Prompt recovery test state could not be read.");
+  }
+  return {
+    promptRecoveryTestState: {
+      draftSessionIds: draftResult.value.map((draft) => draft.sessionId),
+      receiptCleanup: receiptResult.value.map((receipt) => ({
+        requestId: receipt.requestId,
+        draftCleanup: receipt.draftCleanup,
+      })),
+      selectedDraftPresent: consoleService.state.draft.length > 0,
+    },
+  };
 };
 
-export const deactivate = (): void => {};
+export const deactivate = async (): Promise<void> => {
+  const shutdown = activeShutdown;
+  activeShutdown = undefined;
+  await shutdown?.();
+};

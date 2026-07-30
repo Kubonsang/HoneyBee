@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import { AgentSessionSchema, type AgentSession, type SessionId } from "@honeybee/domain";
-import { InMemoryDraftRepository, InMemorySessionRepository } from "@honeybee/persistence";
+import {
+  InMemoryDraftRepository,
+  InMemoryPromptDeliveryReceiptRepository,
+  InMemorySessionRepository,
+} from "@honeybee/persistence";
 
 import type {
   AgentProfileResolverPort,
@@ -72,9 +76,11 @@ const setup = (failInput: boolean) => {
   const selected = session();
   const drafts = new InMemoryDraftRepository();
   const runtime = new DeliveryRuntime(failInput);
+  const receipts = new InMemoryPromptDeliveryReceiptRepository();
   const service = new ConsoleApplicationService(
     new InMemorySessionRepository([selected]),
     drafts,
+    receipts,
     new SessionSelectionService(),
     runtime,
     profiles,
@@ -85,7 +91,7 @@ const setup = (failInput: boolean) => {
     () => undefined,
     () => undefined,
   );
-  return { coordinator, drafts, runtime, selected };
+  return { coordinator, drafts, receipts, runtime, selected };
 };
 
 const draftContent = async (
@@ -115,7 +121,9 @@ describe("Console Prompt delivery integration", () => {
       type: "prompt.accepted",
       requestId: "integration-success",
       sessionId: selected.id,
+      receiptPersistence: "stored",
       draftCleanup: "cleared",
+      warnings: [],
     });
 
     expect(runtime.inputs).toEqual([{ sessionId: selected.id, data: "Echo this once\r" }]);
@@ -136,7 +144,7 @@ describe("Console Prompt delivery integration", () => {
       type: "prompt.rejected",
       requestId: "integration-failure",
       sessionId: selected.id,
-      message: "Injected integration Runtime failure.",
+      message: "The Runtime rejected the Prompt input.",
     });
 
     expect(runtime.inputs).toEqual([{ sessionId: selected.id, data: "Keep after failure\r" }]);
