@@ -4,6 +4,7 @@ import {
   applyPromptRecoveryTestFixture,
   type PromptRecoveryExtensionTestState,
 } from "./adapters/extension-test-state.js";
+import { GlobalStatePromptDeliveryAttemptRepository } from "./adapters/global-state-prompt-attempt-repository.js";
 import { GlobalStatePromptDeliveryReceiptRepository } from "./adapters/global-state-prompt-receipt-repository.js";
 import {
   GlobalStateDraftRepository,
@@ -21,6 +22,10 @@ import {
   SystemClock,
 } from "./adapters/system-adapters.js";
 import { ConsoleApplicationService } from "./application/console-service.js";
+import {
+  PromptDeliveryAttemptReconciler,
+  type PromptAttemptReconciliationReport,
+} from "./application/prompt-delivery-attempt-reconciler.js";
 import {
   PromptDeliveryReconciler,
   type PromptDeliveryReconciliationReport,
@@ -92,6 +97,28 @@ const reportReconciliation = (
   return hasFailure;
 };
 
+const reportAttemptReconciliation = (
+  report: PromptAttemptReconciliationReport,
+  output: vscode.OutputChannel,
+): boolean => {
+  let hasFailure = false;
+  for (const event of report.events) {
+    const identity =
+      event.sessionId === undefined || event.requestId === undefined
+        ? ""
+        : ` for Session ${event.sessionId}, request ${event.requestId}`;
+    if (event.type === "failed" || event.type === "conflict") {
+      hasFailure = true;
+      output.appendLine(`[prompt] Attempt reconciliation ${event.code}${identity}.`);
+    } else {
+      output.appendLine(`[prompt] Attempt ${event.type}${identity}.`);
+    }
+  }
+  if (report.prunedAttempts > 0) {
+    output.appendLine(`[prompt] Pruned ${report.prunedAttempts} terminal delivery Attempts.`);
+  }
+  return hasFailure;
+};
 /** Extension exports are empty in production and expose sanitized recovery state in Test mode. */
 export interface HoneyBeeExtensionApi {
   readonly promptRecoveryTestState?: PromptRecoveryExtensionTestState;
@@ -128,13 +155,20 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
 
   const sessions = new GlobalStateSessionRepository(context.globalState);
   const drafts = new GlobalStateDraftRepository(context.globalState);
+  const attempts = new GlobalStatePromptDeliveryAttemptRepository(context.globalState);
   const receipts = new GlobalStatePromptDeliveryReceiptRepository(context.globalState);
   const selectionState = new GlobalStateSelectionRepository(context.globalState);
   const clock = new SystemClock();
   const ids = new RandomIdGenerator();
 
+  const attemptReconciliation = await new PromptDeliveryAttemptReconciler({
+    attempts,
+    receipts,
+    drafts,
+  }).reconcile();
+  const attemptRecoveryFailure = reportAttemptReconciliation(attemptReconciliation, output);
   const reconciliation = await new PromptDeliveryReconciler({ drafts, receipts }).reconcile();
-  if (reportReconciliation(reconciliation, output)) {
+  if (attemptRecoveryFailure || reportReconciliation(reconciliation, output)) {
     void vscode.window.showWarningMessage(
       "Honey Bee could not fully reconcile local Prompt recovery records. Drafts were preserved where delivery state was uncertain.",
     );
@@ -181,11 +215,14 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
   const consoleService = new ConsoleApplicationService(
     sessions,
     drafts,
+    attempts,
     receipts,
     selection,
     runtime,
     profiles,
     clock,
+    ids,
+    attemptReconciliation.issues,
   );
   const tree = new SessionTreeProvider(sessionService);
   const consoleView = new ConsoleViewProvider(
@@ -200,6 +237,7 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
     shutdownPromise ??= boundedShutdown(
       (async () => {
         await consoleView.shutdown();
+        await attempts.flush();
         await receipts.flush();
         await consoleService.dispose();
       })(),
@@ -254,8 +292,12 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
   if (context.extensionMode !== vscode.ExtensionMode.Test) {
     return {};
   }
-  const [draftResult, receiptResult] = await Promise.all([drafts.list(), receipts.list()]);
-  if (!draftResult.ok || !receiptResult.ok) {
+  const [draftResult, attemptResult, receiptResult] = await Promise.all([
+    drafts.list(),
+    attempts.list(),
+    receipts.list(),
+  ]);
+  if (!draftResult.ok || !attemptResult.ok || !receiptResult.ok) {
     throw new Error("Prompt recovery test state could not be read.");
   }
   return {
@@ -266,6 +308,11 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
         draftCleanup: receipt.draftCleanup,
       })),
       selectedDraftPresent: consoleService.state.draft.length > 0,
+      attemptPhases: attemptResult.value.map((attempt) => ({
+        requestId: attempt.requestId,
+        phase: attempt.phase,
+      })),
+      recoveryIssueRequestIds: attemptReconciliation.issues.map((issue) => issue.requestId),
     },
   };
 };

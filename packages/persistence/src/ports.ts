@@ -1,5 +1,6 @@
 import type {
   AgentSession,
+  PromptDeliveryAttempt,
   PromptDeliveryReceipt,
   Result,
   SessionDraft,
@@ -28,6 +29,27 @@ export interface DraftRepository {
   save(draft: SessionDraft): Promise<Result<SessionDraft, RepositoryError>>;
   delete(sessionId: SessionId): Promise<Result<void, RepositoryError>>;
 }
+
+/** Bounded retention applied only to terminal Prompt delivery Attempts. */
+export interface PromptAttemptRetentionPolicy {
+  readonly maxTerminalAttempts: number;
+}
+
+/** Durable storage boundary for content-minimized Prompt dispatch Attempts. */
+export interface PromptDeliveryAttemptRepository {
+  getByRequestId(
+    requestId: string,
+  ): Promise<Result<PromptDeliveryAttempt | undefined, RepositoryError>>;
+  listBySessionId(
+    sessionId: SessionId,
+  ): Promise<Result<readonly PromptDeliveryAttempt[], RepositoryError>>;
+  list(): Promise<Result<readonly PromptDeliveryAttempt[], RepositoryError>>;
+  save(attempt: PromptDeliveryAttempt): Promise<Result<PromptDeliveryAttempt, RepositoryError>>;
+  delete(requestId: string): Promise<Result<void, RepositoryError>>;
+  prune(policy: PromptAttemptRetentionPolicy): Promise<Result<number, RepositoryError>>;
+  flush(): Promise<void>;
+}
+
 /** Bounded retention applied only to receipts whose Draft cleanup is complete. */
 export interface PromptReceiptRetentionPolicy {
   readonly maxClearedReceipts: number;

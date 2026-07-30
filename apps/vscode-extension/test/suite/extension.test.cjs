@@ -37,14 +37,23 @@ const session = (id, title) => ({
 });
 
 suite("Honey Bee extension host", () => {
-  test("reconciles persisted receipts before Draft restore and registers commands", async () => {
+  test("reconciles persisted Attempts and Receipts before Draft restore", async () => {
     const staleSessionId = "receipt-stale-session";
     const newSessionId = "receipt-new-session";
     const staleContent = "delivered before restart";
+    const dispatchSessionId = "attempt-dispatch-session";
+    const acceptedSessionId = "attempt-accepted-session";
+    const dispatchContent = "possibly delivered before crash";
+    const acceptedContent = "runtime accepted before crash";
     const deliveredOldContent = "older delivered content";
     const newDraftContent = "new unsent content";
     process.env[fixtureEnvironment] = JSON.stringify({
-      sessions: [session(staleSessionId, "Stale receipt"), session(newSessionId, "New Draft")],
+      sessions: [
+        session(staleSessionId, "Stale receipt"),
+        session(newSessionId, "New Draft"),
+        session(dispatchSessionId, "Unknown Attempt"),
+        session(acceptedSessionId, "Accepted Attempt"),
+      ],
       drafts: [
         {
           sessionId: staleSessionId,
@@ -55,6 +64,39 @@ suite("Honey Bee extension host", () => {
           sessionId: newSessionId,
           content: newDraftContent,
           updatedAt: "2026-07-30T12:01:00.000Z",
+        },
+        {
+          sessionId: dispatchSessionId,
+          content: dispatchContent,
+          updatedAt: "2026-07-30T11:58:00.000Z",
+        },
+        {
+          sessionId: acceptedSessionId,
+          content: acceptedContent,
+          updatedAt: "2026-07-30T11:58:00.000Z",
+        },
+      ],
+      attempts: [
+        {
+          requestId: "attempt-dispatching",
+          sessionId: dispatchSessionId,
+          contentDigest: digest(dispatchContent),
+          contentLength: Buffer.byteLength(dispatchContent, "utf8"),
+          phase: "dispatching",
+          preparedAt: "2026-07-30T11:57:00.000Z",
+          updatedAt: "2026-07-30T11:59:00.000Z",
+          schemaVersion: 1,
+        },
+        {
+          requestId: "attempt-runtime-accepted",
+          sessionId: acceptedSessionId,
+          contentDigest: digest(acceptedContent),
+          contentLength: Buffer.byteLength(acceptedContent, "utf8"),
+          phase: "runtime-accepted",
+          preparedAt: "2026-07-30T11:57:00.000Z",
+          updatedAt: "2026-07-30T12:00:00.000Z",
+          acceptedAt: "2026-07-30T12:00:00.000Z",
+          schemaVersion: 1,
         },
       ],
       receipts: [
@@ -85,7 +127,10 @@ suite("Honey Bee extension host", () => {
 
     const api = await extension.activate();
     assert.equal(extension.isActive, true);
-    assert.deepEqual(api.promptRecoveryTestState.draftSessionIds, [newSessionId]);
+    assert.deepEqual(
+      [...api.promptRecoveryTestState.draftSessionIds].sort(),
+      [dispatchSessionId, newSessionId].sort(),
+    );
     assert.equal(api.promptRecoveryTestState.selectedDraftPresent, true);
     assert.deepEqual(
       Object.fromEntries(
@@ -94,10 +139,20 @@ suite("Honey Bee extension host", () => {
           receipt.draftCleanup,
         ]),
       ),
-      { "receipt-new": "cleared", "receipt-stale": "cleared" },
+      {
+        "attempt-runtime-accepted": "cleared",
+        "receipt-new": "cleared",
+        "receipt-stale": "cleared",
+      },
     );
     assert.equal(JSON.stringify(api).includes(staleContent), false);
     assert.equal(JSON.stringify(api).includes(newDraftContent), false);
+    assert.deepEqual(api.promptRecoveryTestState.recoveryIssueRequestIds, ["attempt-dispatching"]);
+    assert.deepEqual(api.promptRecoveryTestState.attemptPhases, [
+      { requestId: "attempt-dispatching", phase: "unknown" },
+    ]);
+    assert.equal(JSON.stringify(api).includes(dispatchContent), false);
+    assert.equal(JSON.stringify(api).includes(acceptedContent), false);
 
     const commands = await vscode.commands.getCommands(true);
     for (const command of expectedCommands) {

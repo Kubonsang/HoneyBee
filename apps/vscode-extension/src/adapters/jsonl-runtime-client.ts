@@ -10,6 +10,7 @@ import type {
   RuntimeClientEvent,
   RuntimeClientPort,
   RuntimeConnectionState,
+  RuntimeInputOutcome,
   RuntimeStartRequest,
 } from "../application/ports.js";
 
@@ -28,6 +29,32 @@ export interface RuntimeTransportPort {
   stop(): Promise<void>;
 }
 
+export type RuntimeTransportWriteDisposition = "not-written" | "unknown";
+
+export class RuntimeTransportWriteError extends Error {
+  public override readonly name = "RuntimeTransportWriteError";
+
+  public constructor(
+    public readonly disposition: RuntimeTransportWriteDisposition,
+    message: string,
+    options: ErrorOptions = {},
+  ) {
+    super(message, options);
+  }
+}
+
+class RuntimeRequestFailure extends ApplicationError {
+  public override readonly name = "RuntimeRequestFailure";
+
+  public constructor(
+    public readonly outcome: Exclude<RuntimeInputOutcome["status"], "accepted">,
+    code: string,
+    message: string,
+    details: Readonly<Record<string, unknown>> = {},
+  ) {
+    super(code, message, details);
+  }
+}
 export interface NodeRuntimeTransportOptions {
   readonly command: string;
   readonly args: readonly string[];
@@ -102,19 +129,22 @@ export class NodeChildProcessRuntimeTransport implements RuntimeTransportPort {
   public async write(line: string): Promise<void> {
     const child = this.#child;
     if (child === undefined || child.stdin.destroyed) {
-      throw new ApplicationError("runtime.disconnected", "The runtime is not connected.");
+      throw new RuntimeTransportWriteError("not-written", "The runtime is not connected.");
     }
     await new Promise<void>((resolve, reject) => {
       child.stdin.write(line.endsWith("\n") ? line : `${line}\n`, "utf8", (error) => {
         if (error === null || error === undefined) {
           resolve();
         } else {
-          reject(error);
+          reject(
+            new RuntimeTransportWriteError("unknown", "Runtime transport write failed.", {
+              cause: error,
+            }),
+          );
         }
       });
     });
   }
-
   public async stop(): Promise<void> {
     const child = this.#child;
     this.#child = undefined;
@@ -234,8 +264,21 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     });
   }
 
-  public async sendInput(sessionId: SessionId, data: string): Promise<void> {
-    await this.request("agent.input", { sessionId, data });
+  public async sendInput(sessionId: SessionId, data: string): Promise<RuntimeInputOutcome> {
+    try {
+      await this.request("agent.input", { sessionId, data });
+      return { status: "accepted" };
+    } catch (error) {
+      if (error instanceof RuntimeRequestFailure) {
+        return error.outcome === "rejected"
+          ? { status: "rejected", message: error.message }
+          : { status: "unknown", reason: error.message };
+      }
+      return {
+        status: "unknown",
+        reason: "The Runtime input outcome could not be determined.",
+      };
+    }
   }
 
   public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
@@ -275,7 +318,13 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     }
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(new ApplicationError("runtime.disposed", "The runtime client was disposed."));
+      pending.reject(
+        new RuntimeRequestFailure(
+          "unknown",
+          "runtime.disposed",
+          "The runtime client was disposed before its response was observed.",
+        ),
+      );
     }
     this.#pending.clear();
     await this.transport.stop();
@@ -349,7 +398,8 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     }
     const error = isRecord(message.error) ? message.error : {};
     pending.reject(
-      new ApplicationError(
+      new RuntimeRequestFailure(
+        "rejected",
         typeof error.code === "string" ? error.code : "runtime.request-failed",
         typeof error.message === "string" ? error.message : "Runtime request failed.",
         isRecord(error.details) ? error.details : {},
@@ -432,14 +482,15 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     params: RuntimeRequestFor<Method>["params"],
   ): Promise<unknown> {
     if (this.#connectionState !== "connected") {
-      throw new ApplicationError("runtime.not-ready", "The runtime is not ready.");
+      throw new RuntimeRequestFailure("rejected", "runtime.not-ready", "The runtime is not ready.");
     }
     const id = this.ids.requestId();
     const result = new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.#pending.delete(id);
         reject(
-          new ApplicationError(
+          new RuntimeRequestFailure(
+            "unknown",
             "runtime.timeout",
             `Runtime request "${method}" timed out after ${this.requestTimeoutMs} ms.`,
           ),
@@ -462,16 +513,33 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
       if (pending !== undefined) {
         clearTimeout(pending.timeout);
         this.#pending.delete(id);
-        pending.reject(error instanceof Error ? error : new Error(String(error)));
+        if (error instanceof RuntimeTransportWriteError) {
+          pending.reject(
+            new RuntimeRequestFailure(
+              error.disposition === "not-written" ? "rejected" : "unknown",
+              error.disposition === "not-written"
+                ? "runtime.transport-not-written"
+                : "runtime.transport-write-unknown",
+              error.message,
+            ),
+          );
+        } else {
+          pending.reject(
+            new RuntimeRequestFailure(
+              "unknown",
+              "runtime.transport-write-unknown",
+              "Runtime transport write outcome could not be determined.",
+            ),
+          );
+        }
       }
     }
     return result;
   }
-
   private handleDisconnect(reason: string): void {
     for (const pending of this.#pending.values()) {
       clearTimeout(pending.timeout);
-      pending.reject(new ApplicationError("runtime.disconnected", reason));
+      pending.reject(new RuntimeRequestFailure("unknown", "runtime.disconnected", reason));
     }
     this.#pending.clear();
     this.setConnection("disconnected", reason);

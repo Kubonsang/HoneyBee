@@ -29,6 +29,30 @@ describe("Console message contracts", () => {
     ).toBe(false);
   });
 
+  it("accepts typed recovery actions and rejects missing correlation", () => {
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.recovery.assume-delivered",
+        requestId: "request-1",
+        sessionId: "session-1",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.recovery.retry",
+        sessionId: "session-1",
+      }),
+    ).toBe(false);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "prompt.recovery.retry",
+        requestId: "request-1",
+        sessionId: "session-1",
+        content: "must not cross recovery protocol",
+      }),
+    ).toBe(false);
+  });
+
   it("accepts valid input and resize messages", () => {
     expect(
       isConsoleToExtensionMessage({
@@ -64,6 +88,7 @@ describe("Console message contracts", () => {
         type: "prompt.accepted",
         requestId: "prompt-1",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "cleared",
         warnings: [],
@@ -74,6 +99,7 @@ describe("Console message contracts", () => {
         type: "prompt.accepted",
         requestId: "prompt-2",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "pending",
         warnings: ["draft-delete-failed"],
@@ -89,9 +115,29 @@ describe("Console message contracts", () => {
     ).toBe(true);
     expect(
       isExtensionToConsoleMessage({
+        type: "prompt.unknown",
+        requestId: "prompt-unknown",
+        sessionId: "session-1",
+        message: "Runtime response was not observed.",
+        warnings: [],
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "prompt.unknown",
+        requestId: "prompt-content",
+        sessionId: "session-1",
+        message: "Runtime response was not observed.",
+        warnings: [],
+        content: "must not cross acknowledgement protocol",
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
         type: "prompt.accepted",
         requestId: "prompt-4",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "warning",
         draftCleanup: "warning",
         warnings: ["not-a-warning-code"],

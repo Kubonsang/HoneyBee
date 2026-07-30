@@ -17,6 +17,7 @@ import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
   readonly #delivery: PromptDeliveryCoordinator;
   readonly #serviceSubscription: { dispose(): void };
+  readonly #activeWork = new Set<Promise<void>>();
   #view: vscode.WebviewView | undefined;
   #shutdownPromise: Promise<void> | undefined;
 
@@ -24,7 +25,7 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly extensionUri: vscode.Uri,
     private readonly consoleService: ConsoleApplicationService,
     private readonly reportError: (error: unknown) => void,
-    reportDiagnostic: (message: string) => void,
+    private readonly reportDiagnostic: (message: string) => void,
   ) {
     this.#delivery = new PromptDeliveryCoordinator(consoleService, reportError, reportDiagnostic);
     this.#serviceSubscription = consoleService.onMessage((message) => {
@@ -76,6 +77,7 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     this.#shutdownPromise ??= (async () => {
       this.#serviceSubscription.dispose();
       await this.#delivery.dispose();
+      await Promise.allSettled(this.#activeWork);
     })();
     return this.#shutdownPromise;
   }
@@ -90,6 +92,12 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
         break;
       case "prompt.send":
         this.deliverPrompt(message);
+        break;
+      case "prompt.recovery.assume-delivered":
+        this.run(this.assumeDelivered(message.requestId, SessionIdSchema.parse(message.sessionId)));
+        break;
+      case "prompt.recovery.retry":
+        this.run(this.retryUnknown(message.requestId, SessionIdSchema.parse(message.sessionId)));
         break;
       case "terminal.input":
         this.run(
@@ -120,6 +128,51 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  private async assumeDelivered(
+    requestId: string,
+    sessionId: ReturnType<typeof SessionIdSchema.parse>,
+  ): Promise<void> {
+    await this.#delivery.flushDraft(sessionId);
+    const result = await this.consoleService.assumePromptDelivered(requestId, sessionId);
+    if (result.status === "failed") {
+      this.reportDiagnostic(
+        `Attempt recovery action failed for Session ${sessionId}, request ${requestId} (${result.code}).`,
+      );
+      await vscode.window.showWarningMessage(
+        "Honey Bee could not resolve the unknown Prompt outcome. The Session remains locked.",
+      );
+    }
+  }
+
+  private async retryUnknown(
+    requestId: string,
+    sessionId: ReturnType<typeof SessionIdSchema.parse>,
+  ): Promise<void> {
+    const confirmation = await vscode.window.showWarningMessage(
+      "The original Prompt may already have reached the Runtime. Retrying can execute it twice.",
+      { modal: true },
+      "Retry with new request ID",
+    );
+    if (confirmation !== "Retry with new request ID") return;
+    await this.#delivery.flushDraft(sessionId);
+    const result = await this.consoleService.retryUnknownPrompt(requestId, sessionId);
+    if (result.status === "failed") {
+      this.reportDiagnostic(
+        `Attempt recovery retry failed for Session ${sessionId}, request ${requestId} (${result.code}).`,
+      );
+      await vscode.window.showWarningMessage(
+        "Honey Bee could not retry this unknown Prompt. Its Draft and Session lock were preserved.",
+      );
+      return;
+    }
+    if (result.status === "retry-finished" && result.delivery.status !== "accepted") {
+      await vscode.window.showWarningMessage(
+        result.delivery.status === "unknown"
+          ? "The replacement Prompt outcome is also unknown. Automatic resend remains disabled."
+          : "The replacement Prompt was rejected. The original unknown outcome remains unresolved.",
+      );
+    }
+  }
   private deliverPrompt(message: PromptSendMessage): void {
     const parsedMessage = {
       ...message,
@@ -141,6 +194,10 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
   }
 
   private run(work: Promise<void>): void {
-    work.catch(this.reportError);
+    const tracked = work.catch(this.reportError);
+    this.#activeWork.add(tracked);
+    void tracked.finally(() => {
+      this.#activeWork.delete(tracked);
+    });
   }
 }

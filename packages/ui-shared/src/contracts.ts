@@ -1,4 +1,4 @@
-export const CONSOLE_WEBVIEW_VERSION = 3 as const;
+export const CONSOLE_WEBVIEW_VERSION = 4 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 
@@ -15,9 +15,19 @@ export interface ConsoleSessionSummary {
   readonly tags: readonly string[];
 }
 
+/** Content-free recovery state for one unresolved Session delivery outcome. */
+export interface PromptRecoveryIssue {
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly outcome: "unknown";
+  readonly draftMatch: "exact" | "different" | "missing";
+  readonly occurredAt: string;
+}
+
 export interface ConsoleViewState {
   readonly selectedSession: ConsoleSessionSummary | null;
   readonly draft: string;
+  readonly recoveryIssue: PromptRecoveryIssue | null;
   readonly connectionStatus: ConsoleConnectionStatus;
   readonly statusMessage: string;
   readonly canStart: boolean;
@@ -25,7 +35,7 @@ export interface ConsoleViewState {
   readonly canStop: boolean;
 }
 
-/** Requests delivery of one non-empty prompt to a Session runtime. */
+/** Requests delivery of one non-empty Prompt to a Session Runtime. */
 export interface PromptSendMessage {
   readonly type: "prompt.send";
   readonly requestId: string;
@@ -33,24 +43,29 @@ export interface PromptSendMessage {
   readonly content: string;
 }
 
-/** Local durability warning codes returned after Runtime input succeeded. */
+/** Local durability warning codes returned after Runtime dispatch started. */
 export type PromptDeliveryWarningCode =
+  | "attempt-runtime-accepted-save-failed"
+  | "attempt-unknown-save-failed"
+  | "attempt-finalize-failed"
+  | "attempt-prune-failed"
   | "receipt-save-failed"
   | "draft-delete-failed"
   | "receipt-cleanup-update-failed"
   | "receipt-prune-failed";
 
-/** Confirms Runtime input success while reporting Receipt and Draft durability separately. */
+/** Confirms Runtime input success while reporting local durability separately. */
 export interface PromptAcceptedMessage {
   readonly type: "prompt.accepted";
   readonly requestId: string;
   readonly sessionId: string;
+  readonly attemptPersistence: "stored" | "warning";
   readonly receiptPersistence: "stored" | "warning";
   readonly draftCleanup: "cleared" | "pending" | "warning";
   readonly warnings: readonly PromptDeliveryWarningCode[];
 }
 
-/** Reports that a prompt was not delivered to the runtime. */
+/** Reports that a Prompt was explicitly not delivered to the Runtime. */
 export interface PromptRejectedMessage {
   readonly type: "prompt.rejected";
   readonly requestId: string;
@@ -58,44 +73,36 @@ export interface PromptRejectedMessage {
   readonly message: string;
 }
 
-/** Correlated result of a prompt delivery request. */
-export type PromptAcknowledgementMessage = PromptAcceptedMessage | PromptRejectedMessage;
+/** Reports that Runtime input may have been accepted and requires explicit recovery. */
+export interface PromptUnknownMessage {
+  readonly type: "prompt.unknown";
+  readonly requestId: string;
+  readonly sessionId: string;
+  readonly message: string;
+  readonly warnings: readonly PromptDeliveryWarningCode[];
+}
+
+/** Correlated result of a Prompt delivery request. */
+export type PromptAcknowledgementMessage =
+  PromptAcceptedMessage | PromptRejectedMessage | PromptUnknownMessage;
 
 export type ExtensionToConsoleMessage =
-  | {
-      readonly type: "console.state";
-      readonly state: ConsoleViewState;
-    }
-  | {
-      readonly type: "terminal.data";
-      readonly sessionId: string;
-      readonly data: string;
-    }
-  | {
-      readonly type: "terminal.clear";
-      readonly sessionId: string | null;
-    }
-  | {
-      readonly type: "prompt.focus";
-    }
+  | { readonly type: "console.state"; readonly state: ConsoleViewState }
+  | { readonly type: "terminal.data"; readonly sessionId: string; readonly data: string }
+  | { readonly type: "terminal.clear"; readonly sessionId: string | null }
+  | { readonly type: "prompt.focus" }
   | PromptAcknowledgementMessage;
 
 export type ConsoleToExtensionMessage =
-  | {
-      readonly type: "webview.ready";
-      readonly version: typeof CONSOLE_WEBVIEW_VERSION;
-    }
-  | {
-      readonly type: "draft.changed";
-      readonly sessionId: string;
-      readonly content: string;
-    }
+  | { readonly type: "webview.ready"; readonly version: typeof CONSOLE_WEBVIEW_VERSION }
+  | { readonly type: "draft.changed"; readonly sessionId: string; readonly content: string }
   | PromptSendMessage
   | {
-      readonly type: "terminal.input";
+      readonly type: "prompt.recovery.assume-delivered" | "prompt.recovery.retry";
+      readonly requestId: string;
       readonly sessionId: string;
-      readonly data: string;
     }
+  | { readonly type: "terminal.input"; readonly sessionId: string; readonly data: string }
   | {
       readonly type: "terminal.resize";
       readonly sessionId: string;
@@ -109,6 +116,9 @@ export type ConsoleToExtensionMessage =
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+const hasOnlyKeys = (value: Readonly<Record<string, unknown>>, keys: readonly string[]): boolean =>
+  Object.keys(value).every((key) => keys.includes(key));
 
 const hasSessionId = (
   value: Readonly<Record<string, unknown>>,
@@ -128,7 +138,6 @@ const consoleConnectionStatuses: readonly ConsoleConnectionStatus[] = [
   "disconnected",
   "error",
 ];
-
 const consoleSessionStatuses: readonly ConsoleSessionStatus[] = [
   "idle",
   "starting",
@@ -139,6 +148,10 @@ const consoleSessionStatuses: readonly ConsoleSessionStatus[] = [
   "completed",
 ];
 const promptDeliveryWarningCodes: readonly PromptDeliveryWarningCode[] = [
+  "attempt-runtime-accepted-save-failed",
+  "attempt-unknown-save-failed",
+  "attempt-finalize-failed",
+  "attempt-prune-failed",
   "receipt-save-failed",
   "draft-delete-failed",
   "receipt-cleanup-update-failed",
@@ -158,10 +171,22 @@ const isConsoleSessionSummary = (value: unknown): value is ConsoleSessionSummary
   Array.isArray(value.tags) &&
   value.tags.every((tag) => typeof tag === "string");
 
+const isPromptRecoveryIssue = (value: unknown): value is PromptRecoveryIssue =>
+  isRecord(value) &&
+  hasOnlyKeys(value, ["requestId", "sessionId", "outcome", "draftMatch", "occurredAt"]) &&
+  hasRequestAndSessionId(value) &&
+  value.outcome === "unknown" &&
+  (value.draftMatch === "exact" ||
+    value.draftMatch === "different" ||
+    value.draftMatch === "missing") &&
+  typeof value.occurredAt === "string" &&
+  !Number.isNaN(Date.parse(value.occurredAt));
+
 const isConsoleViewState = (value: unknown): value is ConsoleViewState =>
   isRecord(value) &&
   (value.selectedSession === null || isConsoleSessionSummary(value.selectedSession)) &&
   typeof value.draft === "string" &&
+  (value.recoveryIssue === null || isPromptRecoveryIssue(value.recoveryIssue)) &&
   typeof value.connectionStatus === "string" &&
   consoleConnectionStatuses.includes(value.connectionStatus as ConsoleConnectionStatus) &&
   typeof value.statusMessage === "string" &&
@@ -169,12 +194,17 @@ const isConsoleViewState = (value: unknown): value is ConsoleViewState =>
   typeof value.canInterrupt === "boolean" &&
   typeof value.canStop === "boolean";
 
+const hasValidWarnings = (value: unknown): value is readonly PromptDeliveryWarningCode[] =>
+  Array.isArray(value) &&
+  value.every(
+    (warning) =>
+      typeof warning === "string" &&
+      promptDeliveryWarningCodes.includes(warning as PromptDeliveryWarningCode),
+  );
+
 /** Validates messages received by the Extension Host from the Console Webview. */
 export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToExtensionMessage => {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-
+  if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "webview.ready":
       return value.version === CONSOLE_WEBVIEW_VERSION;
@@ -185,6 +215,11 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
         hasRequestAndSessionId(value) &&
         typeof value.content === "string" &&
         value.content.trim().length > 0
+      );
+    case "prompt.recovery.assume-delivered":
+    case "prompt.recovery.retry":
+      return (
+        hasRequestAndSessionId(value) && hasOnlyKeys(value, ["type", "requestId", "sessionId"])
       );
     case "terminal.input":
       return hasSessionId(value) && typeof value.data === "string";
@@ -209,10 +244,7 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
 
 /** Validates messages received by the Console Webview from the Extension Host. */
 export const isExtensionToConsoleMessage = (value: unknown): value is ExtensionToConsoleMessage => {
-  if (!isRecord(value) || typeof value.type !== "string") {
-    return false;
-  }
-
+  if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "console.state":
       return isConsoleViewState(value.state);
@@ -225,20 +257,34 @@ export const isExtensionToConsoleMessage = (value: unknown): value is ExtensionT
     case "prompt.accepted":
       return (
         hasRequestAndSessionId(value) &&
+        hasOnlyKeys(value, [
+          "type",
+          "requestId",
+          "sessionId",
+          "attemptPersistence",
+          "receiptPersistence",
+          "draftCleanup",
+          "warnings",
+        ]) &&
+        (value.attemptPersistence === "stored" || value.attemptPersistence === "warning") &&
         (value.receiptPersistence === "stored" || value.receiptPersistence === "warning") &&
         (value.draftCleanup === "cleared" ||
           value.draftCleanup === "pending" ||
           value.draftCleanup === "warning") &&
-        Array.isArray(value.warnings) &&
-        value.warnings.every(
-          (warning) =>
-            typeof warning === "string" &&
-            promptDeliveryWarningCodes.includes(warning as PromptDeliveryWarningCode),
-        )
+        hasValidWarnings(value.warnings)
+      );
+    case "prompt.unknown":
+      return (
+        hasRequestAndSessionId(value) &&
+        hasOnlyKeys(value, ["type", "requestId", "sessionId", "message", "warnings"]) &&
+        typeof value.message === "string" &&
+        value.message.length > 0 &&
+        hasValidWarnings(value.warnings)
       );
     case "prompt.rejected":
       return (
         hasRequestAndSessionId(value) &&
+        hasOnlyKeys(value, ["type", "requestId", "sessionId", "message"]) &&
         typeof value.message === "string" &&
         value.message.length > 0
       );

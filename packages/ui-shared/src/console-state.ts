@@ -2,6 +2,7 @@ import type {
   ConsoleConnectionStatus,
   ConsoleSessionSummary,
   ConsoleViewState,
+  PromptRecoveryIssue,
 } from "./contracts.js";
 
 export type ConsoleStateAction =
@@ -9,10 +10,13 @@ export type ConsoleStateAction =
       readonly type: "session.selected";
       readonly session: ConsoleSessionSummary | null;
       readonly draft: string;
+      readonly recoveryIssue: PromptRecoveryIssue | null;
     }
+  | { readonly type: "draft.updated"; readonly draft: string }
   | {
-      readonly type: "draft.updated";
-      readonly draft: string;
+      readonly type: "recovery.changed";
+      readonly recoveryIssue: PromptRecoveryIssue | null;
+      readonly message: string;
     }
   | {
       readonly type: "connection.changed";
@@ -28,6 +32,7 @@ export type ConsoleStateAction =
 export const initialConsoleViewState = (): ConsoleViewState => ({
   selectedSession: null,
   draft: "",
+  recoveryIssue: null,
   connectionStatus: "disconnected",
   statusMessage: "Select a session to open its console.",
   canStart: false,
@@ -42,7 +47,6 @@ const controlsForStatus = (
   if (session === null || connectionStatus !== "connected") {
     return { canStart: false, canInterrupt: false, canStop: false };
   }
-
   const active =
     session.status === "starting" ||
     session.status === "running" ||
@@ -73,6 +77,7 @@ export const reduceConsoleViewState = (
         ...state,
         selectedSession: action.session,
         draft: action.draft,
+        recoveryIssue: action.recoveryIssue,
         statusMessage:
           action.session === null
             ? "Select a session to open its console."
@@ -80,6 +85,8 @@ export const reduceConsoleViewState = (
       });
     case "draft.updated":
       return { ...state, draft: action.draft };
+    case "recovery.changed":
+      return { ...state, recoveryIssue: action.recoveryIssue, statusMessage: action.message };
     case "connection.changed":
       return withControls({
         ...state,
@@ -87,9 +94,7 @@ export const reduceConsoleViewState = (
         statusMessage: action.message,
       });
     case "session.status": {
-      if (state.selectedSession === null) {
-        return { ...state, statusMessage: action.message };
-      }
+      if (state.selectedSession === null) return { ...state, statusMessage: action.message };
       return withControls({
         ...state,
         selectedSession: { ...state.selectedSession, status: action.status },

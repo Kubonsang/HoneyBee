@@ -18,6 +18,7 @@ describe("reduceConsoleViewState", () => {
       type: "session.selected",
       session,
       draft: "continue",
+      recoveryIssue: null,
     });
     expect(selected.canStart).toBe(false);
 
@@ -44,8 +45,31 @@ describe("reduceConsoleViewState", () => {
       type: "session.selected",
       session,
       draft: "saved draft",
+      recoveryIssue: null,
     });
     expect(state.draft).toBe("saved draft");
     expect(state.selectedSession?.id).toBe("session-1");
+  });
+  it("stores and clears a content-free recovery issue per selected Session", () => {
+    const selected = reduceConsoleViewState(initialConsoleViewState(), {
+      type: "session.selected",
+      session,
+      draft: "saved draft",
+      recoveryIssue: null,
+    });
+    const issue = {
+      requestId: "request-1",
+      sessionId: "session-1",
+      outcome: "unknown" as const,
+      draftMatch: "exact" as const,
+      occurredAt: "2026-07-30T12:00:00.000Z",
+    };
+    const locked = reduceConsoleViewState(selected, {
+      type: "recovery.changed",
+      recoveryIssue: issue,
+      message: "Automatic resend is disabled.",
+    });
+    expect(locked.recoveryIssue).toEqual(issue);
+    expect(locked.statusMessage).toContain("disabled");
   });
 });

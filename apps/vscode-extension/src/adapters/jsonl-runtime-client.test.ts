@@ -6,6 +6,7 @@ import type { RuntimeClientEvent } from "../application/ports.js";
 import {
   JsonLineDecoder,
   JsonlRuntimeClient,
+  RuntimeTransportWriteError,
   type RuntimeTransportHandlers,
   type RuntimeTransportPort,
 } from "./jsonl-runtime-client.js";
@@ -13,6 +14,7 @@ import {
 class FakeTransport implements RuntimeTransportPort {
   readonly writes: string[] = [];
   handlers: RuntimeTransportHandlers | undefined;
+  writeError: Error | undefined;
 
   public async start(handlers: RuntimeTransportHandlers): Promise<void> {
     this.handlers = handlers;
@@ -20,12 +22,17 @@ class FakeTransport implements RuntimeTransportPort {
 
   public async write(line: string): Promise<void> {
     this.writes.push(line);
+    if (this.writeError !== undefined) throw this.writeError;
   }
 
   public async stop(): Promise<void> {}
 
   public data(message: unknown): void {
     this.handlers?.onData(`${JSON.stringify(message)}\n`);
+  }
+
+  public close(reason = "Runtime disconnected."): void {
+    this.handlers?.onClose(reason);
   }
 }
 
@@ -119,6 +126,101 @@ describe("JsonlRuntimeClient", () => {
       sessionId,
       status: "running",
       message: "Agent is running.",
+    });
+  });
+  it("returns accepted only after a correlated success response", async () => {
+    const transport = new FakeTransport();
+    const client = new JsonlRuntimeClient(transport, { requestId: () => "input-accepted" }, 1000);
+    await client.connect();
+    const pending = client.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    await vi.waitFor(() => expect(transport.writes).toHaveLength(1));
+    transport.data({
+      schemaVersion: 1,
+      kind: "response",
+      id: "input-accepted",
+      ok: true,
+      result: { accepted: true },
+    });
+    await expect(pending).resolves.toEqual({ status: "accepted" });
+  });
+
+  it("returns rejected for explicit Runtime rejection and pre-write failure", async () => {
+    const explicitTransport = new FakeTransport();
+    const explicit = new JsonlRuntimeClient(
+      explicitTransport,
+      { requestId: () => "input-rejected" },
+      1000,
+    );
+    await explicit.connect();
+    const pending = explicit.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    await vi.waitFor(() => expect(explicitTransport.writes).toHaveLength(1));
+    explicitTransport.data({
+      schemaVersion: 1,
+      kind: "response",
+      id: "input-rejected",
+      ok: false,
+      error: { code: "runtime.session-not-running", message: "PTY stopped.", retryable: true },
+    });
+    await expect(pending).resolves.toEqual({ status: "rejected", message: "PTY stopped." });
+
+    const preWriteTransport = new FakeTransport();
+    preWriteTransport.writeError = new RuntimeTransportWriteError(
+      "not-written",
+      "Runtime is not connected.",
+    );
+    const preWrite = new JsonlRuntimeClient(
+      preWriteTransport,
+      { requestId: () => "input-not-written" },
+      1000,
+    );
+    await preWrite.connect();
+    await expect(
+      preWrite.sendInput(SessionIdSchema.parse("session-1"), "hello\r"),
+    ).resolves.toEqual({ status: "rejected", message: "Runtime is not connected." });
+  });
+
+  it("returns unknown after transport write timeout, callback error, or disconnect", async () => {
+    vi.useFakeTimers();
+    const timeoutTransport = new FakeTransport();
+    const timeoutClient = new JsonlRuntimeClient(
+      timeoutTransport,
+      { requestId: () => "input-timeout" },
+      10,
+    );
+    await timeoutClient.connect();
+    const timeout = timeoutClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    await vi.advanceTimersByTimeAsync(11);
+    await expect(timeout).resolves.toMatchObject({ status: "unknown" });
+    vi.useRealTimers();
+
+    const callbackTransport = new FakeTransport();
+    callbackTransport.writeError = new RuntimeTransportWriteError(
+      "unknown",
+      "Write callback failed.",
+    );
+    const callbackClient = new JsonlRuntimeClient(
+      callbackTransport,
+      { requestId: () => "input-write-unknown" },
+      1000,
+    );
+    await callbackClient.connect();
+    await expect(
+      callbackClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r"),
+    ).resolves.toEqual({ status: "unknown", reason: "Write callback failed." });
+
+    const disconnectTransport = new FakeTransport();
+    const disconnectClient = new JsonlRuntimeClient(
+      disconnectTransport,
+      { requestId: () => "input-disconnect" },
+      1000,
+    );
+    await disconnectClient.connect();
+    const disconnected = disconnectClient.sendInput(SessionIdSchema.parse("session-1"), "hello\r");
+    await vi.waitFor(() => expect(disconnectTransport.writes).toHaveLength(1));
+    disconnectTransport.close("Runtime process exited.");
+    await expect(disconnected).resolves.toEqual({
+      status: "unknown",
+      reason: "Runtime process exited.",
     });
   });
 });

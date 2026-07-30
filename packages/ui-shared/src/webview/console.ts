@@ -47,6 +47,10 @@ const startButton = requiredElement<HTMLButtonElement>("start-button");
 const interruptButton = requiredElement<HTMLButtonElement>("interrupt-button");
 const stopButton = requiredElement<HTMLButtonElement>("stop-button");
 const sendButton = requiredElement<HTMLButtonElement>("send-button");
+const recoveryBanner = requiredElement<HTMLElement>("recovery-banner");
+const recoveryMessage = requiredElement<HTMLElement>("recovery-message");
+const assumeDeliveredButton = requiredElement<HTMLButtonElement>("assume-delivered-button");
+const retryPromptButton = requiredElement<HTMLButtonElement>("retry-prompt-button");
 
 const terminal = new Terminal({
   allowProposedApi: false,
@@ -128,12 +132,13 @@ const postForSelectedSession = (
 const updatePromptControls = (): void => {
   const selected = activeState?.selectedSession ?? null;
   const pending = selected !== null && promptDelivery.isPending(selected.id);
+  const recoveryLocked = selected !== null && activeState?.recoveryIssue?.sessionId === selected.id;
   const canSend =
     selected !== null &&
     activeState?.connectionStatus === "connected" &&
     (selected.status === "running" || selected.status === "waiting_for_input");
-  sendButton.disabled = !canSend || pending;
-  sendButton.textContent = pending ? "Sending..." : "Send";
+  sendButton.disabled = !canSend || pending || recoveryLocked;
+  sendButton.textContent = pending ? "Sending..." : recoveryLocked ? "Recovery required" : "Send";
   editorElement.dataset.pending = String(pending);
   editor.updateOptions({ readOnly: selected === null || pending });
 };
@@ -232,6 +237,7 @@ resizeObserver.observe(terminalElement);
 
 const renderState = (state: ConsoleViewState): void => {
   const previousSessionId = activeSessionId;
+  const previousRecovery = activeState?.recoveryIssue ?? null;
   const nextSessionId = state.selectedSession?.id;
   if (previousSessionId !== undefined) {
     localDrafts.set(previousSessionId, editor.getValue());
@@ -244,8 +250,19 @@ const renderState = (state: ConsoleViewState): void => {
   statusMessage.textContent =
     nextSessionId !== undefined && promptDelivery.isPending(nextSessionId)
       ? "Sending Prompt..."
-      : state.statusMessage;
+      : state.recoveryIssue !== null
+        ? "Prompt delivery outcome is unknown. Automatic resend is disabled."
+        : state.statusMessage;
 
+  const recovery = state.recoveryIssue;
+  recoveryBanner.hidden = recovery === null;
+  if (recovery !== null) {
+    recoveryMessage.textContent =
+      recovery.draftMatch === "exact"
+        ? `Request ${recovery.requestId} may have reached the Runtime. It will not be resent automatically.`
+        : `Request ${recovery.requestId} is unresolved. The current Draft is ${recovery.draftMatch}.`;
+    retryPromptButton.disabled = recovery.draftMatch !== "exact";
+  }
   const selected = state.selectedSession;
   sessionValue.textContent = selected?.title ?? "No session selected";
   agentValue.textContent = selected?.agentProfile ?? "—";
@@ -266,6 +283,15 @@ const renderState = (state: ConsoleViewState): void => {
     editor.setValue(draft);
     suppressDraftMessage = false;
     fitTerminal();
+  } else if (
+    previousRecovery !== null &&
+    state.recoveryIssue === null &&
+    editor.getValue() !== state.draft
+  ) {
+    suppressDraftMessage = true;
+    editor.setValue(state.draft);
+    suppressDraftMessage = false;
+    localDrafts.set(previousRecovery.sessionId, state.draft);
   } else if (
     nextSessionId !== undefined &&
     !promptDelivery.isPending(nextSessionId) &&
@@ -295,7 +321,9 @@ const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): voi
     statusMessage.textContent =
       settlement.status === "accepted"
         ? promptAcceptedStatusMessage(settlement.acknowledgement)
-        : `Prompt not sent. ${settlement.message}`;
+        : settlement.status === "unknown"
+          ? "Prompt delivery outcome is unknown. It will not be resent automatically."
+          : `Prompt not sent. ${settlement.message}`;
     updatePromptControls();
     editor.focus();
   }
@@ -325,6 +353,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
       break;
     case "prompt.accepted":
     case "prompt.rejected":
+    case "prompt.unknown":
       handlePromptAcknowledgement(message);
       break;
   }
@@ -340,6 +369,20 @@ stopButton.addEventListener("click", () => {
   postForSelectedSession("session.stop");
 });
 sendButton.addEventListener("click", submitPrompt);
+const postRecoveryAction = (
+  type: "prompt.recovery.assume-delivered" | "prompt.recovery.retry",
+): void => {
+  const issue = activeState?.recoveryIssue;
+  if (issue === null || issue === undefined || issue.sessionId !== selectedSessionId()) return;
+  vscode.postMessage({ type, requestId: issue.requestId, sessionId: issue.sessionId });
+};
+
+assumeDeliveredButton.addEventListener("click", () => {
+  postRecoveryAction("prompt.recovery.assume-delivered");
+});
+retryPromptButton.addEventListener("click", () => {
+  postRecoveryAction("prompt.recovery.retry");
+});
 
 window.addEventListener("beforeunload", () => {
   resizeObserver.disconnect();

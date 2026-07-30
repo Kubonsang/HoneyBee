@@ -32,6 +32,7 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: submitted.requestId,
       sessionId: submitted.sessionId,
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -70,6 +71,7 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-2",
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -91,6 +93,7 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "old-request",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "cleared",
         warnings: [],
@@ -101,6 +104,7 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "current-request",
       sessionId: "session-1",
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -111,6 +115,7 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "current-request",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "cleared",
         warnings: [],
@@ -125,6 +130,7 @@ describe("PromptDeliveryTracker", () => {
       type: "prompt.accepted",
       requestId: "request-1",
       sessionId: "session-1",
+      attemptPersistence: "stored",
       receiptPersistence: "stored",
       draftCleanup: "cleared",
       warnings: [],
@@ -139,6 +145,7 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "request-1",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "warning",
         draftCleanup: "cleared",
         warnings: ["receipt-save-failed"],
@@ -149,10 +156,26 @@ describe("PromptDeliveryTracker", () => {
         type: "prompt.accepted",
         requestId: "request-2",
         sessionId: "session-1",
+        attemptPersistence: "stored",
         receiptPersistence: "stored",
         draftCleanup: "pending",
         warnings: ["draft-delete-failed"],
       }),
     ).toBe("Prompt delivered to the Runtime. Draft cleanup will retry after restart.");
+  });
+  it("settles unknown without clearing submitted content", () => {
+    const tracker = new PromptDeliveryTracker();
+    const submitted = prompt("request-unknown");
+    tracker.begin(submitted);
+    const unknown = tracker.settle({
+      type: "prompt.unknown",
+      requestId: submitted.requestId,
+      sessionId: submitted.sessionId,
+      message: "Response not observed.",
+      warnings: [],
+    });
+    expect(unknown.status).toBe("unknown");
+    expect(reconcileDraftAfterSettlement(submitted.content, unknown)).toBe(submitted.content);
+    expect(tracker.isPending(submitted.sessionId)).toBe(false);
   });
 });
