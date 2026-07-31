@@ -356,6 +356,22 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
           ? {}
           : { terminationReason: run.terminationReason }),
       })),
+      consoleRunNavigation: {
+        ...(consoleService.state.activeRun === null
+          ? {}
+          : { activeRunId: consoleService.state.activeRun.runId }),
+        ...(consoleService.state.viewedRun === null
+          ? {}
+          : { viewedRunId: consoleService.state.viewedRun.runId }),
+        followLive: consoleService.state.followLive,
+        availableRuns: consoleService.state.availableRuns.map((run) => ({
+          runId: run.runId,
+          replayState: run.replayState,
+          active: run.active,
+          viewed: run.viewed,
+          logAvailable: run.logAvailable,
+        })),
+      },
     },
   };
 };

@@ -13,6 +13,7 @@ interface MutableRunOutputBuffer {
   byteLength: number;
   lastSeq: number;
   truncatedBytes: number;
+  sequenceGap: boolean;
   terminal: boolean;
   finalSeq: number | undefined;
   lastAccessedAt: number;
@@ -25,6 +26,7 @@ export interface RunOutputSnapshot {
   readonly firstSeq: number;
   readonly lastSeq: number;
   readonly truncatedBytes: number;
+  readonly sequenceGap: boolean;
   readonly terminal: boolean;
   readonly finalSeq?: number;
 }
@@ -118,6 +120,7 @@ export class RunOutputBufferStore {
       byteLength: 0,
       lastSeq: 0,
       truncatedBytes: 0,
+      sequenceGap: false,
       terminal: false,
       finalSeq: undefined,
       lastAccessedAt: this.#now(),
@@ -144,6 +147,7 @@ export class RunOutputBufferStore {
     }
     const expectedSeq = buffer.lastSeq + 1;
     const gap = seq !== expectedSeq;
+    if (gap) buffer.sequenceGap = true;
     const bytes = utf8Bytes(data);
     if (bytes > 0) {
       buffer.chunks.push({ seq, data, bytes });
@@ -181,6 +185,14 @@ export class RunOutputBufferStore {
     if (buffer === undefined || buffer.sessionId !== sessionId) return undefined;
     buffer.lastAccessedAt = this.#now();
     return this.#snapshot(buffer);
+  }
+
+  /** Reads replay availability without changing retention recency. */
+  public inspect(sessionId: SessionId, runId: RunId): RunOutputSnapshot | undefined {
+    const buffer = this.#buffers.get(runId);
+    return buffer === undefined || buffer.sessionId !== sessionId
+      ? undefined
+      : this.#snapshot(buffer);
   }
 
   public has(runId: RunId): boolean {
@@ -257,6 +269,7 @@ export class RunOutputBufferStore {
       firstSeq: buffer.chunks[0]?.seq ?? 0,
       lastSeq: buffer.lastSeq,
       truncatedBytes: buffer.truncatedBytes,
+      sequenceGap: buffer.sequenceGap,
       terminal: buffer.terminal,
       ...(buffer.finalSeq === undefined ? {} : { finalSeq: buffer.finalSeq }),
     };

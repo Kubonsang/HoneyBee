@@ -144,6 +144,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
         releaseRuntime = resolve;
       });
     const { selected, service } = createService(drafts, runtime);
+    await service.select(selected.id);
 
     const delivery = service.sendPrompt("request-success", selected.id, "exact content");
     await vi.waitFor(() => expect(runtime.inputs).toHaveLength(1));
@@ -168,6 +169,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
       message: "Session stopped.",
     });
     const { selected, service } = createService(drafts, runtime);
+    await service.select(selected.id);
 
     await expect(
       service.sendPrompt("request-rejected", selected.id, "retry this"),
@@ -207,6 +209,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     });
     expect(runtime.inputs).toHaveLength(1);
     runtime.sendInputImplementation = async () => ({ status: "accepted" });
+    await service.select(other.id);
     await expect(
       service.sendPrompt("other-request", other.id, "other Session works"),
     ).resolves.toMatchObject({
@@ -220,6 +223,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     const drafts = new DeleteFailingDraftRepository();
     const runtime = new PromptRuntimeClient();
     const { selected, service } = createService(drafts, runtime);
+    await service.select(selected.id);
 
     await expect(
       service.sendPrompt("request-cleanup", selected.id, "delivered once"),
@@ -237,6 +241,7 @@ describe("ConsoleApplicationService Prompt delivery", () => {
     const drafts = new InMemoryDraftRepository();
     const runtime = new PromptRuntimeClient();
     const { selected, service } = createService(drafts, runtime);
+    await service.select(selected.id);
 
     await expect(service.sendPrompt("request-empty", selected.id, "  \n ")).resolves.toEqual({
       status: "rejected",

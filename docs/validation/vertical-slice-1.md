@@ -308,6 +308,39 @@ Terminal text, raw ANSI, xterm state, Vim/Neovim screen contents, scroll/selecti
 
 A human-observable Extension Development Host must run Vim in Session A and Echo Fixture in Session B, switch A/B at least 20 times, and confirm A's live alternate-screen, cursor, selection, and scroll position remain unchanged. It must then end A Run 1, start A Run 2, and confirm a fresh normal terminal. Hide/show, side-bar and window resize, terminal versus Monaco paste, Korean IME composition/focus, and installed Neovim remain manual. Reload Window must be evaluated only as bounded replay; it is not a byte-perfect emulator-state guarantee.
 
+## Accessible retained Run navigation (PR #6)
+
+### Active, viewed, and follow-live meaning
+
+Console protocol v7 replaces the ambiguous `selectedRun` projection with separate `activeRun`, `viewedRun`, `availableRuns`, and `followLive` fields. `SessionRunRepository` owns Run metadata; `RunOutputBufferStore` owns transcript/truncation/gap facts; `TerminalRunRegistry` owns live surface knowledge; and the Extension alone resolves a Runtime-origin log path. These lifetimes are not collapsed into one availability boolean.
+
+The labelled native **Terminal run** selector displays at most 50 recent metadata records, always retaining the active and viewed Runs. It does not eagerly create terminals. Selecting an archived Run performs zero Runtime calls and zero repository mutations. It disables Prompt send, terminal input/resize, interrupt, and stop. A live Run elsewhere is announced with **Return to live**; choosing it restores follow-live and interactivity. Session switching defaults to active, otherwise latest, while an explicit archived choice is respected in Extension memory.
+
+### Explicit replay quality
+
+The Console distinguishes live, retained-complete raw replay, retained-truncated replay, sequence gap, surface-only, and metadata-only states. Truncation reports evicted UTF-8 byte count; sequence gaps state that missing events cannot be reconstructed; metadata-only Runs display an unavailable-screen placeholder. A surviving xterm surface is not unnecessarily described as a truncated reconstruction when its transcript alone was evicted.
+
+Raw ANSI replay remains best effort, not a serialized emulator snapshot. Polite live regions announce only concise Run/replay state and never terminal content. Text and semantic controls supplement color. Native selector keyboard behavior, explicit labels, buttons, VS Code theme variables, and forced-colors rules provide the automated accessibility baseline.
+
+### Open Log authority
+
+The Webview sends only `sessionId + runId`. The Extension revalidates Session ownership, resolves only the Runtime-origin path correlated to that exact Run in the current Runtime generation, rejects directories, checks existence, and requires confirmation above 10 MiB. Only `logAvailable` enters Webview state. Paths and log contents are absent from Webview state and identifier-only diagnostics.
+
+### Automated evidence added for PR #6
+
+- Strict protocol tests cover v7, Run select/follow/open-log only-key validation, required non-empty identities, state timestamps/replay enums, unique Runs, and consistent active/viewed projections.
+- Pure projection tests cover active-first/recent stable ordering, replay mapping, duplicate rejection, the 50-item policy, and active/viewed inclusion.
+- Reducer and Application tests cover archived read-only controls, Prompt and terminal mutation blocking, idempotent selection, cross-Session rejection, Return to live, Runtime call counts, and authoritative log lookup including a Korean/spaced path.
+- Accessibility/presentation tests cover the native labelled selector, semantic buttons, polite status regions, color-independent language, human termination reasons, and distinct complete/truncated/gap/surface-only/metadata-only text.
+- PR #5 Registry tests continue to cover lazy independent surfaces, A/B/A reuse, alternate-buffer isolation, stale input/resize, gap snapshots, bounded eviction, and exactly-once disposal.
+- Existing Prompt durability, unknown recovery, Runtime lifecycle, packaged Runtime, Windows ConPTY, Korean-path, interrupt, immediate-exit, and Git-bundled Vim suites remain regression gates.
+
+The selector does not create a full Run history product. Metadata is bounded separately from the existing 12-transcript and 8-surface limits. Terminal bodies remain memory-only. This PR closes feature expansion for the Session Console Vertical Slice.
+
+### Manual selector and accessibility validation still required
+
+A human-observable Windows 11 Extension Development Host must create completed, failed, stopped, interrupted, and active Runs; operate the selector using Tab/Arrow/Enter; inspect archived/live transitions; and verify Narrator announcements do not repeat terminal output. Light, High Contrast, 200% zoom, retained Vim, deliberately truncated/gapped/evicted/metadata-only screens, missing/large/Korean-path logs, clipboard behavior, Korean IME focus, and installed Neovim remain manual. Automated tests are not reported as substitutes.
+
 ## Manual GUI, IME, and Neovim checklist
 
 Run these on a Windows 11 workstation with a human-observable Extension Development Host. Record screenshots or a short capture and the exact VS Code/Neovim versions. Git-bundled Vim already has automated ConPTY coverage.

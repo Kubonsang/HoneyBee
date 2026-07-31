@@ -24,6 +24,11 @@ import {
   type TerminalRunInitial,
 } from "@honeybee/ui-shared";
 
+import {
+  consoleRunSummary,
+  projectConsoleRuns,
+  type ConsoleRunProjection,
+} from "./console-run-navigation.js";
 import { ApplicationError } from "./errors.js";
 import { deliverPrompt, type PromptDeliveryResult } from "./prompt-delivery.js";
 import type { PromptRecoveryIssueRecord } from "./prompt-delivery-attempt-reconciler.js";
@@ -53,6 +58,11 @@ interface TerminalSize {
   readonly rows: number;
 }
 
+interface RunViewPreference {
+  readonly viewedRunId: RunId | undefined;
+  readonly followLive: boolean;
+}
+
 const summary = (session: AgentSession): ConsoleSessionSummary => ({
   id: session.id,
   title: session.title,
@@ -61,31 +71,6 @@ const summary = (session: AgentSession): ConsoleSessionSummary => ({
   toolProfile: session.toolProfileId ?? "Default",
   status: session.status,
   tags: session.tags,
-});
-
-const runPhase = (run: SessionRunRecord): ConsoleRunSummary["phase"] => {
-  switch (run.phase) {
-    case "starting":
-    case "running":
-    case "waiting-for-input":
-    case "stopping":
-      return run.phase;
-    case "interrupted":
-      return "interrupted";
-    case "stopped":
-    case "completed":
-    case "failed":
-      return "ended";
-  }
-};
-
-const runSummary = (run: SessionRunRecord): ConsoleRunSummary => ({
-  runId: run.runId,
-  sessionId: run.sessionId,
-  phase: runPhase(run),
-  interactive: run.phase === "running" || run.phase === "waiting-for-input",
-  startedAt: run.startedAt,
-  ...(run.terminationReason === undefined ? {} : { terminationReason: run.terminationReason }),
 });
 
 const statusForRun = (run: SessionRunRecord): SessionStatus => {
@@ -138,6 +123,7 @@ export class ConsoleApplicationService {
   readonly #listeners = new Set<(message: ExtensionToConsoleMessage) => void>();
   readonly #outputs = new RunOutputBufferStore();
   readonly #terminalSizes = new Map<RunId, TerminalSize>();
+  readonly #runViews = new Map<SessionId, RunViewPreference>();
   readonly #runtimeSubscription: { dispose(): void };
   readonly #selectionSubscription: { dispose(): void };
   readonly #recovery: PromptRecoveryService;
@@ -150,7 +136,7 @@ export class ConsoleApplicationService {
     private readonly drafts: DraftRepository,
     private readonly attempts: PromptDeliveryAttemptRepository,
     private readonly receipts: PromptDeliveryReceiptRepository,
-    runs: SessionRunRepository,
+    private readonly runs: SessionRunRepository,
     selection: SessionSelectionService,
     runtime: RuntimeClientPort,
     private readonly profiles: AgentProfileResolverPort,
@@ -160,7 +146,14 @@ export class ConsoleApplicationService {
     diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void = () => undefined,
   ) {
     this.#diagnostic = diagnostic;
-    this.#runController = new SessionRunController(sessions, runs, runtime, clock, ids, diagnostic);
+    this.#runController = new SessionRunController(
+      sessions,
+      this.runs,
+      runtime,
+      clock,
+      ids,
+      diagnostic,
+    );
     this.#recovery = new PromptRecoveryService({
       attempts,
       drafts,
@@ -201,7 +194,7 @@ export class ConsoleApplicationService {
 
   public replayState(): void {
     this.emit({ type: "console.state", state: this.#state });
-    this.emitSelectedRunOpen();
+    this.openViewedRun();
   }
 
   public async select(sessionId: SessionId | undefined): Promise<void> {
@@ -211,17 +204,21 @@ export class ConsoleApplicationService {
         reduceConsoleViewState(this.#state, {
           type: "session.selected",
           session: null,
-          run: null,
+          activeRun: null,
+          viewedRun: null,
+          availableRuns: [],
+          followLive: false,
           draft: "",
           recoveryIssue: null,
         }),
       );
       return;
     }
-    const [sessionResult, draftResult, run] = await Promise.all([
+    const [sessionResult, draftResult, runs, activeRun] = await Promise.all([
       this.sessions.getById(sessionId),
       this.drafts.getBySessionId(sessionId),
-      this.#runController.selectedRunForSession(sessionId),
+      this.#runController.listRunsForSession(sessionId),
+      this.#runController.activeRunForSession(sessionId),
     ]);
     if (!sessionResult.ok) {
       throw new ApplicationError(
@@ -238,23 +235,95 @@ export class ConsoleApplicationService {
       );
     }
 
-    const selectedRun = run === undefined ? null : runSummary(run);
+    const preference = this.resolveRunView(sessionId, runs, activeRun);
+    const projection = this.projectRuns(runs, activeRun, preference.viewedRunId);
+    this.#runViews.set(sessionId, preference);
     this.setState(
       reduceConsoleViewState(this.#state, {
         type: "session.selected",
         session: summary(sessionResult.value),
-        run: selectedRun,
+        ...projection,
+        followLive: preference.followLive,
         draft: draftResult.value?.content ?? "",
         recoveryIssue: recoveryView(this.#recovery.issueFor(sessionId)),
       }),
     );
-    if (run === undefined) {
-      this.handleRetention(this.#outputs.setSelected(undefined));
-    } else {
-      this.openRun(run);
+    this.openViewedRun();
+  }
+  public async selectViewedRun(sessionId: SessionId, runId: RunId): Promise<void> {
+    this.#runController.assertMutationAllowed();
+    this.assertSelectedSession(sessionId);
+    const [run, activeRun, runs] = await Promise.all([
+      this.#runController.getRun(runId),
+      this.#runController.activeRunForSession(sessionId),
+      this.#runController.listRunsForSession(sessionId),
+    ]);
+    if (run === undefined || run.sessionId !== sessionId) {
+      this.#diagnostic("terminal-run-wrong-session", sessionId, runId);
+      throw new ApplicationError(
+        "terminal-run-wrong-session",
+        "The selected Run does not belong to the current Session.",
+      );
     }
+    const followLive = activeRun?.runId === runId;
+    if (
+      this.#state.viewedRun?.runId === runId &&
+      this.#state.viewedRun.sessionId === sessionId &&
+      this.#state.followLive === followLive
+    ) {
+      return;
+    }
+    this.#runViews.set(sessionId, { viewedRunId: runId, followLive });
+    const projection = this.projectRuns(runs, activeRun, runId);
+    this.setState(
+      reduceConsoleViewState(this.#state, {
+        type: "session.runs.changed",
+        status: this.#state.selectedSession?.status ?? statusForRun(run),
+        ...projection,
+        followLive,
+        message: followLive ? "Viewing the live Run." : "Viewing an archived Run. Read only.",
+      }),
+    );
+    this.openViewedRun();
   }
 
+  public async followActiveRun(sessionId: SessionId): Promise<void> {
+    this.#runController.assertMutationAllowed();
+    this.assertSelectedSession(sessionId);
+    const [activeRun, runs] = await Promise.all([
+      this.#runController.activeRunForSession(sessionId),
+      this.#runController.listRunsForSession(sessionId),
+    ]);
+    if (activeRun === undefined) {
+      throw new ApplicationError(
+        "terminal-run-live-unavailable",
+        "This Session has no active Run to follow.",
+      );
+    }
+    this.#runViews.set(sessionId, { viewedRunId: activeRun.runId, followLive: true });
+    this.setState(
+      reduceConsoleViewState(this.#state, {
+        type: "session.runs.changed",
+        status: this.#state.selectedSession?.status ?? statusForRun(activeRun),
+        ...this.projectRuns(runs, activeRun, activeRun.runId),
+        followLive: true,
+        message: "Returned to the live Run.",
+      }),
+    );
+    this.openViewedRun();
+  }
+
+  public async resolveRunLogPath(sessionId: SessionId, runId: RunId): Promise<string> {
+    this.assertSelectedSession(sessionId);
+    const path = await this.#runController.logFilePathForRun(sessionId, runId);
+    if (path === undefined) {
+      throw new ApplicationError(
+        "terminal-run-log-unavailable",
+        "The recorded log for this Run is not available in the current Runtime generation.",
+      );
+    }
+    return path;
+  }
   public async saveDraft(sessionId: SessionId, content: string): Promise<void> {
     const draft = SessionDraftSchema.parse({
       sessionId,
@@ -285,64 +354,61 @@ export class ConsoleApplicationService {
 
   public async start(sessionId: SessionId): Promise<void> {
     this.#runController.assertMutationAllowed();
+    this.assertSelectedSession(sessionId);
     const session = await this.getSession(sessionId);
     const profile = await this.profiles.resolve(
       session.agentProfileId,
       session.toolProfileId,
       session.workspaceId,
     );
-    const previousRunId = this.selectedRunId(sessionId);
+    const previousRunId = this.viewedRunId(sessionId);
     const size =
       previousRunId === undefined
         ? { columns: 80, rows: 24 }
         : (this.#terminalSizes.get(previousRunId) ?? { columns: 80, rows: 24 });
-    if (this.#state.selectedSession?.id === sessionId) {
-      this.setState(
-        reduceConsoleViewState(this.#state, {
-          type: "session.status",
-          status: "starting",
-          run: this.#state.selectedRun,
-          message: "Starting agent...",
-        }),
-      );
-    }
     try {
       const runId = await this.#runController.start(session, profile, size);
       const run = await this.#runController.getRun(runId);
       if (run !== undefined && this.#state.selectedSession?.id === sessionId) {
-        this.setState(
-          reduceConsoleViewState(this.#state, {
-            type: "session.status",
-            status: statusForRun(run),
-            run: runSummary(run),
-            message: "Agent Run started.",
-          }),
-        );
-        this.openRun(run);
+        this.#outputs.open(sessionId, runId);
+        this.#runViews.set(sessionId, { viewedRunId: runId, followLive: true });
+        await this.refreshRunProjection(sessionId, statusForRun(run), "Agent Run started.");
       }
     } catch (error) {
       if (this.#state.selectedSession?.id === sessionId) {
-        const failedRun = await this.#runController.selectedRunForSession(sessionId);
-        this.setState(
-          reduceConsoleViewState(this.#state, {
-            type: "session.status",
-            status: "failed",
-            run: failedRun === undefined ? null : runSummary(failedRun),
-            message: error instanceof Error ? error.message : String(error),
-          }),
+        const currentSession = await this.getSession(sessionId);
+        await this.refreshRunProjection(
+          sessionId,
+          currentSession.status,
+          error instanceof Error ? error.message : String(error),
         );
-        if (failedRun !== undefined) this.openRun(failedRun);
       }
       throw error;
     }
   }
-
   public async sendPrompt(
     requestId: string,
     sessionId: SessionId,
     content: string,
   ): Promise<PromptDeliveryResult> {
     this.#runController.assertMutationAllowed();
+    const dependencies = {
+      drafts: this.drafts,
+      attempts: this.attempts,
+      receipts: this.receipts,
+      runtime: this.#runController,
+      clock: this.clock,
+    };
+    if (content.trim().length === 0) {
+      return deliverPrompt(dependencies, requestId, sessionId, content);
+    }
+    if (!this.isViewingActiveRun(sessionId)) {
+      return {
+        status: "rejected",
+        code: "runtime-input-rejected",
+        message: "Return to the live Run before sending a Prompt.",
+      };
+    }
     if (this.#recovery.issueFor(sessionId) !== undefined) {
       return {
         status: "rejected",
@@ -350,18 +416,7 @@ export class ConsoleApplicationService {
         message: "Resolve the unknown Prompt delivery outcome before submitting again.",
       };
     }
-    const result = await deliverPrompt(
-      {
-        drafts: this.drafts,
-        attempts: this.attempts,
-        receipts: this.receipts,
-        runtime: this.#runController,
-        clock: this.clock,
-      },
-      requestId,
-      sessionId,
-      content,
-    );
+    const result = await deliverPrompt(dependencies, requestId, sessionId, content);
     if (result.status === "unknown") await this.#recovery.registerUnknown(requestId, sessionId);
     if (this.#state.selectedSession?.id === sessionId) {
       const draft = result.status === "accepted" ? "" : this.#state.draft;
@@ -408,7 +463,7 @@ export class ConsoleApplicationService {
   }
 
   public async sendTerminalInput(sessionId: SessionId, runId: RunId, data: string): Promise<void> {
-    this.assertSelectedRun(sessionId, runId, true, "terminal-run-stale-input");
+    this.assertViewingActiveRun(sessionId, runId, true, "terminal-run-stale-input");
     const outcome = await this.#runController.sendTerminalInput(sessionId, runId, data);
     if (outcome.status !== "accepted") {
       throw new ApplicationError(
@@ -424,8 +479,8 @@ export class ConsoleApplicationService {
     columns: number,
     rows: number,
   ): Promise<void> {
-    this.assertSelectedRun(sessionId, runId, false, "terminal-run-stale-resize");
-    const selected = this.#state.selectedRun;
+    this.assertViewingActiveRun(sessionId, runId, false, "terminal-run-stale-resize");
+    const selected = this.#state.viewedRun;
     if (
       selected === null ||
       (selected.phase !== "starting" &&
@@ -456,7 +511,7 @@ export class ConsoleApplicationService {
       type: "terminal.run.snapshot",
       sessionId,
       runId,
-      status: terminalStatus(runSummary(run)),
+      status: terminalStatus(consoleRunSummary(run, this.#state.activeRun?.runId === runId)),
       data: snapshot.data,
       firstSeq: snapshot.firstSeq,
       lastSeq: snapshot.lastSeq,
@@ -465,23 +520,16 @@ export class ConsoleApplicationService {
   }
 
   public async interrupt(sessionId: SessionId, runId: RunId): Promise<void> {
-    this.assertSelectedRun(sessionId, runId, true, "terminal-run-stale-input");
+    this.assertViewingActiveRun(sessionId, runId, true, "terminal-run-stale-input");
     await this.#runController.interrupt(sessionId, runId);
   }
 
   public async stop(sessionId: SessionId, runId: RunId): Promise<void> {
-    this.assertSelectedRun(sessionId, runId, false, "terminal-run-stale-input");
+    this.assertViewingActiveRun(sessionId, runId, false, "terminal-run-stale-input");
     await this.#runController.stop(sessionId, runId);
     const run = await this.#runController.getRun(runId);
-    if (run !== undefined && this.isSelectedRun(sessionId, runId)) {
-      this.setState(
-        reduceConsoleViewState(this.#state, {
-          type: "session.status",
-          status: statusForRun(run),
-          run: runSummary(run),
-          message: "Stopping agent...",
-        }),
-      );
+    if (run !== undefined && this.isViewingActiveRun(sessionId, runId)) {
+      await this.refreshRunProjection(sessionId, statusForRun(run), "Stopping agent...");
     }
   }
 
@@ -569,6 +617,13 @@ export class ConsoleApplicationService {
         }
         if (appended.gap) {
           this.#diagnostic("terminal-run-sequence-gap", event.sessionId, event.runId);
+          if (this.#state.selectedSession?.id === event.sessionId) {
+            void this.refreshRunProjection(
+              event.sessionId,
+              this.#state.selectedSession.status,
+              "A terminal output sequence gap was detected.",
+            ).catch(() => undefined);
+          }
         }
         this.handleRetention(this.#outputs.enforceRetention());
         this.emit({
@@ -617,15 +672,14 @@ export class ConsoleApplicationService {
         });
       }
       if (this.#state.selectedSession?.id === event.sessionId) {
-        this.setState(
-          reduceConsoleViewState(this.#state, {
-            type: "session.status",
-            status: applied.status,
-            run: runSummary(applied.run),
-            message: applied.message,
-          }),
-        );
-        this.openRun(applied.run);
+        const preference = this.#runViews.get(event.sessionId);
+        if (preference?.followLive !== false) {
+          this.#runViews.set(event.sessionId, {
+            viewedRunId: event.runId,
+            followLive: true,
+          });
+        }
+        await this.refreshRunProjection(event.sessionId, applied.status, applied.message);
       }
     } catch (error) {
       this.setState(
@@ -638,25 +692,20 @@ export class ConsoleApplicationService {
     }
   }
 
-  private openRun(run: SessionRunRecord): void {
-    const snapshot = this.#outputs.open(run.sessionId, run.runId);
-    this.handleRetention(this.#outputs.setSelected(run.runId));
-    this.emit({
-      type: "terminal.run.open",
-      sessionId: run.sessionId,
-      runId: run.runId,
-      status: terminalStatus(runSummary(run)),
-      initial: initialReplay(snapshot),
-    });
-  }
-
-  private emitSelectedRunOpen(): void {
-    const run = this.#state.selectedRun;
-    if (run === null) return;
+  private openViewedRun(): void {
+    const run = this.#state.viewedRun;
+    if (run === null) {
+      this.handleRetention(this.#outputs.setSelected(undefined));
+      return;
+    }
     const sessionId = this.parseSessionId(run.sessionId);
     const runId = this.parseRunId(run.runId);
-    const snapshot = this.#outputs.open(sessionId, runId);
+    let snapshot = this.#outputs.snapshot(sessionId, runId);
+    if (snapshot === undefined && this.#state.activeRun?.runId === run.runId) {
+      snapshot = this.#outputs.open(sessionId, runId);
+    }
     this.handleRetention(this.#outputs.setSelected(runId));
+    if (snapshot === undefined) return;
     this.emit({
       type: "terminal.run.open",
       sessionId,
@@ -666,6 +715,65 @@ export class ConsoleApplicationService {
     });
   }
 
+  private async refreshRunProjection(
+    sessionId: SessionId,
+    status: SessionStatus,
+    message: string,
+  ): Promise<void> {
+    if (this.#state.selectedSession?.id !== sessionId) return;
+    const [runs, activeRun] = await Promise.all([
+      this.#runController.listRunsForSession(sessionId),
+      this.#runController.activeRunForSession(sessionId),
+    ]);
+    const preference = this.resolveRunView(sessionId, runs, activeRun);
+    this.#runViews.set(sessionId, preference);
+    this.setState(
+      reduceConsoleViewState(this.#state, {
+        type: "session.runs.changed",
+        status,
+        ...this.projectRuns(runs, activeRun, preference.viewedRunId),
+        followLive: preference.followLive,
+        message,
+      }),
+    );
+    this.openViewedRun();
+  }
+
+  private projectRuns(
+    runs: readonly SessionRunRecord[],
+    activeRun: SessionRunRecord | undefined,
+    viewedRunId: RunId | undefined,
+  ): ConsoleRunProjection {
+    return projectConsoleRuns(runs, activeRun?.runId, viewedRunId, (run) => ({
+      transcript: this.#outputs.inspect(run.sessionId, run.runId),
+      logAvailable: this.#runController.hasLogFilePath(run.runId),
+    }));
+  }
+
+  private resolveRunView(
+    sessionId: SessionId,
+    runs: readonly SessionRunRecord[],
+    activeRun: SessionRunRecord | undefined,
+  ): RunViewPreference {
+    const existing = this.#runViews.get(sessionId);
+    if (existing?.followLive === true && activeRun !== undefined) {
+      return { viewedRunId: activeRun.runId, followLive: true };
+    }
+    if (
+      existing?.viewedRunId !== undefined &&
+      runs.some((run) => run.runId === existing.viewedRunId)
+    ) {
+      return existing;
+    }
+    if (activeRun !== undefined) {
+      return { viewedRunId: activeRun.runId, followLive: true };
+    }
+    const latest = [...runs].sort(
+      (left, right) =>
+        right.startedAt.localeCompare(left.startedAt) || left.runId.localeCompare(right.runId),
+    )[0];
+    return { viewedRunId: latest?.runId, followLive: existing?.followLive ?? true };
+  }
   private handleRetention(result: RunOutputRetentionResult): void {
     for (const runId of result.evictedRunIds) {
       this.#diagnostic("terminal-run-surface-evicted", undefined, runId);
@@ -675,36 +783,48 @@ export class ConsoleApplicationService {
     }
   }
 
-  private assertSelectedRun(
+  private assertSelectedSession(sessionId: SessionId): void {
+    if (this.#state.selectedSession?.id !== sessionId) {
+      throw new ApplicationError(
+        "terminal-run-wrong-session",
+        "The terminal action belongs to a different selected Session.",
+      );
+    }
+  }
+
+  private assertViewingActiveRun(
     sessionId: SessionId,
     runId: RunId,
     requireInteractive: boolean,
     code: string,
   ): void {
     this.#runController.assertMutationAllowed();
-    const selected = this.#state.selectedRun;
+    const active = this.#state.activeRun;
     if (
-      !this.isSelectedRun(sessionId, runId) ||
-      (requireInteractive && selected?.interactive !== true)
+      !this.isViewingActiveRun(sessionId, runId) ||
+      (requireInteractive && active?.interactive !== true)
     ) {
       this.#diagnostic(code, sessionId, runId);
-      throw new ApplicationError(code, "The terminal action belongs to a stale or read-only Run.");
+      throw new ApplicationError(code, "Return to the live Run before using Runtime controls.");
     }
   }
 
-  private isSelectedRun(sessionId: SessionId, runId: RunId): boolean {
+  private isViewingActiveRun(sessionId: SessionId, runId?: RunId): boolean {
+    const active = this.#state.activeRun;
+    const viewed = this.#state.viewedRun;
     return (
       this.#state.selectedSession?.id === sessionId &&
-      this.#state.selectedRun?.sessionId === sessionId &&
-      this.#state.selectedRun.runId === runId
+      active?.sessionId === sessionId &&
+      viewed?.sessionId === sessionId &&
+      active.runId === viewed.runId &&
+      (runId === undefined || active.runId === runId)
     );
   }
 
-  private selectedRunId(sessionId: SessionId): RunId | undefined {
-    const run = this.#state.selectedRun;
+  private viewedRunId(sessionId: SessionId): RunId | undefined {
+    const run = this.#state.viewedRun;
     return run?.sessionId === sessionId ? this.parseRunId(run.runId) : undefined;
   }
-
   private async refreshRecoveryView(sessionId: SessionId, message: string): Promise<void> {
     if (this.#state.selectedSession?.id !== sessionId) return;
     const draftResult = await this.drafts.getBySessionId(sessionId);

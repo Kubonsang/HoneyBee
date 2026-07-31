@@ -16,13 +16,36 @@ const state = {
     status: "running" as const,
     tags: [],
   },
-  selectedRun: {
+  activeRun: {
     runId: "run-1",
     sessionId: "session-1",
     phase: "running" as const,
     interactive: true,
     startedAt: "2026-07-31T10:00:00.000Z",
   },
+  viewedRun: {
+    runId: "run-1",
+    sessionId: "session-1",
+    phase: "running" as const,
+    interactive: true,
+    startedAt: "2026-07-31T10:00:00.000Z",
+  },
+  availableRuns: [
+    {
+      runId: "run-1",
+      sessionId: "session-1",
+      phase: "running" as const,
+      interactive: true,
+      startedAt: "2026-07-31T10:00:00.000Z",
+      active: true,
+      viewed: true,
+      replayState: "live" as const,
+      truncatedBytes: 0,
+      sequenceGap: false,
+      logAvailable: true,
+    },
+  ],
+  followLive: true,
   draft: "",
   recoveryIssue: null,
   connectionStatus: "connected" as const,
@@ -34,14 +57,14 @@ const state = {
 };
 
 describe("Console message contracts", () => {
-  it("requires protocol v6 and rejects older ready messages", () => {
+  it("requires protocol v7 and rejects older ready messages", () => {
     expect(
       isConsoleToExtensionMessage({
         type: "webview.ready",
         version: CONSOLE_WEBVIEW_VERSION,
       }),
     ).toBe(true);
-    expect(isConsoleToExtensionMessage({ type: "webview.ready", version: 5 })).toBe(false);
+    expect(isConsoleToExtensionMessage({ type: "webview.ready", version: 6 })).toBe(false);
   });
 
   it("requires a request ID and non-empty content for prompt.send", () => {
@@ -205,16 +228,82 @@ describe("Console message contracts", () => {
     ).toBe(false);
   });
 
-  it("requires selected Run identity in Console state and rejects cross-Session projection", () => {
+  it("validates strict Run navigation actions", () => {
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.select",
+        sessionId: "session-1",
+        runId: "run-1",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.follow-active",
+        sessionId: "session-1",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.open-log",
+        sessionId: "session-1",
+        runId: "run-1",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.select",
+        sessionId: "session-1",
+        runId: "run-1",
+        path: "C:\\untrusted.log",
+      }),
+    ).toBe(false);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.follow-active",
+        sessionId: "",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires consistent active and viewed Run identity in Console state", () => {
     expect(isExtensionToConsoleMessage({ type: "console.state", state })).toBe(true);
-    const { selectedRun: _selectedRun, ...missingRun } = state;
+    const { viewedRun: _viewedRun, ...missingRun } = state;
     expect(isExtensionToConsoleMessage({ type: "console.state", state: missingRun })).toBe(false);
     expect(
       isExtensionToConsoleMessage({
         type: "console.state",
         state: {
           ...state,
-          selectedRun: { ...state.selectedRun, sessionId: "session-2" },
+          viewedRun: { ...state.viewedRun, sessionId: "session-2" },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "console.state",
+        state: {
+          ...state,
+          activeRun: { ...state.activeRun, phase: "starting", interactive: false },
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "console.state",
+        state: {
+          ...state,
+          availableRuns: [
+            { ...state.availableRuns[0], replayState: "retained-truncated", truncatedBytes: 0 },
+          ],
+        },
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "console.state",
+        state: {
+          ...state,
+          availableRuns: [{ ...state.availableRuns[0], startedAt: "not-a-date" }],
         },
       }),
     ).toBe(false);

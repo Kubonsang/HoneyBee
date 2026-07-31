@@ -75,6 +75,9 @@ export interface PromptDeliveryReceiptRepository {
 /** Durable storage boundary for correlated Agent Session Runs. */
 export interface SessionRunRepository {
   getByRunId(runId: RunId): Promise<Result<SessionRunRecord | undefined, RepositoryError>>;
+  listBySessionId(
+    sessionId: SessionId,
+  ): Promise<Result<readonly SessionRunRecord[], RepositoryError>>;
   getActiveBySessionId(
     sessionId: SessionId,
   ): Promise<Result<SessionRunRecord | undefined, RepositoryError>>;

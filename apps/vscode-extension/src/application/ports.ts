@@ -79,6 +79,7 @@ export type RuntimeClientEvent =
       readonly sequence: number;
       readonly status: SessionStatus;
       readonly message: string;
+      readonly logFilePath?: string;
       readonly reason?: SessionTerminationReason;
       readonly exitCode?: number;
     }

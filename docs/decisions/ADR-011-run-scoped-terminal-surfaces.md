@@ -2,6 +2,7 @@
 
 - Status: Accepted
 - Date: 2026-07-31
+- Navigation projection: Superseded by ADR-012; Run isolation and retention remain current
 
 ## Context
 
@@ -79,7 +80,7 @@ No terminal body, serialized emulator, command contents, Prompt, or clipboard da
 - Multiple retained xterm instances consume more memory than a singleton.
 - Evicted surfaces require raw replay and can lose exact TUI state after truncation.
 - Sequence detection identifies loss but cannot manufacture missing bytes.
-- Full Run history selection remains a later UI feature; the Console currently chooses the active Run, otherwise the latest terminal Run.
+- Retained Run navigation was subsequently implemented by ADR-012; a full unbounded history page remains outside the Console Vertical Slice.
 - Reload Window cannot preserve byte-perfect emulator state.
 - Windows ConPTY and PTY process cleanup limits from ADR-010 are unchanged.
 

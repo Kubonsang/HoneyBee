@@ -315,30 +315,30 @@ export const registerSessionCommands = (
     ),
     vscode.commands.registerCommand("honeyBee.console.start", () => {
       const selected = dependencies.selection.selectedSessionId;
-      if (selected !== undefined) {
+      if (selected !== undefined && dependencies.consoleService.state.canStart) {
         run(dependencies.consoleService.start(selected));
       }
     }),
     vscode.commands.registerCommand("honeyBee.console.interrupt", () => {
       const selected = dependencies.selection.selectedSessionId;
-      const selectedRun = dependencies.consoleService.state.selectedRun;
+      const viewedRun = dependencies.consoleService.state.viewedRun;
       if (
         selected !== undefined &&
-        selectedRun?.sessionId === selected &&
+        viewedRun?.sessionId === selected &&
         dependencies.consoleService.state.canInterrupt
       ) {
-        run(dependencies.consoleService.interrupt(selected, RunIdSchema.parse(selectedRun.runId)));
+        run(dependencies.consoleService.interrupt(selected, RunIdSchema.parse(viewedRun.runId)));
       }
     }),
     vscode.commands.registerCommand("honeyBee.console.stop", () => {
       const selected = dependencies.selection.selectedSessionId;
-      const selectedRun = dependencies.consoleService.state.selectedRun;
+      const viewedRun = dependencies.consoleService.state.viewedRun;
       if (
         selected !== undefined &&
-        selectedRun?.sessionId === selected &&
+        viewedRun?.sessionId === selected &&
         dependencies.consoleService.state.canStop
       ) {
-        run(dependencies.consoleService.stop(selected, RunIdSchema.parse(selectedRun.runId)));
+        run(dependencies.consoleService.stop(selected, RunIdSchema.parse(viewedRun.runId)));
       }
     }),
   );

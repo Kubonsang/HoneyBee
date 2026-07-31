@@ -36,6 +36,18 @@ export interface PromptRecoveryExtensionTestState {
     readonly phase: string;
     readonly terminationReason?: string;
   }[];
+  readonly consoleRunNavigation: {
+    readonly activeRunId?: string;
+    readonly viewedRunId?: string;
+    readonly followLive: boolean;
+    readonly availableRuns: readonly {
+      readonly runId: string;
+      readonly replayState: string;
+      readonly active: boolean;
+      readonly viewed: boolean;
+      readonly logAvailable: boolean;
+    }[];
+  };
 }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>

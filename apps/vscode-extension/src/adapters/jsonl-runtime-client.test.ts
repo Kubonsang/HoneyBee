@@ -175,6 +175,7 @@ describe("JsonlRuntimeClient", () => {
       sequence: 8,
       status: "running",
       message: "Agent is running.",
+      logFilePath: "C:\\logs\\session-1.log",
     });
   });
   it("returns accepted only after a correlated success response", async () => {

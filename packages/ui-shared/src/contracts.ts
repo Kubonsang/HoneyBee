@@ -1,4 +1,4 @@
-export const CONSOLE_WEBVIEW_VERSION = 6 as const;
+export const CONSOLE_WEBVIEW_VERSION = 7 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 export type ConsoleLifecycleState =
@@ -20,14 +20,34 @@ export interface ConsoleSessionSummary {
 export type ConsoleRunPhase =
   "starting" | "running" | "waiting-for-input" | "stopping" | "ended" | "interrupted";
 
-/** Run identity selected for the Console terminal surface. */
+/** Run identity projected for the active or currently viewed Console terminal. */
 export interface ConsoleRunSummary {
   readonly runId: string;
   readonly sessionId: string;
   readonly phase: ConsoleRunPhase;
   readonly interactive: boolean;
   readonly startedAt: string;
+  readonly endedAt?: string;
   readonly terminationReason?: string;
+  readonly exitCode?: number | null;
+}
+
+export type ConsoleRunReplayState =
+  | "live"
+  | "retained-complete"
+  | "retained-truncated"
+  | "sequence-gap"
+  | "surface-only"
+  | "metadata-only";
+
+/** Content-free Run metadata and replay availability shown in the retained Run selector. */
+export interface ConsoleRunListItem extends ConsoleRunSummary {
+  readonly active: boolean;
+  readonly viewed: boolean;
+  readonly replayState: ConsoleRunReplayState;
+  readonly truncatedBytes: number;
+  readonly sequenceGap: boolean;
+  readonly logAvailable: boolean;
 }
 
 /** Content-free recovery state for one unresolved Session delivery outcome. */
@@ -41,7 +61,10 @@ export interface PromptRecoveryIssue {
 
 export interface ConsoleViewState {
   readonly selectedSession: ConsoleSessionSummary | null;
-  readonly selectedRun: ConsoleRunSummary | null;
+  readonly activeRun: ConsoleRunSummary | null;
+  readonly viewedRun: ConsoleRunSummary | null;
+  readonly availableRuns: readonly ConsoleRunListItem[];
+  readonly followLive: boolean;
   readonly draft: string;
   readonly recoveryIssue: PromptRecoveryIssue | null;
   readonly connectionStatus: ConsoleConnectionStatus;
@@ -188,6 +211,12 @@ export type ConsoleToExtensionMessage =
       readonly runId: string;
       readonly afterSeq?: number;
     }
+  | {
+      readonly type: "terminal.run.select" | "terminal.run.open-log";
+      readonly sessionId: string;
+      readonly runId: string;
+    }
+  | { readonly type: "terminal.run.follow-active"; readonly sessionId: string }
   | { readonly type: "session.start"; readonly sessionId: string }
   | {
       readonly type: "session.interrupt" | "session.stop";
@@ -255,6 +284,15 @@ const consoleRunPhases: readonly ConsoleRunPhase[] = [
   "interrupted",
 ];
 
+const consoleRunReplayStates: readonly ConsoleRunReplayState[] = [
+  "live",
+  "retained-complete",
+  "retained-truncated",
+  "sequence-gap",
+  "surface-only",
+  "metadata-only",
+];
+
 const promptDeliveryWarningCodes: readonly PromptDeliveryWarningCode[] = [
   "attempt-runtime-accepted-save-failed",
   "attempt-unknown-save-failed",
@@ -288,24 +326,89 @@ const isConsoleSessionSummary = (value: unknown): value is ConsoleSessionSummary
   Array.isArray(value.tags) &&
   value.tags.every((tag) => typeof tag === "string");
 
-const isConsoleRunSummary = (value: unknown): value is ConsoleRunSummary =>
-  isRecord(value) &&
-  hasOnlyKeys(value, [
-    "runId",
-    "sessionId",
-    "phase",
-    "interactive",
-    "startedAt",
-    "terminationReason",
-  ]) &&
+const hasConsoleRunSummaryFields = (
+  value: Readonly<Record<string, unknown>>,
+): value is Readonly<Record<string, unknown>> & ConsoleRunSummary =>
   hasRunIdentity(value) &&
   typeof value.phase === "string" &&
   consoleRunPhases.includes(value.phase as ConsoleRunPhase) &&
   typeof value.interactive === "boolean" &&
   typeof value.startedAt === "string" &&
   !Number.isNaN(Date.parse(value.startedAt)) &&
-  (value.terminationReason === undefined || typeof value.terminationReason === "string");
+  (value.endedAt === undefined ||
+    (typeof value.endedAt === "string" && !Number.isNaN(Date.parse(value.endedAt)))) &&
+  (value.terminationReason === undefined || typeof value.terminationReason === "string") &&
+  (value.exitCode === undefined || value.exitCode === null || Number.isInteger(value.exitCode));
 
+const consoleRunSummaryKeys = [
+  "runId",
+  "sessionId",
+  "phase",
+  "interactive",
+  "startedAt",
+  "endedAt",
+  "terminationReason",
+  "exitCode",
+] as const;
+
+const isConsoleRunSummary = (value: unknown): value is ConsoleRunSummary =>
+  isRecord(value) && hasOnlyKeys(value, consoleRunSummaryKeys) && hasConsoleRunSummaryFields(value);
+
+const isConsoleRunListItem = (value: unknown): value is ConsoleRunListItem => {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      ...consoleRunSummaryKeys,
+      "active",
+      "viewed",
+      "replayState",
+      "truncatedBytes",
+      "sequenceGap",
+      "logAvailable",
+    ]) ||
+    !hasConsoleRunSummaryFields(value) ||
+    typeof value.active !== "boolean" ||
+    typeof value.viewed !== "boolean" ||
+    typeof value.replayState !== "string" ||
+    !consoleRunReplayStates.includes(value.replayState as ConsoleRunReplayState) ||
+    !isNonNegativeInteger(value.truncatedBytes) ||
+    typeof value.sequenceGap !== "boolean" ||
+    typeof value.logAvailable !== "boolean"
+  ) {
+    return false;
+  }
+  if (value.interactive && !value.active) return false;
+  if ((value.replayState === "live") !== value.active) return false;
+  if (
+    value.replayState === "retained-complete" &&
+    (value.truncatedBytes !== 0 || value.sequenceGap)
+  ) {
+    return false;
+  }
+  if (
+    value.replayState === "retained-truncated" &&
+    (value.truncatedBytes === 0 || value.sequenceGap)
+  ) {
+    return false;
+  }
+  if (value.replayState === "sequence-gap" && !value.sequenceGap) return false;
+  if (
+    (value.replayState === "metadata-only" || value.replayState === "surface-only") &&
+    (value.truncatedBytes !== 0 || value.sequenceGap)
+  ) {
+    return false;
+  }
+  return true;
+};
+const hasSameConsoleRunSummary = (summary: ConsoleRunSummary, item: ConsoleRunListItem): boolean =>
+  summary.runId === item.runId &&
+  summary.sessionId === item.sessionId &&
+  summary.phase === item.phase &&
+  summary.interactive === item.interactive &&
+  summary.startedAt === item.startedAt &&
+  summary.endedAt === item.endedAt &&
+  summary.terminationReason === item.terminationReason &&
+  summary.exitCode === item.exitCode;
 const isPromptRecoveryIssue = (value: unknown): value is PromptRecoveryIssue =>
   isRecord(value) &&
   hasOnlyKeys(value, ["requestId", "sessionId", "outcome", "draftMatch", "occurredAt"]) &&
@@ -322,7 +425,10 @@ const isConsoleViewState = (value: unknown): value is ConsoleViewState => {
     !isRecord(value) ||
     !hasOnlyKeys(value, [
       "selectedSession",
-      "selectedRun",
+      "activeRun",
+      "viewedRun",
+      "availableRuns",
+      "followLive",
       "draft",
       "recoveryIssue",
       "connectionStatus",
@@ -333,7 +439,11 @@ const isConsoleViewState = (value: unknown): value is ConsoleViewState => {
       "canStop",
     ]) ||
     !(value.selectedSession === null || isConsoleSessionSummary(value.selectedSession)) ||
-    !(value.selectedRun === null || isConsoleRunSummary(value.selectedRun)) ||
+    !(value.activeRun === null || isConsoleRunSummary(value.activeRun)) ||
+    !(value.viewedRun === null || isConsoleRunSummary(value.viewedRun)) ||
+    !Array.isArray(value.availableRuns) ||
+    !value.availableRuns.every(isConsoleRunListItem) ||
+    typeof value.followLive !== "boolean" ||
     typeof value.draft !== "string" ||
     !(value.recoveryIssue === null || isPromptRecoveryIssue(value.recoveryIssue)) ||
     typeof value.connectionStatus !== "string" ||
@@ -347,12 +457,45 @@ const isConsoleViewState = (value: unknown): value is ConsoleViewState => {
   ) {
     return false;
   }
+  if (value.selectedSession === null) {
+    return (
+      value.activeRun === null &&
+      value.viewedRun === null &&
+      value.availableRuns.length === 0 &&
+      !value.followLive
+    );
+  }
+  const ids = new Set<string>();
+  let activeCount = 0;
+  let viewedCount = 0;
+  for (const run of value.availableRuns) {
+    if (run.sessionId !== value.selectedSession.id || ids.has(run.runId)) return false;
+    ids.add(run.runId);
+    if (run.active) activeCount += 1;
+    if (run.viewed) viewedCount += 1;
+  }
+  const activeItem = value.availableRuns.find((run) => run.active);
+  const viewedItem = value.availableRuns.find((run) => run.viewed);
   return (
-    value.selectedRun === null ||
-    (value.selectedSession !== null && value.selectedRun.sessionId === value.selectedSession.id)
+    activeCount <= 1 &&
+    viewedCount <= 1 &&
+    (value.activeRun === null
+      ? activeCount === 0
+      : activeCount === 1 &&
+        value.activeRun.sessionId === value.selectedSession.id &&
+        activeItem !== undefined &&
+        hasSameConsoleRunSummary(value.activeRun, activeItem)) &&
+    (value.viewedRun === null
+      ? viewedCount === 0
+      : viewedCount === 1 &&
+        value.viewedRun.sessionId === value.selectedSession.id &&
+        viewedItem !== undefined &&
+        hasSameConsoleRunSummary(value.viewedRun, viewedItem)) &&
+    (!value.followLive ||
+      value.activeRun === null ||
+      value.viewedRun?.runId === value.activeRun.runId)
   );
 };
-
 const hasValidWarnings = (value: unknown): value is readonly PromptDeliveryWarningCode[] =>
   Array.isArray(value) &&
   value.every(
@@ -422,6 +565,11 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
         hasRunIdentity(value) &&
         (value.afterSeq === undefined || isNonNegativeInteger(value.afterSeq))
       );
+    case "terminal.run.select":
+    case "terminal.run.open-log":
+      return hasOnlyKeys(value, ["type", "sessionId", "runId"]) && hasRunIdentity(value);
+    case "terminal.run.follow-active":
+      return hasOnlyKeys(value, ["type", "sessionId"]) && hasSessionId(value);
     case "session.start":
       return hasOnlyKeys(value, ["type", "sessionId"]) && hasSessionId(value);
     case "session.interrupt":

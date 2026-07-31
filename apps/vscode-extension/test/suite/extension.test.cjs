@@ -109,6 +109,30 @@ suite("Honey Bee extension host", () => {
           updatedAt: "2026-07-30T11:59:00.000Z",
           schemaVersion: 1,
         },
+        {
+          runId: "run-newer-metadata-only",
+          sessionId: newSessionId,
+          runtimeInstanceId: "runtime-previous",
+          phase: "completed",
+          startedAt: "2026-07-30T11:40:00.000Z",
+          updatedAt: "2026-07-30T11:45:00.000Z",
+          endedAt: "2026-07-30T11:45:00.000Z",
+          terminationReason: "process-exit-zero",
+          exitCode: 0,
+          schemaVersion: 1,
+        },
+        {
+          runId: "run-older-metadata-only",
+          sessionId: newSessionId,
+          runtimeInstanceId: "runtime-previous",
+          phase: "failed",
+          startedAt: "2026-07-30T11:20:00.000Z",
+          updatedAt: "2026-07-30T11:25:00.000Z",
+          endedAt: "2026-07-30T11:25:00.000Z",
+          terminationReason: "process-exit-nonzero",
+          exitCode: 7,
+          schemaVersion: 1,
+        },
       ],
       receipts: [
         {
@@ -168,15 +192,36 @@ suite("Honey Bee extension host", () => {
       ).status,
       "stopped",
     );
-    assert.deepEqual(api.promptRecoveryTestState.runPhases, [
+    assert.deepEqual(
+      api.promptRecoveryTestState.runPhases.find((run) => run.runId === "run-stale-unknown"),
       {
         runId: "run-stale-unknown",
         phase: "interrupted",
         terminationReason: "recovered-stale-run",
       },
-    ]);
+    );
     assert.equal(JSON.stringify(api).includes(dispatchContent), false);
     assert.equal(JSON.stringify(api).includes(acceptedContent), false);
+    assert.deepEqual(api.promptRecoveryTestState.consoleRunNavigation, {
+      viewedRunId: "run-newer-metadata-only",
+      followLive: true,
+      availableRuns: [
+        {
+          runId: "run-newer-metadata-only",
+          replayState: "metadata-only",
+          active: false,
+          viewed: true,
+          logAvailable: false,
+        },
+        {
+          runId: "run-older-metadata-only",
+          replayState: "metadata-only",
+          active: false,
+          viewed: false,
+          logAvailable: false,
+        },
+      ],
+    });
 
     const commands = await vscode.commands.getCommands(true);
     for (const command of expectedCommands) {

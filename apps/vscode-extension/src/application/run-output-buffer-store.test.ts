@@ -33,7 +33,11 @@ describe("RunOutputBufferStore", () => {
       status: "terminal",
       finalSeq: 4,
     });
-    expect(store.snapshot(session("session-a"), run("run-1"))?.data).toBe("late");
+    expect(store.snapshot(session("session-a"), run("run-1"))).toMatchObject({
+      data: "late",
+      sequenceGap: true,
+    });
+    expect(store.inspect(session("session-a"), run("run-1"))?.sequenceGap).toBe(true);
   });
 
   it("bounds each Run by exact UTF-8 bytes and reports truncation", () => {

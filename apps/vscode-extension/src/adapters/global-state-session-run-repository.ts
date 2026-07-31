@@ -64,6 +64,13 @@ export class GlobalStateSessionRunRepository implements SessionRunRepository {
     return ok(run === undefined ? undefined : SessionRunRecordSchema.parse(run));
   }
 
+  public async listBySessionId(
+    sessionId: SessionId,
+  ): Promise<Result<readonly SessionRunRecord[], RepositoryError>> {
+    const runs = await this.list();
+    return runs.ok ? ok(runs.value.filter((run) => run.sessionId === sessionId)) : runs;
+  }
+
   public async getActiveBySessionId(
     sessionId: SessionId,
   ): Promise<Result<SessionRunRecord | undefined, RepositoryError>> {

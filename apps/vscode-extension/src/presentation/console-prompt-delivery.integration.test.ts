@@ -124,7 +124,7 @@ const setup = (failInput: boolean) => {
     () => undefined,
     () => undefined,
   );
-  return { coordinator, drafts, receipts, runtime, selected };
+  return { coordinator, drafts, receipts, runtime, selected, service };
 };
 
 const draftContent = async (
@@ -140,7 +140,8 @@ const draftContent = async (
 
 describe("Console Prompt delivery integration", () => {
   it("writes exactly once, accepts, and clears the Draft", async () => {
-    const { coordinator, drafts, runtime, selected } = setup(false);
+    const { coordinator, drafts, runtime, selected, service } = setup(false);
+    await service.select(selected.id);
     coordinator.scheduleDraft(selected.id, "Echo this once");
 
     await expect(
@@ -165,7 +166,8 @@ describe("Console Prompt delivery integration", () => {
   });
 
   it("writes exactly once, rejects, and preserves both persisted and editor source content", async () => {
-    const { coordinator, drafts, runtime, selected } = setup(true);
+    const { coordinator, drafts, runtime, selected, service } = setup(true);
+    await service.select(selected.id);
 
     await expect(
       coordinator.deliver({

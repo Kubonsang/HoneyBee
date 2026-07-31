@@ -469,6 +469,7 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
         sequence: event.seq,
         status: "running",
         message: "Agent is running.",
+        logFilePath: event.logFilePath,
       });
       return;
     }

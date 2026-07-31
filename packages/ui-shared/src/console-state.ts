@@ -1,6 +1,7 @@
 import type {
   ConsoleConnectionStatus,
   ConsoleLifecycleState,
+  ConsoleRunListItem,
   ConsoleRunSummary,
   ConsoleSessionSummary,
   ConsoleViewState,
@@ -11,7 +12,10 @@ export type ConsoleStateAction =
   | {
       readonly type: "session.selected";
       readonly session: ConsoleSessionSummary | null;
-      readonly run: ConsoleRunSummary | null;
+      readonly activeRun: ConsoleRunSummary | null;
+      readonly viewedRun: ConsoleRunSummary | null;
+      readonly availableRuns: readonly ConsoleRunListItem[];
+      readonly followLive: boolean;
       readonly draft: string;
       readonly recoveryIssue: PromptRecoveryIssue | null;
     }
@@ -28,15 +32,21 @@ export type ConsoleStateAction =
       readonly message: string;
     }
   | {
-      readonly type: "session.status";
+      readonly type: "session.runs.changed";
       readonly status: ConsoleSessionSummary["status"];
-      readonly run: ConsoleRunSummary | null;
+      readonly activeRun: ConsoleRunSummary | null;
+      readonly viewedRun: ConsoleRunSummary | null;
+      readonly availableRuns: readonly ConsoleRunListItem[];
+      readonly followLive: boolean;
       readonly message: string;
     };
 
 export const initialConsoleViewState = (): ConsoleViewState => ({
   selectedSession: null,
-  selectedRun: null,
+  activeRun: null,
+  viewedRun: null,
+  availableRuns: [],
+  followLive: false,
   draft: "",
   recoveryIssue: null,
   connectionStatus: "disconnected",
@@ -49,7 +59,8 @@ export const initialConsoleViewState = (): ConsoleViewState => ({
 
 const controlsForState = (
   session: ConsoleSessionSummary | null,
-  run: ConsoleRunSummary | null,
+  activeRun: ConsoleRunSummary | null,
+  viewedRun: ConsoleRunSummary | null,
   connectionStatus: ConsoleConnectionStatus,
   lifecycleState: ConsoleLifecycleState,
 ): Pick<ConsoleViewState, "canStart" | "canInterrupt" | "canStop"> => {
@@ -61,16 +72,21 @@ const controlsForState = (
     session.status === "stopped" ||
     session.status === "failed" ||
     session.status === "completed";
-  const activeRun =
-    run !== null &&
-    (run.phase === "starting" ||
-      run.phase === "running" ||
-      run.phase === "waiting-for-input" ||
-      run.phase === "stopping");
+  const viewingActive =
+    activeRun !== null &&
+    viewedRun !== null &&
+    activeRun.sessionId === viewedRun.sessionId &&
+    activeRun.runId === viewedRun.runId;
+  const activePhase =
+    activeRun !== null &&
+    (activeRun.phase === "starting" ||
+      activeRun.phase === "running" ||
+      activeRun.phase === "waiting-for-input" ||
+      activeRun.phase === "stopping");
   return {
-    canStart: terminalSession && !activeRun,
-    canInterrupt: run?.interactive === true,
-    canStop: activeRun,
+    canStart: terminalSession && activeRun === null,
+    canInterrupt: viewingActive && activeRun.interactive,
+    canStop: viewingActive && activePhase,
   };
 };
 
@@ -80,7 +96,8 @@ const withControls = (
   ...state,
   ...controlsForState(
     state.selectedSession,
-    state.selectedRun,
+    state.activeRun,
+    state.viewedRun,
     state.connectionStatus,
     state.lifecycleState,
   ),
@@ -104,7 +121,10 @@ export const reduceConsoleViewState = (
       return withControls({
         ...state,
         selectedSession: action.session,
-        selectedRun: action.run,
+        activeRun: action.activeRun,
+        viewedRun: action.viewedRun,
+        availableRuns: action.availableRuns,
+        followLive: action.followLive,
         draft: action.draft,
         recoveryIssue: action.recoveryIssue,
         statusMessage:
@@ -122,14 +142,24 @@ export const reduceConsoleViewState = (
         connectionStatus: action.status,
         statusMessage: action.message,
       });
-    case "session.status": {
+    case "session.runs.changed": {
       if (state.selectedSession === null) {
-        return withControls({ ...state, selectedRun: action.run, statusMessage: action.message });
+        return withControls({
+          ...state,
+          activeRun: action.activeRun,
+          viewedRun: action.viewedRun,
+          availableRuns: action.availableRuns,
+          followLive: action.followLive,
+          statusMessage: action.message,
+        });
       }
       return withControls({
         ...state,
         selectedSession: { ...state.selectedSession, status: action.status },
-        selectedRun: action.run,
+        activeRun: action.activeRun,
+        viewedRun: action.viewedRun,
+        availableRuns: action.availableRuns,
+        followLive: action.followLive,
         statusMessage: action.message,
       });
     }

@@ -121,4 +121,20 @@ describe("GlobalStateSessionRunRepository", () => {
     expect(saved.ok ? undefined : saved.error.code).toBe("validation");
     expect(state.get(SESSION_RUN_STORAGE_KEY, [])).toEqual(invalid);
   });
+
+  it("lists only Runs owned by one Session after recreation", async () => {
+    const state = new MemoryMemento();
+    const repository = new GlobalStateSessionRunRepository(state);
+    const sessionId = starting("run-1").sessionId;
+    await repository.save(starting("run-1"));
+    await repository.save(
+      starting("run-2", {
+        sessionId: "other-session" as SessionRunRecord["sessionId"],
+      }),
+    );
+    await repository.flush();
+    const restarted = new GlobalStateSessionRunRepository(state);
+    const listed = await restarted.listBySessionId(sessionId);
+    expect(listed.ok ? listed.value.map(({ runId }) => runId) : []).toEqual(["run-1"]);
+  });
 });

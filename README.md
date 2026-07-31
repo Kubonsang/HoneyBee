@@ -44,7 +44,9 @@ A normal Extension shutdown first rejects new Runtime mutations, drains Prompt d
 
 Each Agent Run owns a separate in-memory xterm surface. Switching Sessions hides and shows those surfaces without clearing or replaying the live emulator, so Vim alternate-screen, cursor modes, selection, and scroll position do not leak between Sessions. Starting a new Run for the same Session creates a fresh terminal. Terminal input, resize, interrupt, and stop are accepted only for the selected current Run.
 
-Terminal transcripts and emulator state are not stored in VS Code `globalState`. Normal View hide/show uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated, Honey Bee warns that exact TUI reconstruction is unavailable.
+Terminal transcripts and emulator state are not stored in VS Code `globalState`. Normal View hide/show uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated or has a sequence gap, Honey Bee states that the reconstructed screen may be incomplete.
+
+The labelled **Terminal run** selector lists up to 50 recent Runs for the selected Session without creating an xterm surface for every item. The active Run and the Run currently being viewed are separate. Selecting an archived Run makes Prompt, input, resize, interrupt, and stop controls read-only; **Return to live** restores the current interactive Run. Replay status distinguishes retained, truncated, sequence-gap, surface-only, and metadata-only screens. **Open log** is offered only when the Extension can resolve the exact Run's Runtime-origin path; no local path is sent to the Webview.
 
 ## Quality and tests
 

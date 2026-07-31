@@ -47,6 +47,20 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
           <div><dt>Workspace</dt><dd id="workspace-value">—</dd></div>
           <div><dt>Tool Profile</dt><dd id="tool-value">—</dd></div>
         </dl>
+        <div class="run-navigation">
+          <div class="run-selector-field">
+            <label for="run-selector">Terminal run</label>
+            <select id="run-selector" aria-describedby="run-accessible-status" disabled>
+              <option value="">No retained Runs</option>
+            </select>
+          </div>
+          <button id="open-log-button" type="button" disabled>Open log</button>
+        </div>
+        <div id="live-run-notice" class="live-run-notice" role="status" hidden>
+          <span>A live Run is active in this Session.</span>
+          <button id="return-live-button" type="button">Return to live</button>
+        </div>
+        <span id="run-accessible-status" class="visually-hidden" role="status" aria-live="polite"></span>
         <div class="action-row" aria-label="Agent controls">
           <span id="session-status" class="status-pill">idle</span>
           <button id="start-button" type="button" title="Start session">Start</button>
@@ -76,8 +90,16 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
       </section>
       <section class="terminal-panel" aria-label="Raw terminal">
         <div class="section-label"><span>RAW TERMINAL</span><span id="terminal-mode">No terminal Run</span></div>
-        <div id="terminal-warning" class="terminal-warning" role="status" hidden></div>
-        <div id="terminal" tabindex="0" aria-label="Interactive agent terminal"></div>
+        <div id="terminal-warning" class="terminal-warning" role="status" aria-live="polite" hidden>
+          <strong id="terminal-warning-title"></strong>
+          <details id="terminal-warning-details">
+            <summary id="terminal-warning-summary">Why is this replay incomplete?</summary>
+            <p id="terminal-warning-description"></p>
+          </details>
+        </div>
+        <div id="terminal" tabindex="0" aria-label="Interactive agent terminal">
+          <div id="terminal-placeholder" class="terminal-placeholder" role="status" hidden></div>
+        </div>
       </section>
 
       <section class="prompt-panel" aria-label="Prompt editor">

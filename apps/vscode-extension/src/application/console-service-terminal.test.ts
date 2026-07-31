@@ -159,7 +159,7 @@ describe("ConsoleApplicationService Run-scoped terminal routing", () => {
       status: "running",
       message: "A1 running",
     });
-    await vi.waitFor(() => expect(service.state.selectedRun?.runId).toBe(runA1));
+    await vi.waitFor(() => expect(service.state.viewedRun?.runId).toBe(runA1));
     runtime.emit({
       type: "pty.data",
       sessionId: sessionA.id,
@@ -180,7 +180,7 @@ describe("ConsoleApplicationService Run-scoped terminal routing", () => {
       status: "running",
       message: "B1 running",
     });
-    await vi.waitFor(() => expect(service.state.selectedRun?.runId).toBe(runB1));
+    await vi.waitFor(() => expect(service.state.viewedRun?.runId).toBe(runB1));
     runtime.emit({
       type: "pty.data",
       sessionId: sessionB.id,
@@ -233,7 +233,7 @@ describe("ConsoleApplicationService Run-scoped terminal routing", () => {
     const runA2 = runtime.starts[2]?.runId;
     if (runA2 === undefined) throw new Error("Run A2 did not start.");
     expect(runA2).not.toBe(runA1);
-    expect(service.state.selectedRun?.runId).toBe(runA2);
+    expect(service.state.viewedRun?.runId).toBe(runA2);
 
     const beforeLate = messages.length;
     runtime.emit({
@@ -255,13 +255,61 @@ describe("ConsoleApplicationService Run-scoped terminal routing", () => {
       sequence: 0,
       status: "running",
       message: "A2 running",
+      logFilePath: "C:\\Honey Bee 한글\\logs\\run-a2.log",
     });
-    await vi.waitFor(() => expect(service.state.selectedRun?.interactive).toBe(true));
+    await vi.waitFor(() => expect(service.state.viewedRun?.interactive).toBe(true));
     await expect(service.sendTerminalInput(sessionA.id, runA1, "stale")).rejects.toMatchObject({
       code: "terminal-run-stale-input",
     });
     await service.sendTerminalInput(sessionA.id, runA2, "fresh");
     expect(runtime.inputs).toEqual([{ sessionId: sessionA.id, runId: runA2, data: "fresh" }]);
+
+    await service.selectViewedRun(sessionA.id, runA1);
+    expect(service.state.activeRun?.runId).toBe(runA2);
+    expect(service.state.viewedRun?.runId).toBe(runA1);
+    expect(service.state.followLive).toBe(false);
+    expect(service.state.canInterrupt).toBe(false);
+    expect(service.state.canStop).toBe(false);
+    await expect(service.start(sessionA.id)).rejects.toMatchObject({
+      code: "session-run-conflict",
+    });
+    expect(runtime.starts).toHaveLength(3);
+    expect(service.state.selectedSession?.status).toBe("running");
+    const archivedDelivery = await service.sendPrompt(
+      "request-archived",
+      sessionA.id,
+      "do not send",
+    );
+    expect(archivedDelivery).toMatchObject({ status: "rejected" });
+    expect(runtime.inputs).toHaveLength(1);
+
+    const messageCount = messages.length;
+    await service.selectViewedRun(sessionA.id, runA1);
+    expect(messages).toHaveLength(messageCount);
+    await expect(service.selectViewedRun(sessionB.id, runA1)).rejects.toMatchObject({
+      code: "terminal-run-wrong-session",
+    });
+
+    expect(await service.resolveRunLogPath(sessionA.id, runA2)).toBe(
+      "C:\\Honey Bee 한글\\logs\\run-a2.log",
+    );
+    await expect(service.resolveRunLogPath(sessionA.id, runA1)).rejects.toMatchObject({
+      code: "terminal-run-log-unavailable",
+    });
+
+    await service.followActiveRun(sessionA.id);
+    expect(service.state.viewedRun?.runId).toBe(runA2);
+    expect(service.state.followLive).toBe(true);
+    expect(service.state.canInterrupt).toBe(true);
+    expect(runtime.inputs).toHaveLength(1);
+
+    service.beginShutdown();
+    await expect(service.selectViewedRun(sessionA.id, runA1)).rejects.toMatchObject({
+      code: "lifecycle-shutting-down",
+    });
+    await expect(service.followActiveRun(sessionA.id)).rejects.toMatchObject({
+      code: "lifecycle-shutting-down",
+    });
 
     await service.dispose();
   });

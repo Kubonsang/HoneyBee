@@ -127,6 +127,25 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
           ),
         );
         break;
+      case "terminal.run.select":
+        this.run(
+          this.consoleService.selectViewedRun(
+            SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
+          ),
+        );
+        break;
+      case "terminal.run.follow-active":
+        this.run(this.consoleService.followActiveRun(SessionIdSchema.parse(message.sessionId)));
+        break;
+      case "terminal.run.open-log":
+        this.run(
+          this.openRunLog(
+            SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
+          ),
+        );
+        break;
       case "session.start":
         this.run(this.consoleService.start(SessionIdSchema.parse(message.sessionId)));
         break;
@@ -149,6 +168,34 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     }
   }
 
+  private async openRunLog(
+    sessionId: ReturnType<typeof SessionIdSchema.parse>,
+    runId: ReturnType<typeof RunIdSchema.parse>,
+  ): Promise<void> {
+    try {
+      const path = await this.consoleService.resolveRunLogPath(sessionId, runId);
+      const uri = vscode.Uri.file(path);
+      const stat = await vscode.workspace.fs.stat(uri);
+      if ((stat.type & vscode.FileType.Directory) !== 0) throw new Error("Run log is a directory.");
+      if (stat.size > 10 * 1024 * 1024) {
+        const choice = await vscode.window.showWarningMessage(
+          "This Run log is larger than 10 MiB and may be slow to open.",
+          { modal: true },
+          "Open log",
+        );
+        if (choice !== "Open log") return;
+      }
+      const document = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(document, { preview: true });
+    } catch {
+      this.reportDiagnostic(
+        "Run log unavailable for Session " + sessionId + ", Run " + runId + ".",
+      );
+      await vscode.window.showWarningMessage(
+        "Honey Bee could not open this Run log. It may no longer exist.",
+      );
+    }
+  }
   private async assumeDelivered(
     requestId: string,
     sessionId: ReturnType<typeof SessionIdSchema.parse>,

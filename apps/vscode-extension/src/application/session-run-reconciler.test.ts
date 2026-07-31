@@ -97,6 +97,7 @@ describe("SessionRunReconciler", () => {
       getByRunId: async () => err(failure),
       getActiveBySessionId: async () => err(failure),
       list: async () => err(failure),
+      listBySessionId: async () => err(failure),
       listActive: async () => err(failure),
       save: async () => err(failure),
       flush: async () => undefined,

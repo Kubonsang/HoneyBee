@@ -1,6 +1,5 @@
 import {
   SessionRunRecordSchema,
-  isActiveSessionRun,
   transitionSessionRun,
   type AgentSession,
   type RunId,
@@ -45,6 +44,7 @@ export interface CorrelatedRuntimeStatus {
   readonly sequence: number;
   readonly status: SessionStatus;
   readonly message: string;
+  readonly logFilePath?: string;
   readonly reason?: SessionTerminationReason;
   readonly exitCode?: number;
 }
@@ -84,6 +84,7 @@ const inferredReason = (
 /** Owns durable Run identity, correlation and per-Session status serialization. */
 export class SessionRunController implements PromptRuntimeInputPort {
   readonly #activeRunIds = new Map<SessionId, RunId>();
+  readonly #logFilePaths = new Map<RunId, string>();
   readonly #statusQueues = new Map<SessionId, Promise<void>>();
   #runtimeInstanceId: RuntimeInstanceId | undefined;
   #acceptingMutations = true;
@@ -241,27 +242,25 @@ export class SessionRunController implements PromptRuntimeInputPort {
     return this.#activeRunIds.get(sessionId) === runId;
   }
 
-  public async selectedRunForSession(sessionId: SessionId): Promise<SessionRunRecord | undefined> {
-    const result = await this.runs.list();
+  public async listRunsForSession(sessionId: SessionId): Promise<readonly SessionRunRecord[]> {
+    const result = await this.runs.listBySessionId(sessionId);
     if (!result.ok) {
       throw new ApplicationError(result.error.code, result.error.message, result.error.details);
     }
-    const candidates = result.value
-      .map((run, index) => ({ run, index }))
-      .filter((candidate) => candidate.run.sessionId === sessionId)
-      .sort(
-        (left, right) =>
-          right.run.startedAt.localeCompare(left.run.startedAt) ||
-          right.run.updatedAt.localeCompare(left.run.updatedAt) ||
-          right.index - left.index,
-      );
-    const active = candidates.find(
-      (candidate) =>
-        isActiveSessionRun(candidate.run) &&
-        (this.#runtimeInstanceId === undefined ||
-          candidate.run.runtimeInstanceId === this.#runtimeInstanceId),
-    );
-    return active?.run ?? candidates[0]?.run;
+    return result.value;
+  }
+
+  public async activeRunForSession(sessionId: SessionId): Promise<SessionRunRecord | undefined> {
+    return this.readActiveRun(sessionId);
+  }
+
+  public hasLogFilePath(runId: RunId): boolean {
+    return this.#logFilePaths.has(runId);
+  }
+
+  public async logFilePathForRun(sessionId: SessionId, runId: RunId): Promise<string | undefined> {
+    const run = await this.getRun(runId);
+    return run?.sessionId === sessionId ? this.#logFilePaths.get(runId) : undefined;
   }
 
   public async getRun(runId: RunId): Promise<SessionRunRecord | undefined> {
@@ -344,6 +343,7 @@ export class SessionRunController implements PromptRuntimeInputPort {
         return undefined;
       }
       const phase = event.status === "running" ? "running" : "waiting-for-input";
+      if (event.logFilePath !== undefined) this.#logFilePaths.set(event.runId, event.logFilePath);
       const updated =
         run.phase === phase
           ? run
