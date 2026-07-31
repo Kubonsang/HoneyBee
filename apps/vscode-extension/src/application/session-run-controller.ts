@@ -1,5 +1,6 @@
 import {
   SessionRunRecordSchema,
+  isActiveSessionRun,
   transitionSessionRun,
   type AgentSession,
   type RunId,
@@ -32,13 +33,16 @@ interface TerminalSize {
 export interface AppliedSessionRunStatus {
   readonly sessionId: SessionId;
   readonly runId: RunId;
+  readonly sequence: number;
   readonly status: SessionStatus;
   readonly message: string;
+  readonly run: SessionRunRecord;
 }
 
 export interface CorrelatedRuntimeStatus {
   readonly sessionId: SessionId;
   readonly runId: RunId;
+  readonly sequence: number;
   readonly status: SessionStatus;
   readonly message: string;
   readonly reason?: SessionTerminationReason;
@@ -138,7 +142,7 @@ export class SessionRunController implements PromptRuntimeInputPort {
     if (active !== undefined) {
       throw new ApplicationError(
         "session-run-conflict",
-        `Session "${session.id}" already has active Run "${active.runId}".`,
+        "Session " + session.id + " already has active Run " + active.runId + ".",
       );
     }
 
@@ -190,21 +194,36 @@ export class SessionRunController implements PromptRuntimeInputPort {
     return this.runtime.sendInput(sessionId, data, runId);
   }
 
-  public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
+  public async sendTerminalInput(
+    sessionId: SessionId,
+    runId: RunId,
+    data: string,
+  ): Promise<RuntimeInputOutcome> {
     this.assertMutationAllowed();
-    const runId = await this.requireActiveRunId(sessionId);
+    await this.requireExpectedActiveRun(sessionId, runId);
+    return this.runtime.sendInput(sessionId, data, runId);
+  }
+
+  public async resize(
+    sessionId: SessionId,
+    runId: RunId,
+    columns: number,
+    rows: number,
+  ): Promise<void> {
+    this.assertMutationAllowed();
+    await this.requireExpectedActiveRun(sessionId, runId);
     await this.runtime.resize(sessionId, columns, rows, runId);
   }
 
-  public async interrupt(sessionId: SessionId): Promise<void> {
+  public async interrupt(sessionId: SessionId, runId: RunId): Promise<void> {
     this.assertMutationAllowed();
-    const runId = await this.requireActiveRunId(sessionId);
+    await this.requireExpectedActiveRun(sessionId, runId);
     await this.runtime.interrupt(sessionId, runId);
   }
 
-  public async stop(sessionId: SessionId): Promise<void> {
+  public async stop(sessionId: SessionId, runId: RunId): Promise<void> {
     this.assertMutationAllowed();
-    const run = await this.requireActiveRun(sessionId);
+    const run = await this.requireExpectedActiveRun(sessionId, runId);
     await this.enqueue(sessionId, async () => {
       const current = await this.readActiveRun(sessionId);
       if (current?.runId !== run.runId) return;
@@ -215,11 +234,42 @@ export class SessionRunController implements PromptRuntimeInputPort {
         });
       }
     });
-    await this.runtime.stop(sessionId, run.runId);
+    await this.runtime.stop(sessionId, runId);
   }
 
   public isCurrentRun(sessionId: SessionId, runId: RunId): boolean {
     return this.#activeRunIds.get(sessionId) === runId;
+  }
+
+  public async selectedRunForSession(sessionId: SessionId): Promise<SessionRunRecord | undefined> {
+    const result = await this.runs.list();
+    if (!result.ok) {
+      throw new ApplicationError(result.error.code, result.error.message, result.error.details);
+    }
+    const candidates = result.value
+      .map((run, index) => ({ run, index }))
+      .filter((candidate) => candidate.run.sessionId === sessionId)
+      .sort(
+        (left, right) =>
+          right.run.startedAt.localeCompare(left.run.startedAt) ||
+          right.run.updatedAt.localeCompare(left.run.updatedAt) ||
+          right.index - left.index,
+      );
+    const active = candidates.find(
+      (candidate) =>
+        isActiveSessionRun(candidate.run) &&
+        (this.#runtimeInstanceId === undefined ||
+          candidate.run.runtimeInstanceId === this.#runtimeInstanceId),
+    );
+    return active?.run ?? candidates[0]?.run;
+  }
+
+  public async getRun(runId: RunId): Promise<SessionRunRecord | undefined> {
+    const result = await this.runs.getByRunId(runId);
+    if (!result.ok) {
+      throw new ApplicationError(result.error.code, result.error.message, result.error.details);
+    }
+    return result.value;
   }
 
   public handleStatus(
@@ -294,11 +344,12 @@ export class SessionRunController implements PromptRuntimeInputPort {
         return undefined;
       }
       const phase = event.status === "running" ? "running" : "waiting-for-input";
-      if (run.phase !== phase) {
-        await this.saveTransition(run, { phase, updatedAt: this.clock.now() });
-      }
+      const updated =
+        run.phase === phase
+          ? run
+          : await this.saveTransition(run, { phase, updatedAt: this.clock.now() });
       await this.saveSessionStatus(await this.readSession(event.sessionId), event.status);
-      return { ...event };
+      return { ...event, run: updated };
     }
 
     const reason = inferredReason(event.status, event.reason);
@@ -308,8 +359,8 @@ export class SessionRunController implements PromptRuntimeInputPort {
     }
     const phase =
       event.status === "completed" ? "completed" : event.status === "failed" ? "failed" : "stopped";
-    await this.terminateRun(run, phase, reason, event.exitCode);
-    return { ...event };
+    const terminal = await this.terminateRun(run, phase, reason, event.exitCode);
+    return { ...event, run: terminal };
   }
 
   private async terminateIfActive(
@@ -326,7 +377,7 @@ export class SessionRunController implements PromptRuntimeInputPort {
     phase: "stopped" | "completed" | "failed" | "interrupted",
     reason: SessionTerminationReason,
     exitCode?: number,
-  ): Promise<void> {
+  ): Promise<SessionRunRecord> {
     const now = this.clock.now();
     const terminal = await this.saveTransition(run, {
       phase,
@@ -337,6 +388,7 @@ export class SessionRunController implements PromptRuntimeInputPort {
     });
     this.#activeRunIds.delete(run.sessionId);
     await this.saveSessionStatus(await this.readSession(run.sessionId), statusForPhase(terminal));
+    return terminal;
   }
 
   private async saveTransition(
@@ -394,9 +446,25 @@ export class SessionRunController implements PromptRuntimeInputPort {
     if (run === undefined) {
       throw new ApplicationError(
         "session-run-not-active",
-        `Session "${sessionId}" has no active Runtime Run.`,
+        "Session " + sessionId + " has no active Runtime Run.",
       );
     }
+    return run;
+  }
+
+  private async requireExpectedActiveRun(
+    sessionId: SessionId,
+    runId: RunId,
+  ): Promise<SessionRunRecord> {
+    const run = await this.requireActiveRun(sessionId);
+    if (run.runId !== runId) {
+      this.diagnostic("stale-runtime-event", sessionId, runId);
+      throw new ApplicationError(
+        "stale-runtime-event",
+        "The terminal action belongs to a stale Session Run.",
+      );
+    }
+    this.#activeRunIds.set(sessionId, runId);
     return run;
   }
 

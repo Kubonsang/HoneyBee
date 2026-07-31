@@ -40,6 +40,12 @@ Honey Bee restores Session metadata and Drafts. It does not automatically restar
 
 A normal Extension shutdown first rejects new Runtime mutations, drains Prompt durability work, asks the Runtime to stop active PTYs, persists final Run status, and then disposes the transport. Cleanup is bounded; Windows process-tree termination remains best effort without a native Job Object helper.
 
+## Run-scoped terminal screens
+
+Each Agent Run owns a separate in-memory xterm surface. Switching Sessions hides and shows those surfaces without clearing or replaying the live emulator, so Vim alternate-screen, cursor modes, selection, and scroll position do not leak between Sessions. Starting a new Run for the same Session creates a fresh terminal. Terminal input, resize, interrupt, and stop are accepted only for the selected current Run.
+
+Terminal transcripts and emulator state are not stored in VS Code `globalState`. Normal View hide/show uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated, Honey Bee warns that exact TUI reconstruction is unavailable.
+
 ## Quality and tests
 
 ```powershell

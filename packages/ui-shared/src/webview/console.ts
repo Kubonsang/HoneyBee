@@ -1,5 +1,3 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
 import "@xterm/xterm/css/xterm.css";
 import * as monaco from "monaco-editor/esm/vs/editor/editor.api.js";
 
@@ -9,6 +7,7 @@ import {
   type ConsoleToExtensionMessage,
   type ConsoleViewState,
   type PromptAcknowledgementMessage,
+  type TerminalRunKey,
 } from "../contracts.js";
 import {
   PromptDeliveryTracker,
@@ -16,6 +15,8 @@ import {
   reconcileDraftAfterSettlement,
 } from "../prompt-delivery-state.js";
 import { createPromptKeyBindings, shouldSubmitPrompt } from "../prompt-input-policy.js";
+import { TerminalRunRegistry, type TerminalDimensions } from "./terminal-run-registry.js";
+import { XtermTerminalSurfaceFactory } from "./xterm-terminal-surface.js";
 import "./console.css";
 
 interface VsCodeApi {
@@ -29,14 +30,17 @@ const vscode = acquireVsCodeApi();
 const requiredElement = <T extends HTMLElement>(id: string): T => {
   const element = document.getElementById(id);
   if (element === null) {
-    throw new Error(`Required element "${id}" was not found.`);
+    throw new Error('Required element "' + id + '" was not found.');
   }
   return element as T;
 };
 
 const terminalElement = requiredElement<HTMLDivElement>("terminal");
+const terminalMode = requiredElement<HTMLElement>("terminal-mode");
+const terminalWarning = requiredElement<HTMLElement>("terminal-warning");
 const editorElement = requiredElement<HTMLDivElement>("prompt-editor");
 const sessionValue = requiredElement<HTMLElement>("session-value");
+const runValue = requiredElement<HTMLElement>("run-value");
 const agentValue = requiredElement<HTMLElement>("agent-value");
 const workspaceValue = requiredElement<HTMLElement>("workspace-value");
 const toolValue = requiredElement<HTMLElement>("tool-value");
@@ -52,42 +56,43 @@ const recoveryMessage = requiredElement<HTMLElement>("recovery-message");
 const assumeDeliveredButton = requiredElement<HTMLButtonElement>("assume-delivered-button");
 const retryPromptButton = requiredElement<HTMLButtonElement>("retry-prompt-button");
 
-const terminal = new Terminal({
-  allowProposedApi: false,
-  convertEol: false,
-  cursorBlink: true,
-  cursorStyle: "bar",
-  fontFamily:
-    "var(--vscode-editor-font-family, 'Cascadia Code', 'SFMono-Regular', Consolas, monospace)",
-  fontSize: 12,
-  scrollback: 10_000,
-  theme: {
-    background: "#11100d",
-    foreground: "#eee8d5",
-    cursor: "#f4c95d",
-    cursorAccent: "#11100d",
-    selectionBackground: "#6d582f99",
-    black: "#171510",
-    brightBlack: "#686153",
-    red: "#ff7a7a",
-    brightRed: "#ff9b9b",
-    green: "#9dd68c",
-    brightGreen: "#b4e7a5",
-    yellow: "#f4c95d",
-    brightYellow: "#ffe090",
-    blue: "#78a9ff",
-    brightBlue: "#9ec1ff",
-    magenta: "#c99bea",
-    brightMagenta: "#ddb8f3",
-    cyan: "#71c7c1",
-    brightCyan: "#91ddd8",
-    white: "#e2ddcf",
-    brightWhite: "#fffdf5",
+let visibleTerminalKey: TerminalRunKey | undefined;
+
+const terminalRegistry = new TerminalRunRegistry({
+  factory: new XtermTerminalSurfaceFactory(terminalElement),
+  onInput: (key, data) => {
+    vscode.postMessage({ type: "terminal.run.input", ...key, data });
+  },
+  onResize: (key, size: TerminalDimensions) => {
+    vscode.postMessage({
+      type: "terminal.run.resize",
+      ...key,
+      columns: size.columns,
+      rows: size.rows,
+    });
+  },
+  onSnapshotRequest: (key, afterSeq) => {
+    vscode.postMessage({
+      type: "terminal.run.snapshot-request",
+      ...key,
+      ...(afterSeq === undefined ? {} : { afterSeq }),
+    });
+  },
+  onDiagnostic: (code, key) => {
+    if (visibleTerminalKey?.sessionId !== key.sessionId || visibleTerminalKey.runId !== key.runId) {
+      return;
+    }
+    if (code === "terminal-run-replay-truncated") {
+      terminalWarning.textContent =
+        "Replay is truncated; exact TUI screen reconstruction is unavailable.";
+      terminalWarning.hidden = false;
+    } else if (code === "terminal-run-sequence-gap") {
+      terminalWarning.textContent =
+        "A terminal sequence gap was detected. Honey Bee requested a bounded replay.";
+      terminalWarning.hidden = false;
+    }
   },
 });
-const fitAddon = new FitAddon();
-terminal.loadAddon(fitAddon);
-terminal.open(terminalElement);
 
 const editor = monaco.editor.create(editorElement, {
   accessibilitySupport: "auto",
@@ -113,6 +118,7 @@ const editor = monaco.editor.create(editorElement, {
 
 let activeState: ConsoleViewState | undefined;
 let activeSessionId: string | undefined;
+let activeRunId: string | undefined;
 let suppressDraftMessage = false;
 let isComposing = false;
 const localDrafts = new Map<string, string>();
@@ -120,12 +126,26 @@ const promptDelivery = new PromptDeliveryTracker();
 
 const selectedSessionId = (): string | undefined => activeState?.selectedSession?.id;
 
+const selectedRunKey = (): TerminalRunKey | undefined => {
+  const run = activeState?.selectedRun;
+  return run === null || run === undefined
+    ? undefined
+    : { sessionId: run.sessionId, runId: run.runId };
+};
+
 const postForSelectedSession = (
   type: "session.start" | "session.interrupt" | "session.stop",
 ): void => {
   const sessionId = selectedSessionId();
-  if (sessionId !== undefined && activeState?.lifecycleState === "active") {
-    vscode.postMessage({ type, sessionId });
+  if (sessionId === undefined || activeState?.lifecycleState !== "active") return;
+  if (type === "session.start") {
+    if (activeState.canStart) vscode.postMessage({ type, sessionId });
+    return;
+  }
+  const run = activeState.selectedRun;
+  const allowed = type === "session.interrupt" ? activeState.canInterrupt : activeState.canStop;
+  if (allowed && run !== null && run.sessionId === sessionId) {
+    vscode.postMessage({ type, sessionId, runId: run.runId });
   }
 };
 
@@ -135,9 +155,9 @@ const updatePromptControls = (): void => {
   const recoveryLocked = selected !== null && activeState?.recoveryIssue?.sessionId === selected.id;
   const canSend =
     selected !== null &&
-    activeState?.connectionStatus === "connected" &&
-    activeState.lifecycleState === "active" &&
-    (selected.status === "running" || selected.status === "waiting_for_input");
+    activeState?.selectedRun?.interactive === true &&
+    activeState.connectionStatus === "connected" &&
+    activeState.lifecycleState === "active";
   sendButton.disabled = !canSend || pending || recoveryLocked;
   sendButton.textContent = pending ? "Sending..." : recoveryLocked ? "Recovery required" : "Send";
   editorElement.dataset.pending = String(pending);
@@ -152,6 +172,7 @@ const submitPrompt = (): void => {
   if (
     sessionId === undefined ||
     activeState?.lifecycleState !== "active" ||
+    activeState.selectedRun?.interactive !== true ||
     !shouldSubmitPrompt(content, isComposing, promptDelivery.isPending(sessionId))
   ) {
     return;
@@ -163,9 +184,7 @@ const submitPrompt = (): void => {
     sessionId,
     content,
   } as const;
-  if (!promptDelivery.begin(message)) {
-    return;
-  }
+  if (!promptDelivery.begin(message)) return;
 
   localDrafts.set(sessionId, content);
   statusMessage.textContent = "Sending Prompt...";
@@ -195,65 +214,50 @@ editor.onDidCompositionEnd(() => {
 });
 
 editor.onDidChangeModelContent(() => {
-  if (suppressDraftMessage) {
-    return;
-  }
+  if (suppressDraftMessage) return;
   const sessionId = selectedSessionId();
-  if (sessionId === undefined) {
-    return;
-  }
+  if (sessionId === undefined) return;
   const content = editor.getValue();
   localDrafts.set(sessionId, content);
   vscode.postMessage({ type: "draft.changed", sessionId, content });
 });
 
-terminal.onData((data) => {
-  const sessionId = selectedSessionId();
-  if (sessionId !== undefined && activeState?.lifecycleState === "active") {
-    vscode.postMessage({ type: "terminal.input", sessionId, data });
-  }
+const resizeObserver = new ResizeObserver(() => {
+  terminalRegistry.fitSelected();
 });
+resizeObserver.observe(terminalElement);
 
-const reportTerminalSize = (): void => {
-  const sessionId = selectedSessionId();
-  if (
-    sessionId === undefined ||
-    activeState?.lifecycleState !== "active" ||
-    terminal.cols <= 0 ||
-    terminal.rows <= 0
-  ) {
+const renderRun = (state: ConsoleViewState): void => {
+  const run = state.selectedRun;
+  visibleTerminalKey = selectedRunKey();
+  terminalRegistry.setLifecycleActive(state.lifecycleState === "active");
+  terminalRegistry.select(visibleTerminalKey, run?.interactive === true);
+  if (run === null) {
+    runValue.textContent = "No Run";
+    terminalMode.textContent = "No terminal Run";
     return;
   }
-  vscode.postMessage({
-    type: "terminal.resize",
-    sessionId,
-    columns: terminal.cols,
-    rows: terminal.rows,
-  });
+  runValue.textContent = run.runId.slice(0, 8) + " · " + run.phase;
+  terminalMode.textContent = run.interactive
+    ? "Interactive current Run"
+    : run.phase === "starting"
+      ? "Starting Run"
+      : "Read-only previous Run";
 };
-
-const fitTerminal = (): void => {
-  try {
-    fitAddon.fit();
-    reportTerminalSize();
-  } catch {
-    // A hidden VS Code view has no measurable geometry yet. The ResizeObserver retries.
-  }
-};
-
-const resizeObserver = new ResizeObserver(fitTerminal);
-resizeObserver.observe(terminalElement);
 
 const renderState = (state: ConsoleViewState): void => {
   const previousSessionId = activeSessionId;
   const previousRecovery = activeState?.recoveryIssue ?? null;
+  const previousRunId = activeRunId;
   const nextSessionId = state.selectedSession?.id;
+  const nextRunId = state.selectedRun?.runId;
   if (previousSessionId !== undefined) {
     localDrafts.set(previousSessionId, editor.getValue());
   }
 
   activeState = state;
   activeSessionId = nextSessionId;
+  activeRunId = nextRunId;
   connectionBadge.textContent = state.connectionStatus;
   connectionBadge.dataset.state = state.connectionStatus;
   statusMessage.textContent =
@@ -268,12 +272,19 @@ const renderState = (state: ConsoleViewState): void => {
   if (recovery !== null) {
     recoveryMessage.textContent =
       recovery.draftMatch === "exact"
-        ? `Request ${recovery.requestId} may have reached the Runtime. It will not be resent automatically.`
-        : `Request ${recovery.requestId} is unresolved. The current Draft is ${recovery.draftMatch}.`;
+        ? "Request " +
+          recovery.requestId +
+          " may have reached the Runtime. It will not be resent automatically."
+        : "Request " +
+          recovery.requestId +
+          " is unresolved. The current Draft is " +
+          recovery.draftMatch +
+          ".";
     assumeDeliveredButton.disabled = state.lifecycleState !== "active";
     retryPromptButton.disabled =
       recovery.draftMatch !== "exact" || state.lifecycleState !== "active";
   }
+
   const selected = state.selectedSession;
   sessionValue.textContent = selected?.title ?? "No session selected";
   agentValue.textContent = selected?.agentProfile ?? "—";
@@ -281,6 +292,9 @@ const renderState = (state: ConsoleViewState): void => {
   toolValue.textContent = selected?.toolProfile ?? "—";
   sessionStatus.textContent = selected?.status.replaceAll("_", " ") ?? "idle";
   sessionStatus.dataset.state = selected?.status ?? "idle";
+  renderRun(state);
+
+  if (previousRunId !== nextRunId) terminalWarning.hidden = true;
 
   startButton.disabled = !state.canStart;
   interruptButton.disabled = !state.canInterrupt;
@@ -288,12 +302,12 @@ const renderState = (state: ConsoleViewState): void => {
   updatePromptControls();
 
   if (previousSessionId !== nextSessionId) {
+    terminalWarning.hidden = true;
     const draft =
       nextSessionId === undefined ? "" : (localDrafts.get(nextSessionId) ?? state.draft);
     suppressDraftMessage = true;
     editor.setValue(draft);
     suppressDraftMessage = false;
-    fitTerminal();
   } else if (
     previousRecovery !== null &&
     state.recoveryIssue === null &&
@@ -314,9 +328,7 @@ const renderState = (state: ConsoleViewState): void => {
 
 const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): void => {
   const settlement = promptDelivery.settle(message);
-  if (settlement.status === "ignored") {
-    return;
-  }
+  if (settlement.status === "ignored") return;
 
   const sessionId = settlement.prompt.sessionId;
   const storedDraft = localDrafts.get(sessionId) ?? settlement.prompt.content;
@@ -334,30 +346,33 @@ const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): voi
         ? promptAcceptedStatusMessage(settlement.acknowledgement)
         : settlement.status === "unknown"
           ? "Prompt delivery outcome is unknown. It will not be resent automatically."
-          : `Prompt not sent. ${settlement.message}`;
+          : "Prompt not sent. " + settlement.message;
     updatePromptControls();
     editor.focus();
   }
 };
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
-  if (!isExtensionToConsoleMessage(event.data)) {
-    return;
-  }
+  if (!isExtensionToConsoleMessage(event.data)) return;
   const message = event.data;
   switch (message.type) {
     case "console.state":
       renderState(message.state);
       break;
-    case "terminal.data":
-      if (message.sessionId === selectedSessionId()) {
-        terminal.write(message.data);
-      }
+    case "terminal.run.open":
+      terminalRegistry.open(message);
       break;
-    case "terminal.clear":
-      if (message.sessionId === null || message.sessionId === selectedSessionId()) {
-        terminal.clear();
-      }
+    case "terminal.run.data":
+      terminalRegistry.applyData(message);
+      break;
+    case "terminal.run.snapshot":
+      terminalRegistry.restore(message);
+      break;
+    case "terminal.run.reset":
+      terminalRegistry.reset(message);
+      break;
+    case "terminal.run.close":
+      terminalRegistry.close(message);
       break;
     case "prompt.focus":
       editor.focus();
@@ -380,6 +395,7 @@ stopButton.addEventListener("click", () => {
   postForSelectedSession("session.stop");
 });
 sendButton.addEventListener("click", submitPrompt);
+
 const postRecoveryAction = (
   type: "prompt.recovery.assume-delivered" | "prompt.recovery.retry",
 ): void => {
@@ -405,8 +421,7 @@ retryPromptButton.addEventListener("click", () => {
 window.addEventListener("beforeunload", () => {
   resizeObserver.disconnect();
   editor.dispose();
-  terminal.dispose();
+  terminalRegistry.dispose();
 });
 
 vscode.postMessage({ type: "webview.ready", version: CONSOLE_WEBVIEW_VERSION });
-fitTerminal();

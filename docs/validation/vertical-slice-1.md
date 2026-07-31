@@ -4,7 +4,7 @@ Date: 2026-07-30 (Asia/Seoul)
 
 ## Outcome
 
-The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 200 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
+The automated Windows vertical slice is green: repository quality gates, architecture rules, strict typechecks, both esbuild bundles, 215 Vitest cases, a real packaged-runtime PTY round trip, the Git for Windows bundled Vim TUI smoke, and the official VS Code Extension Host smoke test passed. Eleven cases in the required matrix are PASS; the visual/IME/Neovim case is BLOCKED and is deliberately not counted as a pass.
 
 ## Environment
 
@@ -21,7 +21,7 @@ The automated Windows vertical slice is green: repository quality gates, archite
 
 | ID    | Status  | Scope and evidence                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | ----- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 125 source modules and 167 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.                                                                                                                                                                                                                                                                         |
+| VS-01 | PASS    | Root formatting, ESLint, strict package typechecks, build, tests, and dependency-cruiser run from `corepack pnpm verify`; 131 source modules and 174 dependencies had no violations. Generated `dist`, `.vscode-test`, coverage, and runtime-state directories are explicitly excluded from architecture analysis.                                                                                                                                                                                                                                                                         |
 | VS-02 | PASS    | Domain/persistence tests cover session creation, tag rules, parent/related integrity, cycle/self-reference rejection, CRUD, query ordering, and delete detachment: `packages/domain`, `packages/persistence`, and extension application tests all passed.                                                                                                                                                                                                                                                                                                                                  |
 | VS-03 | PASS    | `GlobalStateSessionRepository`, per-session drafts, and selected Session ID survive new repository instances. Missing or schema-invalid selected IDs are cleared and fall back to no selection; draft `session-2` restores as `second`.                                                                                                                                                                                                                                                                                                                                                    |
 | VS-04 | PASS    | The default runtime is built into `apps/vscode-extension/dist/runtime/cli.cjs`, resolved from the absolute extension root, and packaged with node-pty workers, license, and Windows x64/arm64 native assets. Explicit command and argv (including quotes, metacharacters, spaces, and Korean) remain separate and unchanged.                                                                                                                                                                                                                                                               |
@@ -42,7 +42,7 @@ The automated Windows vertical slice is green: repository quality gates, archite
 | `corepack pnpm format` then `corepack pnpm format:check`                                                    | PASS; mechanically corrected the 11 baseline formatting failures and formatted new artifacts.                                                  |
 | `corepack pnpm exec vitest run packages/session-runtime/src/node-pty.integration.test.ts`                   | PASS; 1 file, 4 real Windows PTY tests, including Git-bundled Vim.                                                                             |
 | `corepack pnpm exec vitest run apps/vscode-extension/src/adapters/jsonl-runtime-client.integration.test.ts` | PASS; packaged sidecar and real PTY round trip.                                                                                                |
-| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 46 files/200 tests, and dependency-cruiser (125 modules/167 dependencies). |
+| `corepack pnpm verify`                                                                                      | PASS; Prettier, ESLint, strict typecheck, TypeScript/esbuild build, 49 files/215 tests, and dependency-cruiser (131 modules/174 dependencies). |
 | `corepack pnpm test:vscode`                                                                                 | PASS; official VS Code 1.131.0 Extension Host, 1 test, exit code 0.                                                                            |
 | `code --version`                                                                                            | PASS; 1.116.0 x64.                                                                                                                             |
 | `Get-Command code,vim,nvim` plus Git-root derivation                                                        | `code` found; `vim` is not on PATH but Git-bundled Vim was found and passed; `nvim` NOT FOUND.                                                 |
@@ -272,6 +272,42 @@ Activation starts zero Agent processes and sends zero Prompt inputs. Honey Bee n
 
 A human-observable Extension Development Host must still verify Reload Window, forced Extension Host termination, external Runtime PID termination, process inspection after graceful shutdown, recovery notification accessibility, Korean IME composition/focus, and Neovim. Automated tests do not substitute for these OS/UI observations.
 
+## Run-scoped terminal surfaces (PR #5)
+
+### Failure removed
+
+PR #4 correlated Runtime and PTY operations with `sessionId + runId`, but Console protocol v5 still discarded that boundary. The Extension kept one transcript per Session, terminal messages carried no sequence, input/resize carried no Run ID, and the Webview cleared and replayed text through one xterm instance. A Vim alternate buffer or cursor/mouse/bracketed-paste mode could therefore survive into another Session, while late Run 1 output or stale Webview actions could target Run 2 of the same Session.
+
+Console protocol v6 now fails closed on old Session-only terminal messages. `ConsoleViewState.selectedRun` supplies the exact presentation Run; open/data/reset/close/snapshot/input/resize and stop/interrupt carry both IDs. Runtime PTY sequence numbers are preserved through the Extension and Webview.
+
+### Surface and replay policy
+
+Each retained Run owns a separate xterm 5.5.0 instance, FitAddon 0.10.0 instance, and DOM container. Session selection only hides and shows containers. It does not call global `clear()` or `reset()`, so the live Run preserves its normal/alternate buffer, cursor/modes, scroll position, and selection. A later Run of the same Session creates a fresh Terminal instance.
+
+Hidden and archived surfaces cannot send input or resize. The Webview and Extension each verify that a mutation belongs to the selected current interactive Run. Stale data, input, resize, interrupt, and stop cause ID-only diagnostics and zero current-Run mutation. Archived Runs are read-only.
+
+Sequence values are monotonic per Run. Duplicate/lower data is ignored. A gap requests a bounded transcript snapshot and shows a degraded-replay warning. That response is raw ANSI replay, not a serialized xterm emulator. It can rebuild a useful surface but cannot promise exact TUI state after truncation or missing bytes.
+
+### Bounded memory and privacy
+
+The Application retains at most 512 KiB of UTF-8 transcript per Run, targets 6 MiB total, and retains up to 12 terminal Run transcripts. The Webview retains up to 8 terminal xterm surfaces. Old unselected terminal Runs are evicted first; active and selected Runs are protected. A protected-only workload may temporarily exceed the total target and reports a content-free limit diagnostic.
+
+Terminal text, raw ANSI, xterm state, Vim/Neovim screen contents, scroll/selection, and clipboard data remain memory-only. Nothing new is written to `globalState`. Eviction does not delete the existing Runtime log. Replay messages disclose terminal data only to the already-authorized local Console Webview; Output Channel diagnostics contain identifiers, sequence/byte counts, and safe codes only.
+
+`retainContextWhenHidden` preserves live surfaces across ordinary View hide/show and Session switching. Reload Window, Extension Host loss, or Webview process destruction loses emulator state. Bounded raw replay is best effort after recreation, and truncation is visibly reported. Byte-perfect TUI restoration across those boundaries is not claimed.
+
+### Automated evidence added for PR #5
+
+- Strict contract tests cover protocol v6, selected Run projection, required Run IDs and sequences, snapshot shape, and rejection of v5 Session-only terminal messages.
+- Pure output tests cover same-Session Run isolation, duplicate/lower sequence rejection, gap detection, exact UTF-8 byte truncation, terminal data rejection, total retention, and active/selected protection.
+- Fake-surface Registry tests cover A/B surface separation, A-to-B-to-A reuse without clear/reset, fresh A2 construction, old A1 data isolation, hidden/archived input rejection, visible-only fit/resize, gap snapshot requests, and exactly-once disposal.
+- Application tests cover output arriving while another Session is selected, exact replay selection, Run 1 termination followed by fresh Run 2, late Run 1 rejection, and exact Run input correlation.
+- Existing Prompt acknowledgement/Draft/Receipt/Attempt, Runtime lifecycle, packaged Runtime, Korean-path ConPTY, interrupt, immediate-exit, and Git-bundled Vim suites remain regression gates.
+
+### Manual TUI validation still required
+
+A human-observable Extension Development Host must run Vim in Session A and Echo Fixture in Session B, switch A/B at least 20 times, and confirm A's live alternate-screen, cursor, selection, and scroll position remain unchanged. It must then end A Run 1, start A Run 2, and confirm a fresh normal terminal. Hide/show, side-bar and window resize, terminal versus Monaco paste, Korean IME composition/focus, and installed Neovim remain manual. Reload Window must be evaluated only as bounded replay; it is not a byte-perfect emulator-state guarantee.
+
 ## Manual GUI, IME, and Neovim checklist
 
 Run these on a Windows 11 workstation with a human-observable Extension Development Host. Record screenshots or a short capture and the exact VS Code/Neovim versions. Git-bundled Vim already has automated ConPTY coverage.
@@ -281,7 +317,7 @@ Run these on a Windows 11 workstation with a human-observable Extension Developm
 3. Create, rename, tag, parent, relate, and delete sessions; reload the host and confirm the selected Session and each session's draft restore. Corrupt/delete the stored selection target and confirm the UI safely falls back to no selection.
 4. Configure Echo Fixture as the agent, start it, and confirm ANSI colors, `Honey Bee Echo 벌 🐝`, literal input, resize/reflow, non-zero exit, and interrupt are visible in xterm.
 5. Verify Enter and Ctrl+Enter submit; Shift+Enter and Alt+Enter insert a newline. Compose Korean text with the Windows IME and confirm intermediate composition does not submit or duplicate characters.
-6. Switch repeatedly between two sessions and confirm draft text and console output remain associated with the correct Session.
+6. Run Vim in Session A and Echo Fixture in Session B, switch A/B at least 20 times, and confirm Drafts plus live xterm alternate-screen/cursor/scroll state remain isolated. End A Run 1, start A Run 2, and confirm Run 2 is a fresh terminal.
 7. Force Runtime input failure with a non-empty Draft and confirm `prompt.rejected`, preserved editor text, restored focus, and an accessible status error. Then inject Draft cleanup failure after a successful write and confirm `prompt.accepted`, a pending Receipt, no retry invitation, and automatic exact-Draft cleanup after restart. Inject a Receipt-store outage separately and confirm Runtime success is not reclassified while recovery uncertainty is clearly warned.
 8. Exercise the Attempt kill points immediately after prepared persistence, dispatching persistence, Runtime acceptance, before Receipt persistence, and after Receipt persistence but before Attempt finalization. Confirm prepared permits a normal retry, dispatching becomes unknown with zero startup writes, runtime-accepted reconstructs its Receipt, same-Session submit stays locked, Assume delivered creates no Receipt, Retry uses a fresh ID, and another Session remains usable.
 9. Optionally inspect Git-bundled Vim interactively beyond its passing automated smoke. Install Neovim (`nvim`), repeat insert/normal mode, arrow/function keys, resize, `:q`, and Ctrl+C through the PTY, and record any ConPTY escape-sequence differences.
@@ -289,9 +325,9 @@ Run these on a Windows 11 workstation with a human-observable Extension Developm
 ## Remaining risks and intentional limits
 
 - Visual layout, accessibility focus order, screen-reader behavior, Korean IME composition, and Neovim behavior are BLOCKED in this environment; no automated success is substituted. Git-bundled Vim is PASS through the real ConPTY smoke.
-- Protocol v4 durably journals Attempt identity before Runtime dispatch. A crash after durable `dispatching` but before `runtime-accepted` or Receipt persistence is now recovered as a Session-local `unknown`; it remains inherently ambiguous, is never auto-retried, and does not establish exactly-once delivery.
+- The Prompt Attempt journal durably records Attempt identity before Runtime dispatch. A crash after durable `dispatching` but before `runtime-accepted` or Receipt persistence is now recovered as a Session-local `unknown`; it remains inherently ambiguous, is never auto-retried, and does not establish exactly-once delivery.
 - No signed/installed VSIX was produced. The built `dist` layout and native packaged runtime were executed in both Vitest and the official development Extension Host; Marketplace/VSIX installation remains release validation.
-- Source-size debt remains: `jsonl-runtime-client.ts` is 558 lines, `console-service.ts` 474, `webview/console.ts` 394, `session-commands.ts` 335, and `extension.ts` 324. The Runtime client and Console service should be split along transport and recovery-orchestration boundaries before further lifecycle expansion.
-- The UI exposes bounded in-memory output but no explicit truncation marker. The PTY file log retains the full output; a future UI should surface truncation state.
+- Source-size debt remains in Console orchestration. PR #5 extracts sequence-aware output storage and terminal surface ownership into focused modules; further application-service decomposition should remain behavior-preserving.
+- Bounded replay now exposes a truncation warning. It remains raw ANSI rather than a durable or byte-perfect xterm snapshot; the PTY file log retains full output independently.
 - The generated packaged runtime is 6,895,824 bytes across 56 files after excluding PDB debug symbols and includes Windows x64 and arm64 assets only, consistent with the Windows-first decision.
 - Actual Git worktree, Library copy, ReFS/COW, Unity CLI operations, and production tool integrations are intentionally outside this vertical slice; only their package boundaries/contracts exist.

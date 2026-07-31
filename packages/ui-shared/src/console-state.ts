@@ -1,15 +1,17 @@
 import type {
   ConsoleConnectionStatus,
+  ConsoleLifecycleState,
+  ConsoleRunSummary,
   ConsoleSessionSummary,
   ConsoleViewState,
   PromptRecoveryIssue,
-  ConsoleLifecycleState,
 } from "./contracts.js";
 
 export type ConsoleStateAction =
   | {
       readonly type: "session.selected";
       readonly session: ConsoleSessionSummary | null;
+      readonly run: ConsoleRunSummary | null;
       readonly draft: string;
       readonly recoveryIssue: PromptRecoveryIssue | null;
     }
@@ -28,11 +30,13 @@ export type ConsoleStateAction =
   | {
       readonly type: "session.status";
       readonly status: ConsoleSessionSummary["status"];
+      readonly run: ConsoleRunSummary | null;
       readonly message: string;
     };
 
 export const initialConsoleViewState = (): ConsoleViewState => ({
   selectedSession: null,
+  selectedRun: null,
   draft: "",
   recoveryIssue: null,
   connectionStatus: "disconnected",
@@ -43,32 +47,43 @@ export const initialConsoleViewState = (): ConsoleViewState => ({
   canStop: false,
 });
 
-const controlsForStatus = (
+const controlsForState = (
   session: ConsoleSessionSummary | null,
+  run: ConsoleRunSummary | null,
   connectionStatus: ConsoleConnectionStatus,
   lifecycleState: ConsoleLifecycleState,
 ): Pick<ConsoleViewState, "canStart" | "canInterrupt" | "canStop"> => {
   if (session === null || connectionStatus !== "connected" || lifecycleState !== "active") {
     return { canStart: false, canInterrupt: false, canStop: false };
   }
-  const active =
-    session.status === "starting" ||
-    session.status === "running" ||
-    session.status === "waiting_for_input";
+  const terminalSession =
+    session.status === "idle" ||
+    session.status === "stopped" ||
+    session.status === "failed" ||
+    session.status === "completed";
+  const activeRun =
+    run !== null &&
+    (run.phase === "starting" ||
+      run.phase === "running" ||
+      run.phase === "waiting-for-input" ||
+      run.phase === "stopping");
   return {
-    canStart:
-      session.status === "idle" ||
-      session.status === "stopped" ||
-      session.status === "failed" ||
-      session.status === "completed",
-    canInterrupt: session.status === "running" || session.status === "waiting_for_input",
-    canStop: active,
+    canStart: terminalSession && !activeRun,
+    canInterrupt: run?.interactive === true,
+    canStop: activeRun,
   };
 };
 
-const withControls = (state: Omit<ConsoleViewState, "canStart" | "canInterrupt" | "canStop">) => ({
+const withControls = (
+  state: Omit<ConsoleViewState, "canStart" | "canInterrupt" | "canStop">,
+): ConsoleViewState => ({
   ...state,
-  ...controlsForStatus(state.selectedSession, state.connectionStatus, state.lifecycleState),
+  ...controlsForState(
+    state.selectedSession,
+    state.selectedRun,
+    state.connectionStatus,
+    state.lifecycleState,
+  ),
 });
 
 export const reduceConsoleViewState = (
@@ -89,12 +104,13 @@ export const reduceConsoleViewState = (
       return withControls({
         ...state,
         selectedSession: action.session,
+        selectedRun: action.run,
         draft: action.draft,
         recoveryIssue: action.recoveryIssue,
         statusMessage:
           action.session === null
             ? "Select a session to open its console."
-            : `${action.session.title} is ${action.session.status.replaceAll("_", " ")}.`,
+            : action.session.title + " is " + action.session.status.replaceAll("_", " ") + ".",
       });
     case "draft.updated":
       return { ...state, draft: action.draft };
@@ -107,10 +123,13 @@ export const reduceConsoleViewState = (
         statusMessage: action.message,
       });
     case "session.status": {
-      if (state.selectedSession === null) return { ...state, statusMessage: action.message };
+      if (state.selectedSession === null) {
+        return withControls({ ...state, selectedRun: action.run, statusMessage: action.message });
+      }
       return withControls({
         ...state,
         selectedSession: { ...state.selectedSession, status: action.status },
+        selectedRun: action.run,
         statusMessage: action.message,
       });
     }

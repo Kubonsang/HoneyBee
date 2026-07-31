@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto";
 
 import * as vscode from "vscode";
 
-import { SessionIdSchema } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema } from "@honeybee/domain";
 import {
   createConsoleWebviewHtml,
   isConsoleToExtensionMessage,
@@ -99,20 +99,31 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
       case "prompt.recovery.retry":
         this.run(this.retryUnknown(message.requestId, SessionIdSchema.parse(message.sessionId)));
         break;
-      case "terminal.input":
+      case "terminal.run.input":
         this.run(
           this.consoleService.sendTerminalInput(
             SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
             message.data,
           ),
         );
         break;
-      case "terminal.resize":
+      case "terminal.run.resize":
         this.run(
           this.consoleService.resize(
             SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
             message.columns,
             message.rows,
+          ),
+        );
+        break;
+      case "terminal.run.snapshot-request":
+        this.run(
+          this.consoleService.requestTerminalSnapshot(
+            SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
+            message.afterSeq,
           ),
         );
         break;
@@ -120,10 +131,20 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
         this.run(this.consoleService.start(SessionIdSchema.parse(message.sessionId)));
         break;
       case "session.interrupt":
-        this.run(this.consoleService.interrupt(SessionIdSchema.parse(message.sessionId)));
+        this.run(
+          this.consoleService.interrupt(
+            SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
+          ),
+        );
         break;
       case "session.stop":
-        this.run(this.consoleService.stop(SessionIdSchema.parse(message.sessionId)));
+        this.run(
+          this.consoleService.stop(
+            SessionIdSchema.parse(message.sessionId),
+            RunIdSchema.parse(message.runId),
+          ),
+        );
         break;
     }
   }
@@ -136,7 +157,13 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     const result = await this.consoleService.assumePromptDelivered(requestId, sessionId);
     if (result.status === "failed") {
       this.reportDiagnostic(
-        `Attempt recovery action failed for Session ${sessionId}, request ${requestId} (${result.code}).`,
+        "Attempt recovery action failed for Session " +
+          sessionId +
+          ", request " +
+          requestId +
+          " (" +
+          result.code +
+          ").",
       );
       await vscode.window.showWarningMessage(
         "Honey Bee could not resolve the unknown Prompt outcome. The Session remains locked.",
@@ -158,7 +185,13 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     const result = await this.consoleService.retryUnknownPrompt(requestId, sessionId);
     if (result.status === "failed") {
       this.reportDiagnostic(
-        `Attempt recovery retry failed for Session ${sessionId}, request ${requestId} (${result.code}).`,
+        "Attempt recovery retry failed for Session " +
+          sessionId +
+          ", request " +
+          requestId +
+          " (" +
+          result.code +
+          ").",
       );
       await vscode.window.showWarningMessage(
         "Honey Bee could not retry this unknown Prompt. Its Draft and Session lock were preserved.",
@@ -173,6 +206,7 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
       );
     }
   }
+
   private deliverPrompt(message: PromptSendMessage): void {
     const parsedMessage = {
       ...message,

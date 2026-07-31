@@ -3,6 +3,8 @@ import {
   type AgentSession,
   type RunId,
   type SessionId,
+  type SessionRunRecord,
+  type SessionStatus,
 } from "@honeybee/domain";
 import type {
   DraftRepository,
@@ -14,10 +16,12 @@ import type {
 import {
   initialConsoleViewState,
   reduceConsoleViewState,
+  type ConsoleRunSummary,
   type ConsoleSessionSummary,
   type ConsoleViewState,
   type ExtensionToConsoleMessage,
   type PromptRecoveryIssue,
+  type TerminalRunInitial,
 } from "@honeybee/ui-shared";
 
 import { ApplicationError } from "./errors.js";
@@ -36,10 +40,13 @@ import type {
   RuntimeShutdownReason,
   RuntimeShutdownResult,
 } from "./ports.js";
+import {
+  RunOutputBufferStore,
+  type RunOutputRetentionResult,
+  type RunOutputSnapshot,
+} from "./run-output-buffer-store.js";
 import { SessionRunController, type CorrelatedRuntimeStatus } from "./session-run-controller.js";
 import type { SessionSelectionService } from "./session-selection.js";
-
-const MAX_SESSION_OUTPUT = 512_000;
 
 interface TerminalSize {
   readonly columns: number;
@@ -56,6 +63,66 @@ const summary = (session: AgentSession): ConsoleSessionSummary => ({
   tags: session.tags,
 });
 
+const runPhase = (run: SessionRunRecord): ConsoleRunSummary["phase"] => {
+  switch (run.phase) {
+    case "starting":
+    case "running":
+    case "waiting-for-input":
+    case "stopping":
+      return run.phase;
+    case "interrupted":
+      return "interrupted";
+    case "stopped":
+    case "completed":
+    case "failed":
+      return "ended";
+  }
+};
+
+const runSummary = (run: SessionRunRecord): ConsoleRunSummary => ({
+  runId: run.runId,
+  sessionId: run.sessionId,
+  phase: runPhase(run),
+  interactive: run.phase === "running" || run.phase === "waiting-for-input",
+  startedAt: run.startedAt,
+  ...(run.terminationReason === undefined ? {} : { terminationReason: run.terminationReason }),
+});
+
+const statusForRun = (run: SessionRunRecord): SessionStatus => {
+  switch (run.phase) {
+    case "starting":
+      return "starting";
+    case "running":
+      return "running";
+    case "waiting-for-input":
+      return "waiting_for_input";
+    case "completed":
+      return "completed";
+    case "failed":
+      return "failed";
+    case "stopping":
+    case "stopped":
+    case "interrupted":
+      return "stopped";
+  }
+};
+
+const terminalStatus = (run: ConsoleRunSummary): "active" | "ended" | "interrupted" => {
+  if (run.phase === "interrupted") return "interrupted";
+  return run.phase === "ended" ? "ended" : "active";
+};
+
+const initialReplay = (snapshot: RunOutputSnapshot): TerminalRunInitial =>
+  snapshot.data.length === 0
+    ? { kind: "empty" }
+    : {
+        kind: "replay",
+        data: snapshot.data,
+        firstSeq: snapshot.firstSeq,
+        lastSeq: snapshot.lastSeq,
+        truncatedBytes: snapshot.truncatedBytes,
+      };
+
 const recoveryView = (issue: PromptRecoveryIssueRecord | undefined): PromptRecoveryIssue | null =>
   issue === undefined
     ? null
@@ -69,12 +136,13 @@ const recoveryView = (issue: PromptRecoveryIssueRecord | undefined): PromptRecov
 
 export class ConsoleApplicationService {
   readonly #listeners = new Set<(message: ExtensionToConsoleMessage) => void>();
-  readonly #outputs = new Map<SessionId, string>();
-  readonly #terminalSizes = new Map<SessionId, TerminalSize>();
+  readonly #outputs = new RunOutputBufferStore();
+  readonly #terminalSizes = new Map<RunId, TerminalSize>();
   readonly #runtimeSubscription: { dispose(): void };
   readonly #selectionSubscription: { dispose(): void };
   readonly #recovery: PromptRecoveryService;
   readonly #runController: SessionRunController;
+  readonly #diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void;
   #state: ConsoleViewState = initialConsoleViewState();
 
   public constructor(
@@ -91,6 +159,7 @@ export class ConsoleApplicationService {
     initialRecoveryIssues: readonly PromptRecoveryIssueRecord[] = [],
     diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void = () => undefined,
   ) {
+    this.#diagnostic = diagnostic;
     this.#runController = new SessionRunController(sessions, runs, runtime, clock, ids, diagnostic);
     this.#recovery = new PromptRecoveryService({
       attempts,
@@ -132,28 +201,27 @@ export class ConsoleApplicationService {
 
   public replayState(): void {
     this.emit({ type: "console.state", state: this.#state });
-    const sessionId = this.#state.selectedSession?.id;
-    if (sessionId === undefined) return;
-    const output = this.#outputs.get(this.parseSessionId(sessionId));
-    if (output !== undefined) this.emit({ type: "terminal.data", sessionId, data: output });
+    this.emitSelectedRunOpen();
   }
 
   public async select(sessionId: SessionId | undefined): Promise<void> {
     if (sessionId === undefined) {
-      this.emit({ type: "terminal.clear", sessionId: null });
+      this.handleRetention(this.#outputs.setSelected(undefined));
       this.setState(
         reduceConsoleViewState(this.#state, {
           type: "session.selected",
           session: null,
+          run: null,
           draft: "",
           recoveryIssue: null,
         }),
       );
       return;
     }
-    const [sessionResult, draftResult] = await Promise.all([
+    const [sessionResult, draftResult, run] = await Promise.all([
       this.sessions.getById(sessionId),
       this.drafts.getBySessionId(sessionId),
+      this.#runController.selectedRunForSession(sessionId),
     ]);
     if (!sessionResult.ok) {
       throw new ApplicationError(
@@ -170,17 +238,21 @@ export class ConsoleApplicationService {
       );
     }
 
-    this.emit({ type: "terminal.clear", sessionId });
+    const selectedRun = run === undefined ? null : runSummary(run);
     this.setState(
       reduceConsoleViewState(this.#state, {
         type: "session.selected",
         session: summary(sessionResult.value),
+        run: selectedRun,
         draft: draftResult.value?.content ?? "",
         recoveryIssue: recoveryView(this.#recovery.issueFor(sessionId)),
       }),
     );
-    const output = this.#outputs.get(sessionId);
-    if (output !== undefined) this.emit({ type: "terminal.data", sessionId, data: output });
+    if (run === undefined) {
+      this.handleRetention(this.#outputs.setSelected(undefined));
+    } else {
+      this.openRun(run);
+    }
   }
 
   public async saveDraft(sessionId: SessionId, content: string): Promise<void> {
@@ -219,27 +291,47 @@ export class ConsoleApplicationService {
       session.toolProfileId,
       session.workspaceId,
     );
-    const size = this.#terminalSizes.get(sessionId) ?? { columns: 80, rows: 24 };
+    const previousRunId = this.selectedRunId(sessionId);
+    const size =
+      previousRunId === undefined
+        ? { columns: 80, rows: 24 }
+        : (this.#terminalSizes.get(previousRunId) ?? { columns: 80, rows: 24 });
     if (this.#state.selectedSession?.id === sessionId) {
       this.setState(
         reduceConsoleViewState(this.#state, {
           type: "session.status",
           status: "starting",
+          run: this.#state.selectedRun,
           message: "Starting agent...",
         }),
       );
     }
     try {
-      await this.#runController.start(session, profile, size);
+      const runId = await this.#runController.start(session, profile, size);
+      const run = await this.#runController.getRun(runId);
+      if (run !== undefined && this.#state.selectedSession?.id === sessionId) {
+        this.setState(
+          reduceConsoleViewState(this.#state, {
+            type: "session.status",
+            status: statusForRun(run),
+            run: runSummary(run),
+            message: "Agent Run started.",
+          }),
+        );
+        this.openRun(run);
+      }
     } catch (error) {
       if (this.#state.selectedSession?.id === sessionId) {
+        const failedRun = await this.#runController.selectedRunForSession(sessionId);
         this.setState(
           reduceConsoleViewState(this.#state, {
             type: "session.status",
             status: "failed",
+            run: failedRun === undefined ? null : runSummary(failedRun),
             message: error instanceof Error ? error.message : String(error),
           }),
         );
+        if (failedRun !== undefined) this.openRun(failedRun);
       }
       throw error;
     }
@@ -315,8 +407,9 @@ export class ConsoleApplicationService {
     return result;
   }
 
-  public async sendTerminalInput(sessionId: SessionId, data: string): Promise<void> {
-    const outcome = await this.#runController.sendInput(sessionId, data);
+  public async sendTerminalInput(sessionId: SessionId, runId: RunId, data: string): Promise<void> {
+    this.assertSelectedRun(sessionId, runId, true, "terminal-run-stale-input");
+    const outcome = await this.#runController.sendTerminalInput(sessionId, runId, data);
     if (outcome.status !== "accepted") {
       throw new ApplicationError(
         outcome.status === "rejected" ? "runtime.input-rejected" : "runtime.input-unknown",
@@ -325,25 +418,71 @@ export class ConsoleApplicationService {
     }
   }
 
-  public async resize(sessionId: SessionId, columns: number, rows: number): Promise<void> {
-    this.#runController.assertMutationAllowed();
-    this.#terminalSizes.set(sessionId, { columns, rows });
-    const session = await this.getSession(sessionId);
+  public async resize(
+    sessionId: SessionId,
+    runId: RunId,
+    columns: number,
+    rows: number,
+  ): Promise<void> {
+    this.assertSelectedRun(sessionId, runId, false, "terminal-run-stale-resize");
+    const selected = this.#state.selectedRun;
     if (
-      session.status === "starting" ||
-      session.status === "running" ||
-      session.status === "waiting_for_input"
+      selected === null ||
+      (selected.phase !== "starting" &&
+        selected.phase !== "running" &&
+        selected.phase !== "waiting-for-input")
     ) {
-      await this.#runController.resize(sessionId, columns, rows);
+      this.#diagnostic("terminal-run-stale-resize", sessionId, runId);
+      return;
     }
+    this.#terminalSizes.set(runId, { columns, rows });
+    await this.#runController.resize(sessionId, runId, columns, rows);
   }
 
-  public interrupt(sessionId: SessionId): Promise<void> {
-    return this.#runController.interrupt(sessionId);
+  public async requestTerminalSnapshot(
+    sessionId: SessionId,
+    runId: RunId,
+    _afterSeq?: number,
+  ): Promise<void> {
+    const [snapshot, run] = await Promise.all([
+      Promise.resolve(this.#outputs.snapshot(sessionId, runId)),
+      this.#runController.getRun(runId),
+    ]);
+    if (snapshot === undefined || run === undefined || run.sessionId !== sessionId) {
+      this.#diagnostic("terminal-run-snapshot-unavailable", sessionId, runId);
+      return;
+    }
+    this.emit({
+      type: "terminal.run.snapshot",
+      sessionId,
+      runId,
+      status: terminalStatus(runSummary(run)),
+      data: snapshot.data,
+      firstSeq: snapshot.firstSeq,
+      lastSeq: snapshot.lastSeq,
+      truncatedBytes: snapshot.truncatedBytes,
+    });
   }
 
-  public stop(sessionId: SessionId): Promise<void> {
-    return this.#runController.stop(sessionId);
+  public async interrupt(sessionId: SessionId, runId: RunId): Promise<void> {
+    this.assertSelectedRun(sessionId, runId, true, "terminal-run-stale-input");
+    await this.#runController.interrupt(sessionId, runId);
+  }
+
+  public async stop(sessionId: SessionId, runId: RunId): Promise<void> {
+    this.assertSelectedRun(sessionId, runId, false, "terminal-run-stale-input");
+    await this.#runController.stop(sessionId, runId);
+    const run = await this.#runController.getRun(runId);
+    if (run !== undefined && this.isSelectedRun(sessionId, runId)) {
+      this.setState(
+        reduceConsoleViewState(this.#state, {
+          type: "session.status",
+          status: statusForRun(run),
+          run: runSummary(run),
+          message: "Stopping agent...",
+        }),
+      );
+    }
   }
 
   public beginShutdown(): void {
@@ -410,12 +549,35 @@ export class ConsoleApplicationService {
         }
         return;
       case "pty.data": {
-        if (!this.#runController.isCurrentRun(event.sessionId, event.runId)) return;
-        const current = this.#outputs.get(event.sessionId) ?? "";
-        this.#outputs.set(event.sessionId, `${current}${event.data}`.slice(-MAX_SESSION_OUTPUT));
-        if (this.#state.selectedSession?.id === event.sessionId) {
-          this.emit({ type: "terminal.data", sessionId: event.sessionId, data: event.data });
+        if (!this.#runController.isCurrentRun(event.sessionId, event.runId)) {
+          this.#diagnostic("terminal-run-stale-data", event.sessionId, event.runId);
+          return;
         }
+        const appended = this.#outputs.append(
+          event.sessionId,
+          event.runId,
+          event.sequence,
+          event.data,
+        );
+        if (appended.status === "duplicate") {
+          this.#diagnostic("terminal-run-stale-data", event.sessionId, event.runId);
+          return;
+        }
+        if (appended.status === "terminal") {
+          this.#diagnostic("terminal-run-stale-data", event.sessionId, event.runId);
+          return;
+        }
+        if (appended.gap) {
+          this.#diagnostic("terminal-run-sequence-gap", event.sessionId, event.runId);
+        }
+        this.handleRetention(this.#outputs.enforceRetention());
+        this.emit({
+          type: "terminal.run.data",
+          sessionId: event.sessionId,
+          runId: event.runId,
+          seq: event.sequence,
+          data: event.data,
+        });
         return;
       }
       case "session.status":
@@ -436,14 +598,34 @@ export class ConsoleApplicationService {
   private async applyRuntimeStatus(event: CorrelatedRuntimeStatus): Promise<void> {
     try {
       const applied = await this.#runController.handleStatus(event);
-      if (applied !== undefined && this.#state.selectedSession?.id === event.sessionId) {
+      if (applied === undefined) return;
+      if (
+        applied.run.phase === "stopped" ||
+        applied.run.phase === "completed" ||
+        applied.run.phase === "failed" ||
+        applied.run.phase === "interrupted"
+      ) {
+        this.handleRetention(
+          this.#outputs.markTerminal(event.sessionId, event.runId, event.sequence),
+        );
+        this.emit({
+          type: "terminal.run.close",
+          sessionId: event.sessionId,
+          runId: event.runId,
+          reason: applied.run.terminationReason ?? applied.run.phase,
+          finalSeq: event.sequence,
+        });
+      }
+      if (this.#state.selectedSession?.id === event.sessionId) {
         this.setState(
           reduceConsoleViewState(this.#state, {
             type: "session.status",
             status: applied.status,
+            run: runSummary(applied.run),
             message: applied.message,
           }),
         );
+        this.openRun(applied.run);
       }
     } catch (error) {
       this.setState(
@@ -454,6 +636,73 @@ export class ConsoleApplicationService {
         }),
       );
     }
+  }
+
+  private openRun(run: SessionRunRecord): void {
+    const snapshot = this.#outputs.open(run.sessionId, run.runId);
+    this.handleRetention(this.#outputs.setSelected(run.runId));
+    this.emit({
+      type: "terminal.run.open",
+      sessionId: run.sessionId,
+      runId: run.runId,
+      status: terminalStatus(runSummary(run)),
+      initial: initialReplay(snapshot),
+    });
+  }
+
+  private emitSelectedRunOpen(): void {
+    const run = this.#state.selectedRun;
+    if (run === null) return;
+    const sessionId = this.parseSessionId(run.sessionId);
+    const runId = this.parseRunId(run.runId);
+    const snapshot = this.#outputs.open(sessionId, runId);
+    this.handleRetention(this.#outputs.setSelected(runId));
+    this.emit({
+      type: "terminal.run.open",
+      sessionId,
+      runId,
+      status: terminalStatus(run),
+      initial: initialReplay(snapshot),
+    });
+  }
+
+  private handleRetention(result: RunOutputRetentionResult): void {
+    for (const runId of result.evictedRunIds) {
+      this.#diagnostic("terminal-run-surface-evicted", undefined, runId);
+    }
+    if (result.limitExceeded) {
+      this.#diagnostic("terminal-run-registry-limit");
+    }
+  }
+
+  private assertSelectedRun(
+    sessionId: SessionId,
+    runId: RunId,
+    requireInteractive: boolean,
+    code: string,
+  ): void {
+    this.#runController.assertMutationAllowed();
+    const selected = this.#state.selectedRun;
+    if (
+      !this.isSelectedRun(sessionId, runId) ||
+      (requireInteractive && selected?.interactive !== true)
+    ) {
+      this.#diagnostic(code, sessionId, runId);
+      throw new ApplicationError(code, "The terminal action belongs to a stale or read-only Run.");
+    }
+  }
+
+  private isSelectedRun(sessionId: SessionId, runId: RunId): boolean {
+    return (
+      this.#state.selectedSession?.id === sessionId &&
+      this.#state.selectedRun?.sessionId === sessionId &&
+      this.#state.selectedRun.runId === runId
+    );
+  }
+
+  private selectedRunId(sessionId: SessionId): RunId | undefined {
+    const run = this.#state.selectedRun;
+    return run?.sessionId === sessionId ? this.parseRunId(run.runId) : undefined;
   }
 
   private async refreshRecoveryView(sessionId: SessionId, message: string): Promise<void> {
@@ -482,6 +731,10 @@ export class ConsoleApplicationService {
 
   private parseSessionId(sessionId: string): SessionId {
     return sessionId as SessionId;
+  }
+
+  private parseRunId(runId: string): RunId {
+    return runId as RunId;
   }
 
   private setState(state: ConsoleViewState): void {

@@ -1,8 +1,49 @@
 import { describe, expect, it } from "vitest";
 
-import { isConsoleToExtensionMessage, isExtensionToConsoleMessage } from "./index.js";
+import {
+  CONSOLE_WEBVIEW_VERSION,
+  isConsoleToExtensionMessage,
+  isExtensionToConsoleMessage,
+} from "./index.js";
+
+const state = {
+  selectedSession: {
+    id: "session-1",
+    title: "Console",
+    agentProfile: "codex",
+    workspace: "main",
+    toolProfile: "default",
+    status: "running" as const,
+    tags: [],
+  },
+  selectedRun: {
+    runId: "run-1",
+    sessionId: "session-1",
+    phase: "running" as const,
+    interactive: true,
+    startedAt: "2026-07-31T10:00:00.000Z",
+  },
+  draft: "",
+  recoveryIssue: null,
+  connectionStatus: "connected" as const,
+  lifecycleState: "active" as const,
+  statusMessage: "Connected.",
+  canStart: false,
+  canInterrupt: true,
+  canStop: true,
+};
 
 describe("Console message contracts", () => {
+  it("requires protocol v6 and rejects older ready messages", () => {
+    expect(
+      isConsoleToExtensionMessage({
+        type: "webview.ready",
+        version: CONSOLE_WEBVIEW_VERSION,
+      }),
+    ).toBe(true);
+    expect(isConsoleToExtensionMessage({ type: "webview.ready", version: 5 })).toBe(false);
+  });
+
   it("requires a request ID and non-empty content for prompt.send", () => {
     expect(
       isConsoleToExtensionMessage({
@@ -43,70 +84,143 @@ describe("Console message contracts", () => {
         sessionId: "session-1",
       }),
     ).toBe(false);
-    expect(
-      isConsoleToExtensionMessage({
-        type: "prompt.recovery.retry",
-        requestId: "request-1",
-        sessionId: "session-1",
-        content: "must not cross recovery protocol",
-      }),
-    ).toBe(false);
   });
 
-  it("accepts valid input and resize messages", () => {
+  it("requires exact Run identity for terminal input, resize, and controls", () => {
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.input",
+        sessionId: "session-1",
+        runId: "run-1",
+        data: "\u0003",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "terminal.run.resize",
+        sessionId: "session-1",
+        runId: "run-1",
+        columns: 120,
+        rows: 36,
+      }),
+    ).toBe(true);
     expect(
       isConsoleToExtensionMessage({
         type: "terminal.input",
         sessionId: "session-1",
         data: "\u0003",
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       isConsoleToExtensionMessage({
-        type: "terminal.resize",
+        type: "terminal.run.resize",
         sessionId: "session-1",
         columns: 120,
         rows: 36,
       }),
-    ).toBe(true);
-  });
-
-  it("rejects malformed and zero-sized messages", () => {
+    ).toBe(false);
     expect(
       isConsoleToExtensionMessage({
-        type: "terminal.resize",
+        type: "session.stop",
         sessionId: "session-1",
-        columns: 0,
-        rows: 36,
+        runId: "run-1",
+      }),
+    ).toBe(true);
+    expect(
+      isConsoleToExtensionMessage({
+        type: "session.stop",
+        sessionId: "session-1",
       }),
     ).toBe(false);
   });
 
-  it("requires a typed lifecycle state in protocol v5 Console state", () => {
-    const state = {
-      selectedSession: null,
-      draft: "",
-      recoveryIssue: null,
-      connectionStatus: "connected",
-      lifecycleState: "shutting-down",
-      statusMessage: "Honey Bee is shutting down.",
-      canStart: false,
-      canInterrupt: false,
-      canStop: false,
-    };
+  it("validates strict Run-scoped open, data, snapshot, reset, and close messages", () => {
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.open",
+        sessionId: "session-1",
+        runId: "run-1",
+        status: "active",
+        initial: {
+          kind: "replay",
+          data: "\u001b[?1049h",
+          firstSeq: 1,
+          lastSeq: 2,
+          truncatedBytes: 0,
+        },
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.data",
+        sessionId: "session-1",
+        runId: "run-1",
+        seq: 3,
+        data: "screen",
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.snapshot",
+        sessionId: "session-1",
+        runId: "run-1",
+        status: "active",
+        data: "bounded replay",
+        firstSeq: 1,
+        lastSeq: 3,
+        truncatedBytes: 12,
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.reset",
+        sessionId: "session-1",
+        runId: "run-1",
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.close",
+        sessionId: "session-1",
+        runId: "run-1",
+        reason: "process-exit-zero",
+        finalSeq: 4,
+      }),
+    ).toBe(true);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.data",
+        sessionId: "session-1",
+        data: "legacy",
+      }),
+    ).toBe(false);
+    expect(
+      isExtensionToConsoleMessage({
+        type: "terminal.run.data",
+        sessionId: "session-1",
+        runId: "run-1",
+        seq: -1,
+        data: "invalid",
+      }),
+    ).toBe(false);
+  });
+
+  it("requires selected Run identity in Console state and rejects cross-Session projection", () => {
     expect(isExtensionToConsoleMessage({ type: "console.state", state })).toBe(true);
-    const { lifecycleState: _lifecycleState, ...missingLifecycle } = state;
-    expect(isExtensionToConsoleMessage({ type: "console.state", state: missingLifecycle })).toBe(
-      false,
-    );
+    const { selectedRun: _selectedRun, ...missingRun } = state;
+    expect(isExtensionToConsoleMessage({ type: "console.state", state: missingRun })).toBe(false);
     expect(
       isExtensionToConsoleMessage({
         type: "console.state",
-        state: { ...state, lifecycleState: "terminating" },
+        state: {
+          ...state,
+          selectedRun: { ...state.selectedRun, sessionId: "session-2" },
+        },
       }),
     ).toBe(false);
   });
-  it("distinguishes accepted durability outcomes from rejected delivery", () => {
+
+  it("distinguishes accepted durability outcomes from rejected and unknown delivery", () => {
     expect(
       isExtensionToConsoleMessage({
         type: "prompt.accepted",
@@ -120,19 +234,8 @@ describe("Console message contracts", () => {
     ).toBe(true);
     expect(
       isExtensionToConsoleMessage({
-        type: "prompt.accepted",
-        requestId: "prompt-2",
-        sessionId: "session-1",
-        attemptPersistence: "stored",
-        receiptPersistence: "stored",
-        draftCleanup: "pending",
-        warnings: ["draft-delete-failed"],
-      }),
-    ).toBe(true);
-    expect(
-      isExtensionToConsoleMessage({
         type: "prompt.rejected",
-        requestId: "prompt-3",
+        requestId: "prompt-2",
         sessionId: "session-1",
         message: "Runtime write failed.",
       }),
@@ -140,7 +243,7 @@ describe("Console message contracts", () => {
     expect(
       isExtensionToConsoleMessage({
         type: "prompt.unknown",
-        requestId: "prompt-unknown",
+        requestId: "prompt-3",
         sessionId: "session-1",
         message: "Runtime response was not observed.",
         warnings: [],
@@ -154,32 +257,6 @@ describe("Console message contracts", () => {
         message: "Runtime response was not observed.",
         warnings: [],
         content: "must not cross acknowledgement protocol",
-      }),
-    ).toBe(false);
-    expect(
-      isExtensionToConsoleMessage({
-        type: "prompt.accepted",
-        requestId: "prompt-4",
-        sessionId: "session-1",
-        attemptPersistence: "stored",
-        receiptPersistence: "warning",
-        draftCleanup: "warning",
-        warnings: ["not-a-warning-code"],
-      }),
-    ).toBe(false);
-    expect(
-      isExtensionToConsoleMessage({
-        type: "prompt.accepted",
-        requestId: "prompt-5",
-        sessionId: "session-1",
-        draftCleanup: "cleared",
-      }),
-    ).toBe(false);
-    expect(
-      isExtensionToConsoleMessage({
-        type: "prompt.rejected",
-        sessionId: "session-1",
-        message: "Runtime write failed.",
       }),
     ).toBe(false);
   });

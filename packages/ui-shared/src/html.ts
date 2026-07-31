@@ -42,6 +42,7 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
         </div>
         <dl class="identity-grid">
           <div><dt>Session</dt><dd id="session-value">No session selected</dd></div>
+          <div><dt>Run</dt><dd id="run-value">No Run</dd></div>
           <div><dt>Agent</dt><dd id="agent-value">—</dd></div>
           <div><dt>Workspace</dt><dd id="workspace-value">—</dd></div>
           <div><dt>Tool Profile</dt><dd id="tool-value">—</dd></div>
@@ -74,7 +75,8 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
         </div>
       </section>
       <section class="terminal-panel" aria-label="Raw terminal">
-        <div class="section-label"><span>RAW TERMINAL</span><span>ANSI / PTY STRING STREAM</span></div>
+        <div class="section-label"><span>RAW TERMINAL</span><span id="terminal-mode">No terminal Run</span></div>
+        <div id="terminal-warning" class="terminal-warning" role="status" hidden></div>
         <div id="terminal" tabindex="0" aria-label="Interactive agent terminal"></div>
       </section>
 

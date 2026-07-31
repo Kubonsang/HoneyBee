@@ -76,6 +76,7 @@ export type RuntimeClientEvent =
       readonly type: "session.status";
       readonly sessionId: SessionId;
       readonly runId: RunId;
+      readonly sequence: number;
       readonly status: SessionStatus;
       readonly message: string;
       readonly reason?: SessionTerminationReason;

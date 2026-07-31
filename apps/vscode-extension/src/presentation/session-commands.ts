@@ -1,6 +1,6 @@
 import * as vscode from "vscode";
 
-import { SessionIdSchema, type AgentSession, type SessionId } from "@honeybee/domain";
+import { RunIdSchema, SessionIdSchema, type AgentSession, type SessionId } from "@honeybee/domain";
 
 import type { ConsoleApplicationService } from "../application/console-service.js";
 import type { SessionSelectionService } from "../application/session-selection.js";
@@ -321,14 +321,24 @@ export const registerSessionCommands = (
     }),
     vscode.commands.registerCommand("honeyBee.console.interrupt", () => {
       const selected = dependencies.selection.selectedSessionId;
-      if (selected !== undefined) {
-        run(dependencies.consoleService.interrupt(selected));
+      const selectedRun = dependencies.consoleService.state.selectedRun;
+      if (
+        selected !== undefined &&
+        selectedRun?.sessionId === selected &&
+        dependencies.consoleService.state.canInterrupt
+      ) {
+        run(dependencies.consoleService.interrupt(selected, RunIdSchema.parse(selectedRun.runId)));
       }
     }),
     vscode.commands.registerCommand("honeyBee.console.stop", () => {
       const selected = dependencies.selection.selectedSessionId;
-      if (selected !== undefined) {
-        run(dependencies.consoleService.stop(selected));
+      const selectedRun = dependencies.consoleService.state.selectedRun;
+      if (
+        selected !== undefined &&
+        selectedRun?.sessionId === selected &&
+        dependencies.consoleService.state.canStop
+      ) {
+        run(dependencies.consoleService.stop(selected, RunIdSchema.parse(selectedRun.runId)));
       }
     }),
   );

@@ -167,12 +167,14 @@ describe("SessionRunController", () => {
     await controller.handleStatus({
       sessionId: selected.id,
       runId: runA,
+      sequence: 1,
       status: "running",
       message: "running A",
     });
     await controller.handleStatus({
       sessionId: selected.id,
       runId: runA,
+      sequence: 1,
       status: "completed",
       reason: "process-exit-zero",
       exitCode: 0,
@@ -185,6 +187,7 @@ describe("SessionRunController", () => {
     const late = await controller.handleStatus({
       sessionId: selected.id,
       runId: runA,
+      sequence: 1,
       status: "stopped",
       reason: "user-stop",
       message: "late A",

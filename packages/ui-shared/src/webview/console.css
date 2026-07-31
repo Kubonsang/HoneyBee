@@ -116,7 +116,7 @@ button:disabled {
 
 .identity-grid {
   display: grid;
-  grid-template-columns: minmax(110px, 1.4fr) repeat(3, minmax(90px, 1fr));
+  grid-template-columns: minmax(110px, 1.4fr) repeat(4, minmax(90px, 1fr));
   gap: 5px;
   margin: 0;
 }
@@ -234,7 +234,7 @@ button:disabled {
 }
 
 .terminal-panel {
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto auto minmax(0, 1fr);
   border-bottom: 1px solid var(--hb-border);
 }
 
@@ -263,11 +263,33 @@ button:disabled {
   white-space: nowrap;
 }
 
+.terminal-warning {
+  border-bottom: 1px solid var(--hb-gold-deep);
+  padding: 4px 10px;
+  background: #2b2415;
+  color: var(--hb-gold-bright);
+  font-size: 10px;
+}
+
+.terminal-warning[hidden] {
+  display: none;
+}
+
 #terminal {
+  position: relative;
   min-width: 0;
   min-height: 0;
-  padding: 8px 6px 4px 9px;
   background: #11100d;
+}
+
+.terminal-run-surface {
+  position: absolute;
+  inset: 0;
+  padding: 8px 6px 4px 9px;
+}
+
+.terminal-run-surface[hidden] {
+  display: none;
 }
 
 #terminal:focus-visible {

@@ -92,15 +92,18 @@ windowsDescribe("VS Code JSONL client to runtime integration", () => {
       await client.sendInput(sessionId, "exit 0\r", runId);
       await vi.waitFor(
         () =>
-          expect(events).toContainEqual({
-            type: "session.status",
-            sessionId,
-            runId,
-            status: "completed",
-            reason: "process-exit-zero",
-            exitCode: 0,
-            message: "Agent completed successfully.",
-          }),
+          expect(events).toContainEqual(
+            expect.objectContaining({
+              type: "session.status",
+              sessionId,
+              runId,
+              sequence: expect.any(Number),
+              status: "completed",
+              reason: "process-exit-zero",
+              exitCode: 0,
+              message: "Agent completed successfully.",
+            }),
+          ),
         { timeout: 10_000 },
       );
       expect(diagnostics.join("")).not.toContain("protocol");

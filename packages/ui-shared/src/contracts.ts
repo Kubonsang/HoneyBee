@@ -1,4 +1,4 @@
-export const CONSOLE_WEBVIEW_VERSION = 5 as const;
+export const CONSOLE_WEBVIEW_VERSION = 6 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 export type ConsoleLifecycleState =
@@ -17,6 +17,19 @@ export interface ConsoleSessionSummary {
   readonly tags: readonly string[];
 }
 
+export type ConsoleRunPhase =
+  "starting" | "running" | "waiting-for-input" | "stopping" | "ended" | "interrupted";
+
+/** Run identity selected for the Console terminal surface. */
+export interface ConsoleRunSummary {
+  readonly runId: string;
+  readonly sessionId: string;
+  readonly phase: ConsoleRunPhase;
+  readonly interactive: boolean;
+  readonly startedAt: string;
+  readonly terminationReason?: string;
+}
+
 /** Content-free recovery state for one unresolved Session delivery outcome. */
 export interface PromptRecoveryIssue {
   readonly requestId: string;
@@ -28,6 +41,7 @@ export interface PromptRecoveryIssue {
 
 export interface ConsoleViewState {
   readonly selectedSession: ConsoleSessionSummary | null;
+  readonly selectedRun: ConsoleRunSummary | null;
   readonly draft: string;
   readonly recoveryIssue: PromptRecoveryIssue | null;
   readonly connectionStatus: ConsoleConnectionStatus;
@@ -89,10 +103,60 @@ export interface PromptUnknownMessage {
 export type PromptAcknowledgementMessage =
   PromptAcceptedMessage | PromptRejectedMessage | PromptUnknownMessage;
 
+export interface TerminalRunKey {
+  readonly sessionId: string;
+  readonly runId: string;
+}
+
+export type TerminalRunInitial =
+  | { readonly kind: "empty" }
+  | {
+      readonly kind: "replay";
+      readonly data: string;
+      readonly firstSeq: number;
+      readonly lastSeq: number;
+      readonly truncatedBytes: number;
+    };
+
+/** Opens or reselects one Run-scoped terminal surface. Replay is raw ANSI, not an emulator snapshot. */
+export interface TerminalRunOpenMessage extends TerminalRunKey {
+  readonly type: "terminal.run.open";
+  readonly status: "active" | "ended" | "interrupted";
+  readonly initial: TerminalRunInitial;
+}
+
+/** Rebuilds one surface from bounded raw ANSI after a detected sequence gap. */
+export interface TerminalRunSnapshotMessage extends TerminalRunKey {
+  readonly type: "terminal.run.snapshot";
+  readonly status: "active" | "ended" | "interrupted";
+  readonly data: string;
+  readonly firstSeq: number;
+  readonly lastSeq: number;
+  readonly truncatedBytes: number;
+}
+export interface TerminalRunDataMessage extends TerminalRunKey {
+  readonly type: "terminal.run.data";
+  readonly seq: number;
+  readonly data: string;
+}
+
+export interface TerminalRunResetMessage extends TerminalRunKey {
+  readonly type: "terminal.run.reset";
+}
+
+export interface TerminalRunCloseMessage extends TerminalRunKey {
+  readonly type: "terminal.run.close";
+  readonly reason: string;
+  readonly finalSeq: number;
+}
+
 export type ExtensionToConsoleMessage =
   | { readonly type: "console.state"; readonly state: ConsoleViewState }
-  | { readonly type: "terminal.data"; readonly sessionId: string; readonly data: string }
-  | { readonly type: "terminal.clear"; readonly sessionId: string | null }
+  | TerminalRunOpenMessage
+  | TerminalRunSnapshotMessage
+  | TerminalRunDataMessage
+  | TerminalRunResetMessage
+  | TerminalRunCloseMessage
   | { readonly type: "prompt.focus" }
   | PromptAcknowledgementMessage;
 
@@ -105,16 +169,30 @@ export type ConsoleToExtensionMessage =
       readonly requestId: string;
       readonly sessionId: string;
     }
-  | { readonly type: "terminal.input"; readonly sessionId: string; readonly data: string }
   | {
-      readonly type: "terminal.resize";
+      readonly type: "terminal.run.input";
       readonly sessionId: string;
+      readonly runId: string;
+      readonly data: string;
+    }
+  | {
+      readonly type: "terminal.run.resize";
+      readonly sessionId: string;
+      readonly runId: string;
       readonly columns: number;
       readonly rows: number;
     }
   | {
-      readonly type: "session.start" | "session.interrupt" | "session.stop";
+      readonly type: "terminal.run.snapshot-request";
       readonly sessionId: string;
+      readonly runId: string;
+      readonly afterSeq?: number;
+    }
+  | { readonly type: "session.start"; readonly sessionId: string }
+  | {
+      readonly type: "session.interrupt" | "session.stop";
+      readonly sessionId: string;
+      readonly runId: string;
     };
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> =>
@@ -128,12 +206,20 @@ const hasSessionId = (
 ): value is Readonly<Record<string, unknown>> & { readonly sessionId: string } =>
   typeof value.sessionId === "string" && value.sessionId.length > 0;
 
+const hasRunIdentity = (
+  value: Readonly<Record<string, unknown>>,
+): value is Readonly<Record<string, unknown>> & TerminalRunKey =>
+  hasSessionId(value) && typeof value.runId === "string" && value.runId.length > 0;
+
 const hasRequestAndSessionId = (
   value: Readonly<Record<string, unknown>>,
 ): value is Readonly<Record<string, unknown>> & {
   readonly requestId: string;
   readonly sessionId: string;
 } => typeof value.requestId === "string" && value.requestId.length > 0 && hasSessionId(value);
+
+const isNonNegativeInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isInteger(value) && value >= 0;
 
 const consoleLifecycleStates: readonly ConsoleLifecycleState[] = [
   "activating",
@@ -149,6 +235,7 @@ const consoleConnectionStatuses: readonly ConsoleConnectionStatus[] = [
   "disconnected",
   "error",
 ];
+
 const consoleSessionStatuses: readonly ConsoleSessionStatus[] = [
   "idle",
   "starting",
@@ -158,6 +245,16 @@ const consoleSessionStatuses: readonly ConsoleSessionStatus[] = [
   "failed",
   "completed",
 ];
+
+const consoleRunPhases: readonly ConsoleRunPhase[] = [
+  "starting",
+  "running",
+  "waiting-for-input",
+  "stopping",
+  "ended",
+  "interrupted",
+];
+
 const promptDeliveryWarningCodes: readonly PromptDeliveryWarningCode[] = [
   "attempt-runtime-accepted-save-failed",
   "attempt-unknown-save-failed",
@@ -171,6 +268,15 @@ const promptDeliveryWarningCodes: readonly PromptDeliveryWarningCode[] = [
 
 const isConsoleSessionSummary = (value: unknown): value is ConsoleSessionSummary =>
   isRecord(value) &&
+  hasOnlyKeys(value, [
+    "id",
+    "title",
+    "agentProfile",
+    "workspace",
+    "toolProfile",
+    "status",
+    "tags",
+  ]) &&
   typeof value.id === "string" &&
   value.id.length > 0 &&
   typeof value.title === "string" &&
@@ -181,6 +287,24 @@ const isConsoleSessionSummary = (value: unknown): value is ConsoleSessionSummary
   consoleSessionStatuses.includes(value.status as ConsoleSessionStatus) &&
   Array.isArray(value.tags) &&
   value.tags.every((tag) => typeof tag === "string");
+
+const isConsoleRunSummary = (value: unknown): value is ConsoleRunSummary =>
+  isRecord(value) &&
+  hasOnlyKeys(value, [
+    "runId",
+    "sessionId",
+    "phase",
+    "interactive",
+    "startedAt",
+    "terminationReason",
+  ]) &&
+  hasRunIdentity(value) &&
+  typeof value.phase === "string" &&
+  consoleRunPhases.includes(value.phase as ConsoleRunPhase) &&
+  typeof value.interactive === "boolean" &&
+  typeof value.startedAt === "string" &&
+  !Number.isNaN(Date.parse(value.startedAt)) &&
+  (value.terminationReason === undefined || typeof value.terminationReason === "string");
 
 const isPromptRecoveryIssue = (value: unknown): value is PromptRecoveryIssue =>
   isRecord(value) &&
@@ -193,19 +317,41 @@ const isPromptRecoveryIssue = (value: unknown): value is PromptRecoveryIssue =>
   typeof value.occurredAt === "string" &&
   !Number.isNaN(Date.parse(value.occurredAt));
 
-const isConsoleViewState = (value: unknown): value is ConsoleViewState =>
-  isRecord(value) &&
-  (value.selectedSession === null || isConsoleSessionSummary(value.selectedSession)) &&
-  typeof value.draft === "string" &&
-  (value.recoveryIssue === null || isPromptRecoveryIssue(value.recoveryIssue)) &&
-  typeof value.connectionStatus === "string" &&
-  consoleConnectionStatuses.includes(value.connectionStatus as ConsoleConnectionStatus) &&
-  typeof value.lifecycleState === "string" &&
-  consoleLifecycleStates.includes(value.lifecycleState as ConsoleLifecycleState) &&
-  typeof value.statusMessage === "string" &&
-  typeof value.canStart === "boolean" &&
-  typeof value.canInterrupt === "boolean" &&
-  typeof value.canStop === "boolean";
+const isConsoleViewState = (value: unknown): value is ConsoleViewState => {
+  if (
+    !isRecord(value) ||
+    !hasOnlyKeys(value, [
+      "selectedSession",
+      "selectedRun",
+      "draft",
+      "recoveryIssue",
+      "connectionStatus",
+      "lifecycleState",
+      "statusMessage",
+      "canStart",
+      "canInterrupt",
+      "canStop",
+    ]) ||
+    !(value.selectedSession === null || isConsoleSessionSummary(value.selectedSession)) ||
+    !(value.selectedRun === null || isConsoleRunSummary(value.selectedRun)) ||
+    typeof value.draft !== "string" ||
+    !(value.recoveryIssue === null || isPromptRecoveryIssue(value.recoveryIssue)) ||
+    typeof value.connectionStatus !== "string" ||
+    !consoleConnectionStatuses.includes(value.connectionStatus as ConsoleConnectionStatus) ||
+    typeof value.lifecycleState !== "string" ||
+    !consoleLifecycleStates.includes(value.lifecycleState as ConsoleLifecycleState) ||
+    typeof value.statusMessage !== "string" ||
+    typeof value.canStart !== "boolean" ||
+    typeof value.canInterrupt !== "boolean" ||
+    typeof value.canStop !== "boolean"
+  ) {
+    return false;
+  }
+  return (
+    value.selectedRun === null ||
+    (value.selectedSession !== null && value.selectedRun.sessionId === value.selectedSession.id)
+  );
+};
 
 const hasValidWarnings = (value: unknown): value is readonly PromptDeliveryWarningCode[] =>
   Array.isArray(value) &&
@@ -215,16 +361,35 @@ const hasValidWarnings = (value: unknown): value is readonly PromptDeliveryWarni
       promptDeliveryWarningCodes.includes(warning as PromptDeliveryWarningCode),
   );
 
+const isTerminalRunInitial = (value: unknown): value is TerminalRunInitial => {
+  if (!isRecord(value) || typeof value.kind !== "string") return false;
+  if (value.kind === "empty") return hasOnlyKeys(value, ["kind"]);
+  return (
+    value.kind === "replay" &&
+    hasOnlyKeys(value, ["kind", "data", "firstSeq", "lastSeq", "truncatedBytes"]) &&
+    typeof value.data === "string" &&
+    isNonNegativeInteger(value.firstSeq) &&
+    isNonNegativeInteger(value.lastSeq) &&
+    value.firstSeq <= value.lastSeq &&
+    isNonNegativeInteger(value.truncatedBytes)
+  );
+};
+
 /** Validates messages received by the Extension Host from the Console Webview. */
 export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToExtensionMessage => {
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "webview.ready":
-      return value.version === CONSOLE_WEBVIEW_VERSION;
+      return hasOnlyKeys(value, ["type", "version"]) && value.version === CONSOLE_WEBVIEW_VERSION;
     case "draft.changed":
-      return hasSessionId(value) && typeof value.content === "string";
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "content"]) &&
+        hasSessionId(value) &&
+        typeof value.content === "string"
+      );
     case "prompt.send":
       return (
+        hasOnlyKeys(value, ["type", "requestId", "sessionId", "content"]) &&
         hasRequestAndSessionId(value) &&
         typeof value.content === "string" &&
         value.content.trim().length > 0
@@ -234,11 +399,16 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
       return (
         hasRequestAndSessionId(value) && hasOnlyKeys(value, ["type", "requestId", "sessionId"])
       );
-    case "terminal.input":
-      return hasSessionId(value) && typeof value.data === "string";
-    case "terminal.resize":
+    case "terminal.run.input":
       return (
-        hasSessionId(value) &&
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "data"]) &&
+        hasRunIdentity(value) &&
+        typeof value.data === "string"
+      );
+    case "terminal.run.resize":
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "columns", "rows"]) &&
+        hasRunIdentity(value) &&
         typeof value.columns === "number" &&
         Number.isInteger(value.columns) &&
         value.columns > 0 &&
@@ -246,10 +416,17 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
         Number.isInteger(value.rows) &&
         value.rows > 0
       );
+    case "terminal.run.snapshot-request":
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "afterSeq"]) &&
+        hasRunIdentity(value) &&
+        (value.afterSeq === undefined || isNonNegativeInteger(value.afterSeq))
+      );
     case "session.start":
+      return hasOnlyKeys(value, ["type", "sessionId"]) && hasSessionId(value);
     case "session.interrupt":
     case "session.stop":
-      return hasSessionId(value);
+      return hasOnlyKeys(value, ["type", "sessionId", "runId"]) && hasRunIdentity(value);
     default:
       return false;
   }
@@ -260,13 +437,53 @@ export const isExtensionToConsoleMessage = (value: unknown): value is ExtensionT
   if (!isRecord(value) || typeof value.type !== "string") return false;
   switch (value.type) {
     case "console.state":
-      return isConsoleViewState(value.state);
-    case "terminal.data":
-      return hasSessionId(value) && typeof value.data === "string";
-    case "terminal.clear":
-      return value.sessionId === null || hasSessionId(value);
+      return hasOnlyKeys(value, ["type", "state"]) && isConsoleViewState(value.state);
+    case "terminal.run.open":
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "status", "initial"]) &&
+        hasRunIdentity(value) &&
+        (value.status === "active" || value.status === "ended" || value.status === "interrupted") &&
+        isTerminalRunInitial(value.initial)
+      );
+    case "terminal.run.data":
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "seq", "data"]) &&
+        hasRunIdentity(value) &&
+        isNonNegativeInteger(value.seq) &&
+        typeof value.data === "string"
+      );
+    case "terminal.run.snapshot":
+      return (
+        hasOnlyKeys(value, [
+          "type",
+          "sessionId",
+          "runId",
+          "status",
+          "data",
+          "firstSeq",
+          "lastSeq",
+          "truncatedBytes",
+        ]) &&
+        hasRunIdentity(value) &&
+        (value.status === "active" || value.status === "ended" || value.status === "interrupted") &&
+        typeof value.data === "string" &&
+        isNonNegativeInteger(value.firstSeq) &&
+        isNonNegativeInteger(value.lastSeq) &&
+        value.firstSeq <= value.lastSeq &&
+        isNonNegativeInteger(value.truncatedBytes)
+      );
+    case "terminal.run.reset":
+      return hasOnlyKeys(value, ["type", "sessionId", "runId"]) && hasRunIdentity(value);
+    case "terminal.run.close":
+      return (
+        hasOnlyKeys(value, ["type", "sessionId", "runId", "reason", "finalSeq"]) &&
+        hasRunIdentity(value) &&
+        typeof value.reason === "string" &&
+        value.reason.length > 0 &&
+        isNonNegativeInteger(value.finalSeq)
+      );
     case "prompt.focus":
-      return true;
+      return hasOnlyKeys(value, ["type"]);
     case "prompt.accepted":
       return (
         hasRequestAndSessionId(value) &&

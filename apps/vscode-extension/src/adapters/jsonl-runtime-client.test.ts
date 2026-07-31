@@ -172,6 +172,7 @@ describe("JsonlRuntimeClient", () => {
       type: "session.status",
       sessionId,
       runId,
+      sequence: 8,
       status: "running",
       message: "Agent is running.",
     });

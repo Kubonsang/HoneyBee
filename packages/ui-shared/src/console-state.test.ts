@@ -12,11 +12,20 @@ const session = {
   tags: ["tests"],
 };
 
+const runningRun = {
+  runId: "run-1",
+  sessionId: "session-1",
+  phase: "running" as const,
+  interactive: true,
+  startedAt: "2026-07-31T10:00:00.000Z",
+};
+
 describe("reduceConsoleViewState", () => {
-  it("enables only controls valid for the current connection and status", () => {
+  it("enables controls only for the selected current Run", () => {
     const selected = reduceConsoleViewState(initialConsoleViewState(), {
       type: "session.selected",
       session,
+      run: null,
       draft: "continue",
       recoveryIssue: null,
     });
@@ -37,11 +46,22 @@ describe("reduceConsoleViewState", () => {
     const running = reduceConsoleViewState(connected, {
       type: "session.status",
       status: "running",
+      run: runningRun,
       message: "Agent is running.",
     });
     expect(running.canStart).toBe(false);
     expect(running.canInterrupt).toBe(true);
     expect(running.canStop).toBe(true);
+
+    const archived = reduceConsoleViewState(running, {
+      type: "session.status",
+      status: "completed",
+      run: { ...runningRun, phase: "ended", interactive: false },
+      message: "Agent completed.",
+    });
+    expect(archived.canStart).toBe(true);
+    expect(archived.canInterrupt).toBe(false);
+    expect(archived.canStop).toBe(false);
 
     const shuttingDown = reduceConsoleViewState(running, {
       type: "lifecycle.changed",
@@ -53,20 +73,24 @@ describe("reduceConsoleViewState", () => {
     expect(shuttingDown.statusMessage).toContain("shutting down");
   });
 
-  it("keeps session-specific draft content with a selection", () => {
+  it("keeps Session Draft and selected Run identity together", () => {
     const state = reduceConsoleViewState(initialConsoleViewState(), {
       type: "session.selected",
       session,
+      run: runningRun,
       draft: "saved draft",
       recoveryIssue: null,
     });
     expect(state.draft).toBe("saved draft");
     expect(state.selectedSession?.id).toBe("session-1");
+    expect(state.selectedRun?.runId).toBe("run-1");
   });
+
   it("stores and clears a content-free recovery issue per selected Session", () => {
     const selected = reduceConsoleViewState(initialConsoleViewState(), {
       type: "session.selected",
       session,
+      run: null,
       draft: "saved draft",
       recoveryIssue: null,
     });

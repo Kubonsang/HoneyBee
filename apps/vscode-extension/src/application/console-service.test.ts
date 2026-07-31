@@ -153,27 +153,25 @@ describe("ConsoleApplicationService", () => {
     selection.select(selected.id);
     await vi.waitFor(() => expect(service.state.selectedSession?.id).toBe(selected.id));
     await service.saveDraft(selected.id, "continue fixing");
-    await service.resize(selected.id, 100, 30);
-    expect(runtime.resizes).toEqual([]);
-
     await service.start(selected.id);
     const started = runtime.starts[0];
     expect(started).toMatchObject({
       sessionId: selected.id,
       command: "fake-agent",
-      columns: 100,
-      rows: 30,
+      columns: 80,
+      rows: 24,
     });
     if (started === undefined) throw new Error("Runtime start was not recorded.");
     runtime.emit({
       type: "session.status",
       sessionId: selected.id,
       runId: started.runId,
+      sequence: 0,
       status: "running",
       message: "Agent is running.",
     });
     await vi.waitFor(() => expect(service.state.selectedSession?.status).toBe("running"));
-    await service.resize(selected.id, 120, 36);
+    await service.resize(selected.id, started.runId, 120, 36);
     expect(runtime.resizes).toContainEqual({
       sessionId: selected.id,
       columns: 120,
@@ -191,8 +189,10 @@ describe("ConsoleApplicationService", () => {
       data: "\u001b[32mready\u001b[0m\r\n",
     });
     expect(messages).toContainEqual({
-      type: "terminal.data",
+      type: "terminal.run.data",
       sessionId: selected.id,
+      runId: started.runId,
+      seq: 1,
       data: "\u001b[32mready\u001b[0m\r\n",
     });
 
