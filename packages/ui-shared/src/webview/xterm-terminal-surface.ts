@@ -4,6 +4,7 @@ import { Terminal, type ITerminalOptions, type ITheme } from "@xterm/xterm";
 import type { TerminalRunKey } from "../contracts.js";
 import type {
   TerminalDimensions,
+  TerminalRenderMetrics,
   TerminalSurface,
   TerminalSurfaceFactory,
 } from "./terminal-run-registry.js";
@@ -49,6 +50,7 @@ class XtermTerminalSurface implements TerminalSurface {
   readonly #fitAddon: FitAddon;
   readonly #container: HTMLDivElement;
   readonly #dataSubscription: { dispose(): void };
+  #opened = false;
   #disposed = false;
 
   public constructor(host: HTMLElement, key: TerminalRunKey, onData: (data: string) => void) {
@@ -62,12 +64,22 @@ class XtermTerminalSurface implements TerminalSurface {
     this.#terminal = new Terminal(terminalOptions);
     this.#fitAddon = new FitAddon();
     this.#terminal.loadAddon(this.#fitAddon);
-    this.#terminal.open(this.#container);
     this.#dataSubscription = this.#terminal.onData(onData);
   }
 
-  public write(data: string): void {
-    if (!this.#disposed) this.#terminal.write(data);
+  public write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void {
+    if (this.#disposed) return;
+    this.#terminal.write(data, () => {
+      if (this.#disposed) return;
+      this.#refreshVisibleRows();
+      const active = this.#terminal.buffer.active;
+      onParsed?.({
+        bufferLineCount: active.length,
+        baseY: active.baseY,
+        viewportY: active.viewportY,
+        rows: this.#terminal.rows,
+      });
+    });
   }
 
   public reset(): void {
@@ -77,12 +89,15 @@ class XtermTerminalSurface implements TerminalSurface {
   public setVisible(visible: boolean): void {
     if (this.#disposed) return;
     this.#container.hidden = !visible;
+    if (visible) this.#ensureOpen();
   }
 
   public fit(): TerminalDimensions | undefined {
     if (this.#disposed || this.#container.hidden) return undefined;
+    this.#ensureOpen();
     try {
       this.#fitAddon.fit();
+      this.#refreshVisibleRows();
       return { columns: this.#terminal.cols, rows: this.#terminal.rows };
     } catch {
       return undefined;
@@ -90,7 +105,10 @@ class XtermTerminalSurface implements TerminalSurface {
   }
 
   public focus(): void {
-    if (!this.#disposed && !this.#container.hidden) this.#terminal.focus();
+    if (!this.#disposed && !this.#container.hidden) {
+      this.#ensureOpen();
+      this.#terminal.focus();
+    }
   }
 
   public dispose(): void {
@@ -99,6 +117,17 @@ class XtermTerminalSurface implements TerminalSurface {
     this.#dataSubscription.dispose();
     this.#terminal.dispose();
     this.#container.remove();
+  }
+
+  #ensureOpen(): void {
+    if (this.#opened || this.#disposed) return;
+    this.#terminal.open(this.#container);
+    this.#opened = true;
+  }
+
+  #refreshVisibleRows(): void {
+    if (!this.#opened || this.#container.hidden || this.#terminal.rows <= 0) return;
+    this.#terminal.refresh(0, this.#terminal.rows - 1);
   }
 }
 

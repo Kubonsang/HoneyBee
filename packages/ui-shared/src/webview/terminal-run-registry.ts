@@ -12,8 +12,16 @@ export interface TerminalDimensions {
   readonly rows: number;
 }
 
+/** Content-free xterm state observed after one queued write has been parsed. */
+export interface TerminalRenderMetrics {
+  readonly bufferLineCount: number;
+  readonly baseY: number;
+  readonly viewportY: number;
+  readonly rows: number;
+}
+
 export interface TerminalSurface {
-  write(data: string): void;
+  write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void;
   reset(): void;
   setVisible(visible: boolean): void;
   fit(): TerminalDimensions | undefined;
@@ -31,9 +39,33 @@ export interface TerminalRunRegistryOptions {
   readonly onResize: (key: TerminalRunKey, size: TerminalDimensions) => void;
   readonly onSnapshotRequest: (key: TerminalRunKey, afterSeq?: number) => void;
   readonly onDiagnostic?: (code: string, key: TerminalRunKey, seq?: number) => void;
+  readonly onTrace?: (event: TerminalRunRegistryTrace) => void;
   readonly maxTerminalSurfaces?: number;
   readonly now?: () => number;
 }
+
+/** Content-free delivery trace used by focused tests and temporary diagnostics. */
+export type TerminalRunRegistryTrace =
+  | {
+      readonly stage: "registry-received";
+      readonly key: TerminalRunKey;
+      readonly seq: number;
+      readonly status: "active" | "ended" | "interrupted" | "missing";
+      readonly lastAppliedSeq: number;
+    }
+  | {
+      readonly stage: "registry-result";
+      readonly key: TerminalRunKey;
+      readonly seq: number;
+      readonly result: TerminalDataApplyResult["status"];
+      readonly lastAppliedSeq: number;
+    }
+  | {
+      readonly stage: "surface-rendered";
+      readonly key: TerminalRunKey;
+      readonly seq: number;
+      readonly metrics: TerminalRenderMetrics;
+    };
 
 interface SurfaceRecord {
   readonly key: TerminalRunKey;
@@ -68,6 +100,7 @@ export class TerminalRunRegistry {
   readonly #onResize: TerminalRunRegistryOptions["onResize"];
   readonly #onSnapshotRequest: TerminalRunRegistryOptions["onSnapshotRequest"];
   readonly #onDiagnostic: NonNullable<TerminalRunRegistryOptions["onDiagnostic"]>;
+  readonly #onTrace: NonNullable<TerminalRunRegistryOptions["onTrace"]>;
   readonly #maxTerminalSurfaces: number;
   readonly #now: () => number;
   #selectedKey: TerminalRunKey | undefined;
@@ -80,6 +113,7 @@ export class TerminalRunRegistry {
     this.#onResize = options.onResize;
     this.#onSnapshotRequest = options.onSnapshotRequest;
     this.#onDiagnostic = options.onDiagnostic ?? (() => undefined);
+    this.#onTrace = options.onTrace ?? (() => undefined);
     this.#maxTerminalSurfaces = options.maxTerminalSurfaces ?? 8;
     this.#now = options.now ?? Date.now;
     if (!Number.isSafeInteger(this.#maxTerminalSurfaces) || this.#maxTerminalSurfaces <= 0) {
@@ -126,31 +160,50 @@ export class TerminalRunRegistry {
 
   public applyData(message: TerminalRunDataMessage): TerminalDataApplyResult {
     const record = this.#records.get(terminalRunKey(message));
+    this.#onTrace({
+      stage: "registry-received",
+      key: { sessionId: message.sessionId, runId: message.runId },
+      seq: message.seq,
+      status: record?.status ?? "missing",
+      lastAppliedSeq: record?.lastAppliedSeq ?? 0,
+    });
     if (record === undefined) {
       if (sameKey(this.#selectedKey, message)) {
         this.#onDiagnostic("terminal-run-surface-missing", message, message.seq);
         this.#onSnapshotRequest({ sessionId: message.sessionId, runId: message.runId });
       }
+      this.#recordResult(message, "missing", 0);
       return { status: "missing" };
     }
     if (record.status !== "active") {
       this.#onDiagnostic("terminal-run-stale-data", message, message.seq);
+      this.#recordResult(message, "duplicate", record.lastAppliedSeq);
       return { status: "duplicate" };
     }
     if (message.seq <= record.lastAppliedSeq) {
       this.#onDiagnostic("terminal-run-stale-data", message, message.seq);
+      this.#recordResult(message, "duplicate", record.lastAppliedSeq);
       return { status: "duplicate" };
     }
     const expectedSeq = record.lastAppliedSeq + 1;
-    record.surface.write(message.data);
+    record.surface.write(message.data, (metrics) => {
+      this.#onTrace({
+        stage: "surface-rendered",
+        key: record.key,
+        seq: message.seq,
+        metrics,
+      });
+    });
     record.lastAppliedSeq = message.seq;
     record.lastAccessedAt = this.#now();
     if (message.seq !== expectedSeq) {
       record.degraded = "sequence-gap";
       this.#reportDegraded(record);
       this.#onSnapshotRequest(record.key, expectedSeq - 1);
+      this.#recordResult(message, "gap", record.lastAppliedSeq);
       return { status: "gap", expectedSeq };
     }
+    this.#recordResult(message, "applied", record.lastAppliedSeq);
     return { status: "applied" };
   }
 
@@ -278,6 +331,20 @@ export class TerminalRunRegistry {
       record.status === "active" &&
       sameKey(this.#selectedKey, record.key)
     );
+  }
+
+  #recordResult(
+    message: TerminalRunDataMessage,
+    result: TerminalDataApplyResult["status"],
+    lastAppliedSeq: number,
+  ): void {
+    this.#onTrace({
+      stage: "registry-result",
+      key: { sessionId: message.sessionId, runId: message.runId },
+      seq: message.seq,
+      result,
+      lastAppliedSeq,
+    });
   }
 
   #enforceRetention(): void {

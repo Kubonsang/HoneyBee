@@ -12,6 +12,7 @@ import {
 } from "@honeybee/ui-shared";
 
 import type { ConsoleApplicationService } from "../application/console-service.js";
+import { postConsoleMessage, type ConsoleMessageTrace } from "./console-message-bridge.js";
 import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 
 export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
@@ -26,10 +27,15 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     private readonly consoleService: ConsoleApplicationService,
     private readonly reportError: (error: unknown) => void,
     private readonly reportDiagnostic: (message: string) => void,
+    private readonly terminalTrace: (event: ConsoleMessageTrace) => void = () => undefined,
   ) {
     this.#delivery = new PromptDeliveryCoordinator(consoleService, reportError, reportDiagnostic);
     this.#serviceSubscription = consoleService.onMessage((message) => {
-      this.#view?.webview.postMessage(message);
+      if (this.#view !== undefined) {
+        void postConsoleMessage(this.#view.webview, message, this.terminalTrace).catch(
+          this.reportError,
+        );
+      }
     });
   }
 

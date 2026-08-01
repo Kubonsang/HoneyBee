@@ -5,6 +5,7 @@ import {
   TerminalRunRegistry,
   terminalRunKey,
   type TerminalDimensions,
+  type TerminalRenderMetrics,
   type TerminalSurface,
   type TerminalSurfaceFactory,
 } from "./terminal-run-registry.js";
@@ -20,8 +21,9 @@ class FakeSurface implements TerminalSurface {
 
   public constructor(readonly input: (data: string) => void) {}
 
-  public write(data: string): void {
+  public write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void {
     this.writes.push(data);
+    onParsed?.({ bufferLineCount: this.writes.length, baseY: 0, viewportY: 0, rows: 30 });
   }
 
   public reset(): void {
@@ -200,6 +202,47 @@ describe("TerminalRunRegistry", () => {
     });
     expect(onSnapshotRequest).toHaveBeenCalledWith(a, 1);
     expect(factory.get(a).writes).toEqual(["one", "three"]);
+  });
+
+  it("traces Run identity, sequence, apply result, and content-free render metrics", () => {
+    const factory = new FakeFactory();
+    const trace = vi.fn();
+    const registry = new TerminalRunRegistry({
+      factory,
+      onInput: vi.fn(),
+      onResize: vi.fn(),
+      onSnapshotRequest: vi.fn(),
+      onTrace: trace,
+    });
+    const a = key("session-a", "run-a");
+    registry.select(a, true);
+    registry.open(open(a));
+
+    expect(
+      registry.applyData({ type: "terminal.run.data", ...a, seq: 1, data: "SESSION-A" }),
+    ).toEqual({ status: "applied" });
+    expect(trace.mock.calls.map(([event]) => event)).toEqual([
+      {
+        stage: "registry-received",
+        key: a,
+        seq: 1,
+        status: "active",
+        lastAppliedSeq: 0,
+      },
+      {
+        stage: "surface-rendered",
+        key: a,
+        seq: 1,
+        metrics: { bufferLineCount: 1, baseY: 0, viewportY: 0, rows: 30 },
+      },
+      {
+        stage: "registry-result",
+        key: a,
+        seq: 1,
+        result: "applied",
+        lastAppliedSeq: 1,
+      },
+    ]);
   });
 
   it("reports degraded replay only when its Run becomes selected", () => {

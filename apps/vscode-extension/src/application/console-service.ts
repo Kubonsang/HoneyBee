@@ -63,6 +63,13 @@ interface RunViewPreference {
   readonly followLive: boolean;
 }
 
+export interface ConsoleTerminalDataTrace {
+  readonly stage: "application-received" | "terminal-message-emitted";
+  readonly sessionId: SessionId;
+  readonly runId: RunId;
+  readonly sequence: number;
+}
+
 const summary = (session: AgentSession): ConsoleSessionSummary => ({
   id: session.id,
   title: session.title,
@@ -129,6 +136,7 @@ export class ConsoleApplicationService {
   readonly #recovery: PromptRecoveryService;
   readonly #runController: SessionRunController;
   readonly #diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void;
+  readonly #terminalTrace: (event: ConsoleTerminalDataTrace) => void;
   #state: ConsoleViewState = initialConsoleViewState();
 
   public constructor(
@@ -144,8 +152,10 @@ export class ConsoleApplicationService {
     ids: Pick<IdGeneratorPort, "requestId" | "runId">,
     initialRecoveryIssues: readonly PromptRecoveryIssueRecord[] = [],
     diagnostic: (code: string, sessionId?: SessionId, runId?: RunId) => void = () => undefined,
+    terminalTrace: (event: ConsoleTerminalDataTrace) => void = () => undefined,
   ) {
     this.#diagnostic = diagnostic;
+    this.#terminalTrace = terminalTrace;
     this.#runController = new SessionRunController(
       sessions,
       this.runs,
@@ -597,6 +607,12 @@ export class ConsoleApplicationService {
         }
         return;
       case "pty.data": {
+        this.#terminalTrace({
+          stage: "application-received",
+          sessionId: event.sessionId,
+          runId: event.runId,
+          sequence: event.sequence,
+        });
         if (!this.#runController.isCurrentRun(event.sessionId, event.runId)) {
           this.#diagnostic("terminal-run-stale-data", event.sessionId, event.runId);
           return;
@@ -632,6 +648,12 @@ export class ConsoleApplicationService {
           runId: event.runId,
           seq: event.sequence,
           data: event.data,
+        });
+        this.#terminalTrace({
+          stage: "terminal-message-emitted",
+          sessionId: event.sessionId,
+          runId: event.runId,
+          sequence: event.sequence,
         });
         return;
       }
