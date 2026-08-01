@@ -30,7 +30,7 @@ Open an Extension Development Host with the repository as its workspace:
 code --new-window --extensionDevelopmentPath=apps/vscode-extension .
 ```
 
-Open the Honey Bee activity-bar view, create a session, select it, then use **Start Agent**. By default, the extension resolves its packaged `dist/runtime/cli.cjs` to an absolute path and launches it with `node`, so it also works when the opened Unity workspace is outside this repository. Explicit runtime command/argument overrides, agent command/arguments, and profiles can be changed under the `honeyBee.*` VS Code settings.
+Open the Honey Bee activity-bar view, create a session, and select it. The Session tree opens a terminal-first Console in an editor-area panel; **Honey Bee: Open Console** opens it again. Use **Start** from the compact Run Bar. The Prompt Composer is collapsed by default and opens from **Compose Prompt** or `Ctrl+Alt+P`. By default, the extension resolves its packaged `dist/runtime/cli.cjs` to an absolute path and launches it with `node`, so it also works when the opened Unity workspace is outside this repository. Explicit runtime command/argument overrides, agent command/arguments, and profiles can be changed under the `honeyBee.*` VS Code settings.
 
 For a deterministic console smoke test, point `honeyBee.agent.command` to `node` and set `honeyBee.agent.args` to the absolute path of `packages/test-fixtures/dist/echo-cli.js`. Echo Fixture accepts `unicode`, `ansi`, `burst 10000`, `exit 7`, and `quit`; arbitrary input is echoed literally.
 
@@ -44,7 +44,7 @@ A normal Extension shutdown first rejects new Runtime mutations, drains Prompt d
 
 Each Agent Run owns a separate in-memory xterm surface. Switching Sessions hides and shows those surfaces without clearing or replaying the live emulator, so Vim alternate-screen, cursor modes, selection, and scroll position do not leak between Sessions. Starting a new Run for the same Session creates a fresh terminal. Terminal input, resize, interrupt, and stop are accepted only for the selected current Run.
 
-Terminal transcripts and emulator state are not stored in VS Code `globalState`. Normal View hide/show uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated or has a sequence gap, Honey Bee states that the reconstructed screen may be incomplete.
+Terminal transcripts and emulator state are not stored in VS Code `globalState`. Hiding and revealing the editor Console uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated or has a sequence gap, Honey Bee states that the reconstructed screen may be incomplete.
 
 The labelled **Terminal run** selector lists up to 50 recent Runs for the selected Session without creating an xterm surface for every item. The active Run and the Run currently being viewed are separate. Selecting an archived Run makes Prompt, input, resize, interrupt, and stop controls read-only; **Return to live** restores the current interactive Run. Replay status distinguishes retained, truncated, sequence-gap, surface-only, and metadata-only screens. **Open log** is offered only when the Extension can resolve the exact Run's Runtime-origin path; no local path is sent to the Webview.
 
