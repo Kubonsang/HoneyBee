@@ -40,6 +40,7 @@ const requiredElement = <T extends HTMLElement>(id: string): T => {
   return element as T;
 };
 
+const consoleShell = requiredElement<HTMLElement>("console-shell");
 const terminalElement = requiredElement<HTMLDivElement>("terminal");
 const terminalMode = requiredElement<HTMLElement>("terminal-mode");
 const terminalWarning = requiredElement<HTMLElement>("terminal-warning");
@@ -54,6 +55,9 @@ const liveRunNotice = requiredElement<HTMLElement>("live-run-notice");
 const returnLiveButton = requiredElement<HTMLButtonElement>("return-live-button");
 const runAccessibleStatus = requiredElement<HTMLElement>("run-accessible-status");
 const editorElement = requiredElement<HTMLDivElement>("prompt-editor");
+const promptPanel = requiredElement<HTMLElement>("prompt-panel");
+const composePromptButton = requiredElement<HTMLButtonElement>("compose-prompt-button");
+const closeComposerButton = requiredElement<HTMLButtonElement>("close-composer-button");
 const sessionValue = requiredElement<HTMLElement>("session-value");
 const runValue = requiredElement<HTMLElement>("run-value");
 const agentValue = requiredElement<HTMLElement>("agent-value");
@@ -112,6 +116,12 @@ const terminalRegistry = new TerminalRunRegistry({
   },
 });
 
+const monacoTheme = (): string => {
+  if (document.body.classList.contains("vscode-high-contrast-light")) return "hc-light";
+  if (document.body.classList.contains("vscode-high-contrast")) return "hc-black";
+  return document.body.classList.contains("vscode-light") ? "vs" : "vs-dark";
+};
+
 const editor = monaco.editor.create(editorElement, {
   accessibilitySupport: "auto",
   automaticLayout: true,
@@ -129,7 +139,7 @@ const editor = monaco.editor.create(editorElement, {
   scrollbar: { verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
   scrollBeyondLastLine: false,
   tabSize: 2,
-  theme: "vs-dark",
+  theme: monacoTheme(),
   value: "",
   wordWrap: "on",
 });
@@ -142,6 +152,47 @@ let suppressDraftMessage = false;
 let isComposing = false;
 const localDrafts = new Map<string, string>();
 const promptDelivery = new PromptDeliveryTracker();
+let pendingLiveTerminalFocus: TerminalRunKey | undefined;
+
+const setComposerOpen = (open: boolean, focusEditor = false): void => {
+  promptPanel.hidden = !open;
+  consoleShell.dataset.composerOpen = String(open);
+  if (!open) {
+    terminalRegistry.fitSelected();
+    return;
+  }
+  pendingLiveTerminalFocus = undefined;
+  requestAnimationFrame(() => {
+    editor.layout();
+    if (focusEditor) editor.focus();
+  });
+};
+
+const focusLiveTerminal = (key: TerminalRunKey): void => {
+  pendingLiveTerminalFocus = key;
+  requestAnimationFrame(() => {
+    const state = activeState;
+    if (
+      pendingLiveTerminalFocus?.sessionId !== key.sessionId ||
+      pendingLiveTerminalFocus.runId !== key.runId ||
+      state === undefined ||
+      state.activeRun?.sessionId !== key.sessionId ||
+      state.activeRun.runId !== key.runId ||
+      state.viewedRun?.runId !== key.runId ||
+      !terminalRegistry.has(key)
+    ) {
+      return;
+    }
+    pendingLiveTerminalFocus = undefined;
+    terminalElement.focus();
+    terminalRegistry.focusSelected();
+  });
+};
+
+const themeObserver = new MutationObserver(() => {
+  monaco.editor.setTheme(monacoTheme());
+});
+themeObserver.observe(document.body, { attributes: true, attributeFilter: ["class"] });
 
 const selectedSessionId = (): string | undefined => activeState?.selectedSession?.id;
 
@@ -205,6 +256,10 @@ const updatePromptControls = (): void => {
   editor.updateOptions({
     readOnly: selected === null || pending || activeState?.lifecycleState !== "active",
   });
+  composePromptButton.disabled =
+    selected === null ||
+    state?.lifecycleState === "shutting-down" ||
+    state?.lifecycleState === "stopped";
 };
 
 const submitPrompt = (): void => {
@@ -397,6 +452,14 @@ const renderState = (state: ConsoleViewState): void => {
   sessionStatus.textContent = selected?.status.replaceAll("_", " ") ?? "idle";
   sessionStatus.dataset.state = selected?.status ?? "idle";
   renderRun(state);
+  if (
+    nextRunId !== undefined &&
+    previousRunId !== nextRunId &&
+    state.activeRun?.runId === nextRunId &&
+    isViewingInteractiveActiveRun(state)
+  ) {
+    focusLiveTerminal({ sessionId: state.activeRun.sessionId, runId: nextRunId });
+  }
 
   const run = selectedRunItem(state);
   const announcement =
@@ -474,6 +537,13 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
     case "terminal.run.open":
       terminalRegistry.open(message);
       if (activeState !== undefined) renderRun(activeState);
+      if (
+        activeState?.activeRun?.sessionId === message.sessionId &&
+        activeState.activeRun.runId === message.runId &&
+        activeState.viewedRun?.runId === message.runId
+      ) {
+        focusLiveTerminal({ sessionId: message.sessionId, runId: message.runId });
+      }
       break;
     case "terminal.run.data":
       terminalRegistry.applyData(message);
@@ -489,7 +559,7 @@ window.addEventListener("message", (event: MessageEvent<unknown>) => {
       terminalRegistry.close(message);
       break;
     case "prompt.focus":
-      editor.focus();
+      setComposerOpen(true, true);
       break;
     case "prompt.accepted":
     case "prompt.rejected":
@@ -507,6 +577,14 @@ interruptButton.addEventListener("click", () => {
 });
 stopButton.addEventListener("click", () => {
   postForSelectedSession("session.stop");
+});
+composePromptButton.addEventListener("click", () => {
+  setComposerOpen(true, true);
+});
+closeComposerButton.addEventListener("click", () => {
+  setComposerOpen(false);
+  const key = viewedRunKey();
+  if (key !== undefined && isViewingInteractiveActiveRun(activeState)) focusLiveTerminal(key);
 });
 sendButton.addEventListener("click", submitPrompt);
 runSelector.addEventListener("change", () => {
@@ -552,8 +630,16 @@ retryPromptButton.addEventListener("click", () => {
   postRecoveryAction("prompt.recovery.retry");
 });
 
+window.addEventListener("keydown", (event) => {
+  if (event.ctrlKey && event.altKey && event.key.toLowerCase() === "p") {
+    event.preventDefault();
+    setComposerOpen(true, true);
+  }
+});
+
 window.addEventListener("beforeunload", () => {
   resizeObserver.disconnect();
+  themeObserver.disconnect();
   editor.dispose();
   terminalRegistry.dispose();
 });

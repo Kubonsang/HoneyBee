@@ -15,11 +15,12 @@ import type { ConsoleApplicationService } from "../application/console-service.j
 import { postConsoleMessage, type ConsoleMessageTrace } from "./console-message-bridge.js";
 import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 
-export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.Disposable {
+export class ConsoleViewProvider implements vscode.Disposable {
   readonly #delivery: PromptDeliveryCoordinator;
   readonly #serviceSubscription: { dispose(): void };
   readonly #activeWork = new Set<Promise<void>>();
-  #view: vscode.WebviewView | undefined;
+  #panel: vscode.WebviewPanel | undefined;
+  #focusPromptOnReady = false;
   #shutdownPromise: Promise<void> | undefined;
 
   public constructor(
@@ -31,47 +32,76 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
   ) {
     this.#delivery = new PromptDeliveryCoordinator(consoleService, reportError, reportDiagnostic);
     this.#serviceSubscription = consoleService.onMessage((message) => {
-      if (this.#view !== undefined) {
-        void postConsoleMessage(this.#view.webview, message, this.terminalTrace).catch(
+      if (this.#panel !== undefined) {
+        void postConsoleMessage(this.#panel.webview, message, this.terminalTrace).catch(
           this.reportError,
         );
       }
     });
   }
 
-  public resolveWebviewView(view: vscode.WebviewView): void {
-    this.#view = view;
-    view.webview.options = {
+  /** Opens the terminal-first Console in an editor-area Webview Panel. */
+  public reveal(): void {
+    this.openPanel(false);
+  }
+
+  /** Opens the Console and expands its Prompt Composer. */
+  public composePrompt(): void {
+    this.openPanel(true);
+  }
+
+  private openPanel(focusPrompt: boolean): void {
+    if (this.#shutdownPromise !== undefined) return;
+    this.#focusPromptOnReady ||= focusPrompt;
+    if (this.#panel !== undefined) {
+      this.#panel.reveal(undefined, false);
+      if (focusPrompt) {
+        void Promise.resolve(this.#panel.webview.postMessage({ type: "prompt.focus" })).catch(
+          this.reportError,
+        );
+        this.#focusPromptOnReady = false;
+      }
+      return;
+    }
+
+    const panel = vscode.window.createWebviewPanel(
+      "honeyBee.consolePanel",
+      "Honey Bee Console",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        retainContextWhenHidden: true,
+        localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist", "webview")],
+      },
+    );
+    this.#panel = panel;
+    const webview = panel.webview;
+    webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist", "webview")],
     };
-    const scriptUri = view.webview.asWebviewUri(
+    const scriptUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "console.js"),
     );
-    const styleUri = view.webview.asWebviewUri(
+    const styleUri = webview.asWebviewUri(
       vscode.Uri.joinPath(this.extensionUri, "dist", "webview", "console.css"),
     );
-    view.webview.html = createConsoleWebviewHtml({
-      cspSource: view.webview.cspSource,
+    webview.html = createConsoleWebviewHtml({
+      cspSource: webview.cspSource,
       nonce: randomBytes(18).toString("base64"),
       scriptUri: scriptUri.toString(),
       styleUri: styleUri.toString(),
     });
-    view.webview.onDidReceiveMessage((message: unknown) => {
+    webview.onDidReceiveMessage((message: unknown) => {
       if (!isConsoleToExtensionMessage(message)) {
         this.reportError(new Error("Honey Bee Console sent an invalid message."));
         return;
       }
       this.handleMessage(message);
     });
-    view.onDidDispose(() => {
-      this.#view = undefined;
+    panel.onDidDispose(() => {
+      if (this.#panel === panel) this.#panel = undefined;
     });
-  }
-
-  public reveal(): void {
-    this.#view?.show(true);
-    this.#view?.webview.postMessage({ type: "prompt.focus" });
   }
 
   public dispose(): void {
@@ -84,6 +114,8 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
       this.#serviceSubscription.dispose();
       await this.#delivery.dispose();
       await Promise.allSettled(this.#activeWork);
+      this.#panel?.dispose();
+      this.#panel = undefined;
     })();
     return this.#shutdownPromise;
   }
@@ -92,6 +124,12 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
     switch (message.type) {
       case "webview.ready":
         this.consoleService.replayState();
+        if (this.#focusPromptOnReady && this.#panel !== undefined) {
+          this.#focusPromptOnReady = false;
+          void Promise.resolve(this.#panel.webview.postMessage({ type: "prompt.focus" })).catch(
+            this.reportError,
+          );
+        }
         break;
       case "draft.changed":
         this.#delivery.scheduleDraft(SessionIdSchema.parse(message.sessionId), message.content);
@@ -275,8 +313,8 @@ export class ConsoleViewProvider implements vscode.WebviewViewProvider, vscode.D
   private async postAcknowledgement(
     message: PromptAcknowledgementMessage | undefined,
   ): Promise<void> {
-    if (message !== undefined && this.#view !== undefined) {
-      await this.#view.webview.postMessage(message);
+    if (message !== undefined && this.#panel !== undefined) {
+      await this.#panel.webview.postMessage(message);
     }
   }
 

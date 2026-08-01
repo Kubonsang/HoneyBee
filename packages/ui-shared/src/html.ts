@@ -31,49 +31,66 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
     <title>Honey Bee Console</title>
   </head>
   <body>
-    <main class="console-shell" aria-label="Honey Bee agent console">
-      <header class="identity-header" aria-label="Selected session details">
-        <div class="brand-row">
-          <span class="bee-mark" aria-hidden="true">⬢</span>
-          <span class="brand-name">HONEY BEE CONSOLE</span>
-          <span id="connection-badge" class="connection-badge" data-state="disconnected">
-            disconnected
-          </span>
-        </div>
-        <dl class="identity-grid">
-          <div><dt>Session</dt><dd id="session-value">No session selected</dd></div>
-          <div><dt>Run</dt><dd id="run-value">No Run</dd></div>
-          <div><dt>Agent</dt><dd id="agent-value">—</dd></div>
-          <div><dt>Workspace</dt><dd id="workspace-value">—</dd></div>
-          <div><dt>Tool Profile</dt><dd id="tool-value">—</dd></div>
-        </dl>
-        <div class="run-navigation">
-          <div class="run-selector-field">
-            <label for="run-selector">Terminal run</label>
-            <select id="run-selector" aria-describedby="run-accessible-status" disabled>
-              <option value="">No retained Runs</option>
-            </select>
-          </div>
-          <button id="open-log-button" type="button" disabled>Open log</button>
-        </div>
-        <div id="live-run-notice" class="live-run-notice" role="status" hidden>
-          <span>A live Run is active in this Session.</span>
-          <button id="return-live-button" type="button">Return to live</button>
-        </div>
-        <span id="run-accessible-status" class="visually-hidden" role="status" aria-live="polite"></span>
-        <div class="action-row" aria-label="Agent controls">
-          <span id="session-status" class="status-pill">idle</span>
-          <button id="start-button" type="button" title="Start session">Start</button>
+    <main
+      id="console-shell"
+      class="console-shell"
+      data-composer-open="false"
+      aria-label="Honey Bee agent console"
+    >
+      <header class="run-bar" aria-label="Selected Session and Run">
+        <span class="bee-mark" aria-hidden="true">⬢</span>
+        <strong id="session-value" class="session-value">No session selected</strong>
+        <span id="run-value" class="run-value">No Run</span>
+        <span class="context-value" title="Agent Profile">
+          <span class="context-label">Agent</span>
+          <span id="agent-value">—</span>
+        </span>
+        <span class="context-value" title="Workspace">
+          <span class="context-label">Workspace</span>
+          <span id="workspace-value">—</span>
+        </span>
+        <span class="context-value" title="Tool Profile">
+          <span class="context-label">Tool</span>
+          <span id="tool-value">—</span>
+        </span>
+        <label for="run-selector" class="visually-hidden">Terminal run</label>
+        <select id="run-selector" aria-describedby="run-accessible-status" disabled>
+          <option value="">No retained Runs</option>
+        </select>
+        <button id="open-log-button" type="button" title="Open retained Run log" disabled>
+          Log
+        </button>
+        <span id="connection-badge" class="connection-badge" data-state="disconnected">
+          disconnected
+        </span>
+        <span id="session-status" class="status-pill">idle</span>
+        <nav class="run-toolbar" aria-label="Agent and Console controls">
+          <button id="start-button" type="button" title="Start Session">Start</button>
           <button id="interrupt-button" type="button" title="Send interrupt (Ctrl+C)">
             Interrupt
           </button>
-          <button id="stop-button" type="button" class="danger-button" title="Stop session">
+          <button id="stop-button" type="button" class="danger-button" title="Stop Session">
             Stop
           </button>
-        </div>
+          <button
+            id="compose-prompt-button"
+            type="button"
+            title="Compose Prompt (Ctrl+Alt+P)"
+          >
+            Compose Prompt
+          </button>
+        </nav>
       </header>
-
-
+      <span
+        id="run-accessible-status"
+        class="visually-hidden"
+        role="status"
+        aria-live="polite"
+      ></span>
+      <div id="live-run-notice" class="live-run-notice" role="status" hidden>
+        <span>A live Run is active in this Session.</span>
+        <button id="return-live-button" type="button">Return to live</button>
+      </div>
       <section id="recovery-banner" class="recovery-banner" role="alert" hidden>
         <div>
           <strong>Prompt delivery outcome unknown</strong>
@@ -102,10 +119,15 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
         </div>
       </section>
 
-      <section class="prompt-panel" aria-label="Prompt editor">
+      <section id="prompt-panel" class="prompt-panel" aria-label="Prompt Composer" hidden>
         <div class="section-label">
-          <span>PROMPT</span>
-          <span>Enter / Ctrl+Enter to send · Alt+Enter / Shift+Enter for newline</span>
+          <span>PROMPT COMPOSER</span>
+          <span class="prompt-key-hint">
+            Enter / Ctrl+Enter to send · Alt+Enter / Shift+Enter for newline
+          </span>
+          <button id="close-composer-button" type="button" title="Close Prompt Composer">
+            Close
+          </button>
         </div>
         <div id="prompt-editor" aria-label="Prompt editor"></div>
         <div class="prompt-footer">

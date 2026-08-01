@@ -274,9 +274,6 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
         void selectionState.save(sessionId).catch(reportError);
       }),
       vscode.window.registerTreeDataProvider("honeyBee.sessions", tree),
-      vscode.window.registerWebviewViewProvider("honeyBee.console", consoleView, {
-        webviewOptions: { retainContextWhenHidden: true },
-      }),
       consoleService.onMessage((message) => {
         if (message.type === "console.state") {
           tree.refresh();

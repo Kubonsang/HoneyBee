@@ -104,6 +104,22 @@
         "command": "honeyBee.console.stop",
         "title": "Honey Bee: Stop Agent",
         "icon": "$(debug-stop)"
+      },
+      {
+        "command": "honeyBee.console.open",
+        "title": "Honey Bee: Open Console",
+        "icon": "$(terminal)"
+      },
+      {
+        "command": "honeyBee.console.composePrompt",
+        "title": "Honey Bee: Compose Prompt",
+        "icon": "$(edit)"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "honeyBee.console.composePrompt",
+        "key": "ctrl+alt+p"
       }
     ],
     "viewsContainers": {
@@ -120,11 +136,6 @@
         {
           "id": "honeyBee.sessions",
           "name": "Sessions"
-        },
-        {
-          "id": "honeyBee.console",
-          "name": "Console",
-          "type": "webview"
         }
       ]
     },
@@ -147,18 +158,8 @@
           "group": "navigation@2"
         },
         {
-          "command": "honeyBee.console.start",
-          "when": "view == honeyBee.console",
-          "group": "navigation@1"
-        },
-        {
-          "command": "honeyBee.console.interrupt",
-          "when": "view == honeyBee.console",
-          "group": "navigation@2"
-        },
-        {
-          "command": "honeyBee.console.stop",
-          "when": "view == honeyBee.console",
+          "command": "honeyBee.console.open",
+          "when": "view == honeyBee.sessions",
           "group": "navigation@3"
         }
       ],

@@ -1,17 +1,17 @@
 :root {
-  color-scheme: dark;
-  --hb-bg: #0d0c0a;
-  --hb-panel: #15130f;
-  --hb-panel-raised: #1c1913;
-  --hb-border: #4d4229;
-  --hb-border-muted: #302b20;
+  color-scheme: light dark;
+  --hb-bg: var(--vscode-editor-background, #0d0c0a);
+  --hb-panel: var(--vscode-terminal-background, var(--hb-bg));
+  --hb-panel-raised: var(--vscode-sideBar-background, #1c1913);
+  --hb-border: var(--vscode-panel-border, #4d4229);
+  --hb-border-muted: var(--vscode-widget-border, #302b20);
   --hb-gold: #f4c95d;
   --hb-gold-bright: #ffe49a;
   --hb-gold-deep: #8c6b24;
-  --hb-text: #f2eee2;
-  --hb-muted: #b9b09d;
-  --hb-danger: #ff8e8e;
-  --hb-focus: #ffe7a8;
+  --hb-text: var(--vscode-foreground, #f2eee2);
+  --hb-muted: var(--vscode-descriptionForeground, #b9b09d);
+  --hb-danger: var(--vscode-errorForeground, #ff8e8e);
+  --hb-focus: var(--vscode-focusBorder, #ffe7a8);
 }
 
 * {
@@ -58,104 +58,152 @@ button:disabled {
 
 .console-shell {
   display: grid;
-  grid-template-rows: auto auto minmax(150px, 1fr) minmax(130px, 32%);
+  grid-template-areas:
+    "bar"
+    "live"
+    "recovery"
+    "terminal"
+    "prompt";
+  grid-template-rows: auto auto auto minmax(0, 1fr) 0;
   width: 100%;
   height: 100%;
-  min-width: 280px;
+  min-width: 420px;
+  background: var(--hb-bg);
 }
 
-.identity-header {
-  position: sticky;
-  z-index: 5;
-  top: 0;
-  border-bottom: 1px solid var(--hb-border);
-  padding: 9px 12px 8px;
-  background:
-    radial-gradient(circle at 8% -40%, #5f461a66 0, transparent 42%),
-    linear-gradient(180deg, #1c1913 0%, #13110e 100%);
+.console-shell[data-composer-open="true"] {
+  grid-template-rows: auto auto auto minmax(180px, 1fr) minmax(140px, 32%);
 }
 
-.brand-row {
+.run-bar {
+  grid-area: bar;
   display: flex;
+  z-index: 5;
   align-items: center;
   gap: 7px;
-  min-height: 20px;
-  margin-bottom: 8px;
-  color: var(--hb-gold);
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 0.13em;
+  min-height: 38px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--hb-border);
+  padding: 5px 8px;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--hb-panel-raised));
+  scrollbar-width: thin;
+  white-space: nowrap;
 }
 
 .bee-mark {
-  color: var(--hb-gold-bright);
-  font-size: 13px;
-  filter: drop-shadow(0 0 5px #d99d2455);
+  flex: 0 0 auto;
+  color: var(--hb-gold);
+  font-size: 14px;
+}
+
+.session-value,
+.run-value,
+.context-value {
+  overflow: hidden;
+  flex: 0 1 auto;
+  max-width: 190px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-value {
+  min-width: 90px;
+  color: var(--hb-text);
+  font-size: 12px;
+}
+
+.run-value {
+  color: var(--hb-gold);
+  font-family: var(--vscode-editor-font-family, Consolas, monospace);
+  font-size: 11px;
+}
+
+.context-value {
+  color: var(--hb-text);
+  font-size: 10px;
+}
+
+.context-label {
+  margin-right: 3px;
+  color: var(--hb-muted);
+  text-transform: uppercase;
+}
+
+.run-toolbar {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 4px;
+  margin-left: auto;
+}
+
+#run-selector {
+  flex: 0 1 290px;
+  min-width: 150px;
+  min-height: 28px;
+  border: 1px solid var(--vscode-dropdown-border, var(--hb-border));
+  border-radius: 3px;
+  padding: 3px 24px 3px 7px;
+  background: var(--vscode-dropdown-background, var(--hb-panel-raised));
+  color: var(--vscode-dropdown-foreground, var(--hb-text));
+  font: inherit;
+  font-size: 11px;
+}
+
+#run-selector:focus-visible {
+  outline: 2px solid var(--hb-focus);
+  outline-offset: 1px;
 }
 
 .connection-badge {
-  margin-left: auto;
+  flex: 0 0 auto;
   border: 1px solid var(--hb-border);
   border-radius: 999px;
   padding: 2px 7px;
   color: var(--hb-muted);
   font-size: 9px;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
 .connection-badge[data-state="connected"] {
-  border-color: #66854e;
-  color: #b9e19c;
+  border-color: var(--vscode-testing-iconPassed, #66854e);
+  color: var(--vscode-testing-iconPassed, #b9e19c);
 }
 
 .connection-badge[data-state="error"] {
-  border-color: #944a4a;
-  color: #ffb2b2;
+  border-color: var(--hb-danger);
+  color: var(--hb-danger);
 }
 
-.identity-grid {
-  display: grid;
-  grid-template-columns: minmax(110px, 1.4fr) repeat(4, minmax(90px, 1fr));
-  gap: 5px;
-  margin: 0;
+.live-run-notice {
+  grid-area: live;
 }
 
-.identity-grid > div {
-  min-width: 0;
-  border-left: 2px solid var(--hb-border);
-  padding-left: 7px;
+.recovery-banner {
+  grid-area: recovery;
 }
 
-.identity-grid dt {
-  margin-bottom: 2px;
-  color: var(--hb-muted);
-  font-size: 9px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+.terminal-panel {
+  grid-area: terminal;
 }
 
-.identity-grid dd {
-  overflow: hidden;
-  margin: 0;
-  color: var(--hb-text);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.prompt-panel {
+  grid-area: prompt;
 }
 
-.action-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 8px;
+.prompt-panel[hidden] {
+  display: none;
+}
+
+.run-bar,
+.recovery-banner,
+.live-run-notice {
+  z-index: 5;
 }
 
 .status-pill {
   overflow: hidden;
-  min-width: 0;
-  margin-right: auto;
+  flex: 0 0 auto;
   color: var(--hb-gold-bright);
   font-family: var(--vscode-editor-font-family, "Cascadia Code", Consolas, monospace);
   font-size: 10px;
@@ -202,7 +250,7 @@ button:disabled {
   gap: 12px;
   border-bottom: 1px solid var(--hb-danger);
   padding: 8px 12px;
-  background: #311d16;
+  background: var(--vscode-inputValidation-errorBackground, #311d16);
   color: var(--hb-text);
 }
 
@@ -240,6 +288,7 @@ button:disabled {
 
 .prompt-panel {
   grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
 }
 
 .section-label {
@@ -248,19 +297,26 @@ button:disabled {
   gap: 12px;
   border-bottom: 1px solid var(--hb-border-muted);
   padding: 5px 10px;
-  background: #12100d;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--hb-panel-raised));
   color: var(--hb-muted);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.08em;
 }
 
-.section-label span:last-child {
+.section-label > span:last-of-type {
   overflow: hidden;
   font-weight: 400;
   letter-spacing: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+#close-composer-button {
+  min-height: 22px;
+  margin: -2px 0;
+  padding: 1px 7px;
+  font-size: 10px;
 }
 
 .terminal-warning {
@@ -319,7 +375,7 @@ button:disabled {
   min-height: 38px;
   border-top: 1px solid var(--hb-border-muted);
   padding: 5px 8px 5px 10px;
-  background: #12100d;
+  background: var(--vscode-editorGroupHeader-tabsBackground, var(--hb-panel-raised));
 }
 
 #status-message {
@@ -342,49 +398,12 @@ button:disabled {
   scrollbar-width: thin;
 }
 
-.run-navigation {
-  display: flex;
-  align-items: end;
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.run-selector-field {
-  display: grid;
-  flex: 1 1 auto;
-  gap: 3px;
-  min-width: 0;
-}
-
-.run-selector-field label {
-  color: var(--vscode-descriptionForeground, var(--hb-muted));
-  font-size: 10px;
-  font-weight: 600;
-}
-
-#run-selector {
-  width: 100%;
-  min-height: 28px;
-  border: 1px solid var(--vscode-dropdown-border, var(--hb-border));
-  border-radius: 3px;
-  padding: 3px 24px 3px 7px;
-  background: var(--vscode-dropdown-background, var(--hb-panel-raised));
-  color: var(--vscode-dropdown-foreground, var(--hb-text));
-  font: inherit;
-  font-size: 12px;
-}
-
-#run-selector:focus-visible {
-  outline: 2px solid var(--vscode-focusBorder, var(--hb-focus));
-  outline-offset: 1px;
-}
-
 .live-run-notice {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  margin-top: 6px;
+  margin: 0;
   border-left: 3px solid var(--vscode-focusBorder, var(--hb-gold));
   padding: 5px 7px;
   background: var(--vscode-editorInfo-background, var(--hb-panel-raised));
@@ -446,12 +465,11 @@ button:disabled {
   z-index: 2;
 }
 @media (max-width: 620px) {
-  .identity-grid {
-    grid-template-columns: repeat(2, minmax(100px, 1fr));
-    row-gap: 7px;
+  .context-value {
+    display: none;
   }
 
-  .section-label span:last-child {
+  .prompt-key-hint {
     display: none;
   }
 }
@@ -460,7 +478,7 @@ button:disabled {
   button,
   #run-selector,
   .connection-badge,
-  .identity-header,
+  .run-bar,
   .recovery-banner,
   .live-run-notice,
   .terminal-warning,

@@ -20,6 +20,8 @@ const expectedCommands = [
   "honeyBee.console.start",
   "honeyBee.console.interrupt",
   "honeyBee.console.stop",
+  "honeyBee.console.open",
+  "honeyBee.console.composePrompt",
 ];
 
 const digest = (content) =>

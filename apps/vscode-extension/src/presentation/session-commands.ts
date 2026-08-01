@@ -92,7 +92,6 @@ export const registerSessionCommands = (
           });
           await refresh();
           dependencies.selection.select(created.id);
-          await vscode.commands.executeCommand("honeyBee.console.focus");
           dependencies.consoleView.reveal();
         })(),
       );
@@ -107,7 +106,6 @@ export const registerSessionCommands = (
               return;
             }
             dependencies.selection.select(sessionId);
-            await vscode.commands.executeCommand("honeyBee.console.focus");
             dependencies.consoleView.reveal();
           })(),
         );
@@ -340,6 +338,12 @@ export const registerSessionCommands = (
       ) {
         run(dependencies.consoleService.stop(selected, RunIdSchema.parse(viewedRun.runId)));
       }
+    }),
+    vscode.commands.registerCommand("honeyBee.console.open", () => {
+      dependencies.consoleView.reveal();
+    }),
+    vscode.commands.registerCommand("honeyBee.console.composePrompt", () => {
+      dependencies.consoleView.composePrompt();
     }),
   );
 };
