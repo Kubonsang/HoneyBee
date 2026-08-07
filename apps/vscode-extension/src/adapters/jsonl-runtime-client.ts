@@ -39,6 +39,14 @@ export interface RuntimeTransportPort {
   stop(): Promise<void>;
 }
 
+/** Content-free trace emitted after a validated Runtime PTY data event is received. */
+export interface RuntimePtyDataTrace {
+  readonly stage: "runtime-pty-data";
+  readonly sessionId: string;
+  readonly runId: string;
+  readonly sequence: number;
+}
+
 export type RuntimeTransportWriteDisposition = "not-written" | "unknown";
 
 export class RuntimeTransportWriteError extends Error {
@@ -212,6 +220,7 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     private readonly ids: Pick<IdGeneratorPort, "requestId">,
     private readonly requestTimeoutMs = 10_000,
     maxFrameSize = DEFAULT_MAX_FRAME_SIZE,
+    private readonly terminalTrace: (event: RuntimePtyDataTrace) => void = () => undefined,
   ) {
     this.#decoder = new JsonLineDecoder(maxFrameSize);
   }
@@ -452,6 +461,12 @@ export class JsonlRuntimeClient implements RuntimeClientPort {
     const sessionId = SessionIdSchema.parse(event.sessionId);
     const runId = RunIdSchema.parse(event.runId);
     if (event.event === "pty.data") {
+      this.terminalTrace({
+        stage: "runtime-pty-data",
+        sessionId,
+        runId,
+        sequence: event.seq,
+      });
       this.emit({
         type: "pty.data",
         sessionId,

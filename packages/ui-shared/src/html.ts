@@ -3,6 +3,7 @@ export interface ConsoleHtmlOptions {
   readonly nonce: string;
   readonly scriptUri: string;
   readonly styleUri: string;
+  readonly terminalDiagnosticsEnabled?: boolean;
 }
 
 const escapeAttribute = (value: string): string =>
@@ -35,6 +36,7 @@ export const createConsoleWebviewHtml = (options: ConsoleHtmlOptions): string =>
       id="console-shell"
       class="console-shell"
       data-composer-open="false"
+      data-terminal-diagnostics="${String(options.terminalDiagnosticsEnabled === true)}"
       aria-label="Honey Bee agent console"
     >
       <header class="run-bar" aria-label="Selected Session and Run">

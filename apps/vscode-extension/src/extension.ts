@@ -1,5 +1,7 @@
 import * as vscode from "vscode";
 
+import type { TerminalRunRenderAckMessage } from "@honeybee/ui-shared";
+
 import {
   applyPromptRecoveryTestFixture,
   type PromptRecoveryExtensionTestState,
@@ -15,6 +17,7 @@ import {
 import {
   JsonlRuntimeClient,
   NodeChildProcessRuntimeTransport,
+  type RuntimePtyDataTrace,
 } from "./adapters/jsonl-runtime-client.js";
 import { resolveRuntimeLaunch } from "./adapters/runtime-launch.js";
 import {
@@ -22,7 +25,10 @@ import {
   RandomIdGenerator,
   SystemClock,
 } from "./adapters/system-adapters.js";
-import { ConsoleApplicationService } from "./application/console-service.js";
+import {
+  ConsoleApplicationService,
+  type ConsoleTerminalDataTrace,
+} from "./application/console-service.js";
 import { ExtensionLifecycleCoordinator } from "./application/extension-lifecycle-coordinator.js";
 import {
   PromptDeliveryAttemptReconciler,
@@ -36,6 +42,7 @@ import { SessionRunReconciler } from "./application/session-run-reconciler.js";
 import { SessionSelectionService } from "./application/session-selection.js";
 import { SessionApplicationService } from "./application/session-service.js";
 import { ConsoleViewProvider } from "./presentation/console-view-provider.js";
+import type { ConsoleMessageTrace } from "./presentation/console-message-bridge.js";
 import { registerSessionCommands } from "./presentation/session-commands.js";
 import { SessionTreeProvider } from "./presentation/session-tree-provider.js";
 
@@ -125,6 +132,45 @@ const reportAttemptReconciliation = (
 export interface HoneyBeeExtensionApi {
   readonly promptRecoveryTestState?: PromptRecoveryExtensionTestState;
 }
+
+const formatTerminalDeliveryTrace = (
+  event: RuntimePtyDataTrace | ConsoleTerminalDataTrace | ConsoleMessageTrace,
+): string =>
+  "[terminal-render] stage=" +
+  event.stage +
+  " session=" +
+  event.sessionId +
+  " run=" +
+  event.runId +
+  " seq=" +
+  String(event.sequence) +
+  ("delivered" in event && event.delivered !== undefined
+    ? " delivered=" + String(event.delivered)
+    : "");
+
+const formatTerminalRenderAck = (message: TerminalRunRenderAckMessage): string => {
+  const metric = (label: string, value: number | undefined): string =>
+    value === undefined ? "" : " " + label + "=" + String(value);
+  return (
+    "[terminal-render] stage=" +
+    message.stage +
+    " session=" +
+    message.sessionId +
+    " run=" +
+    message.runId +
+    " seq=" +
+    String(message.seq) +
+    " result=" +
+    message.result +
+    metric("bufferLines", message.bufferLineCount) +
+    metric("baseY", message.baseY) +
+    metric("viewportY", message.viewportY) +
+    metric("rows", message.rows) +
+    metric("columns", message.columns) +
+    metric("containerWidth", message.containerWidth) +
+    metric("containerHeight", message.containerHeight)
+  );
+};
 export const activate = async (context: vscode.ExtensionContext): Promise<HoneyBeeExtensionApi> => {
   const output = vscode.window.createOutputChannel("Honey Bee");
   const reportError = (error: unknown): void => {
@@ -134,6 +180,18 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
   };
   const reportPromptDiagnostic = (message: string): void => {
     output.appendLine(`[prompt] ${message}`);
+  };
+
+  const terminalDiagnosticsEnabled =
+    context.extensionMode === vscode.ExtensionMode.Test ||
+    vscode.workspace.getConfiguration("honeyBee.console").get<boolean>("renderDiagnostics", false);
+  const terminalTrace = (
+    event: RuntimePtyDataTrace | ConsoleTerminalDataTrace | ConsoleMessageTrace,
+  ): void => {
+    if (terminalDiagnosticsEnabled) output.appendLine(formatTerminalDeliveryTrace(event));
+  };
+  const terminalRenderTrace = (message: TerminalRunRenderAckMessage): void => {
+    if (terminalDiagnosticsEnabled) output.appendLine(formatTerminalRenderAck(message));
   };
 
   await applyPromptRecoveryTestFixture(context);
@@ -210,6 +268,8 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
     transport,
     ids,
     runtimeConfiguration.get<number>("requestTimeoutMs", 10_000),
+    undefined,
+    terminalTrace,
   );
   const profiles = new ConfiguredAgentProfileResolver(() => {
     const agentConfiguration = vscode.workspace.getConfiguration("honeyBee.agent");
@@ -238,6 +298,7 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
         `[lifecycle] ${code}${sessionId === undefined ? "" : ` for Session ${sessionId}`}${runId === undefined ? "" : `, Run ${runId}`}.`,
       );
     },
+    terminalTrace,
   );
   const tree = new SessionTreeProvider(sessionService);
   const consoleView = new ConsoleViewProvider(
@@ -245,6 +306,9 @@ export const activate = async (context: vscode.ExtensionContext): Promise<HoneyB
     consoleService,
     reportError,
     reportPromptDiagnostic,
+    terminalTrace,
+    terminalDiagnosticsEnabled,
+    terminalRenderTrace,
   );
 
   const lifecycle = new ExtensionLifecycleCoordinator({

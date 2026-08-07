@@ -9,10 +9,11 @@ import {
   type ConsoleToExtensionMessage,
   type PromptAcknowledgementMessage,
   type PromptSendMessage,
+  type TerminalRunRenderAckMessage,
 } from "@honeybee/ui-shared";
 
 import type { ConsoleApplicationService } from "../application/console-service.js";
-import { postConsoleMessage, type ConsoleMessageTrace } from "./console-message-bridge.js";
+import { ConsoleMessageQueue, type ConsoleMessageTrace } from "./console-message-bridge.js";
 import { PromptDeliveryCoordinator } from "./prompt-delivery-coordinator.js";
 
 export class ConsoleViewProvider implements vscode.Disposable {
@@ -20,6 +21,7 @@ export class ConsoleViewProvider implements vscode.Disposable {
   readonly #serviceSubscription: { dispose(): void };
   readonly #activeWork = new Set<Promise<void>>();
   #panel: vscode.WebviewPanel | undefined;
+  #messageQueue: ConsoleMessageQueue | undefined;
   #focusPromptOnReady = false;
   #shutdownPromise: Promise<void> | undefined;
 
@@ -29,13 +31,13 @@ export class ConsoleViewProvider implements vscode.Disposable {
     private readonly reportError: (error: unknown) => void,
     private readonly reportDiagnostic: (message: string) => void,
     private readonly terminalTrace: (event: ConsoleMessageTrace) => void = () => undefined,
+    private readonly terminalDiagnosticsEnabled = false,
+    private readonly renderTrace: (message: TerminalRunRenderAckMessage) => void = () => undefined,
   ) {
     this.#delivery = new PromptDeliveryCoordinator(consoleService, reportError, reportDiagnostic);
     this.#serviceSubscription = consoleService.onMessage((message) => {
       if (this.#panel !== undefined) {
-        void postConsoleMessage(this.#panel.webview, message, this.terminalTrace).catch(
-          this.reportError,
-        );
+        void this.#messageQueue?.post(message).catch(this.reportError);
       }
     });
   }
@@ -56,9 +58,7 @@ export class ConsoleViewProvider implements vscode.Disposable {
     if (this.#panel !== undefined) {
       this.#panel.reveal(undefined, false);
       if (focusPrompt) {
-        void Promise.resolve(this.#panel.webview.postMessage({ type: "prompt.focus" })).catch(
-          this.reportError,
-        );
+        void this.#messageQueue?.post({ type: "prompt.focus" }).catch(this.reportError);
         this.#focusPromptOnReady = false;
       }
       return;
@@ -76,6 +76,8 @@ export class ConsoleViewProvider implements vscode.Disposable {
     );
     this.#panel = panel;
     const webview = panel.webview;
+    const messageQueue = new ConsoleMessageQueue(webview, this.terminalTrace);
+    this.#messageQueue = messageQueue;
     webview.options = {
       enableScripts: true,
       localResourceRoots: [vscode.Uri.joinPath(this.extensionUri, "dist", "webview")],
@@ -91,6 +93,7 @@ export class ConsoleViewProvider implements vscode.Disposable {
       nonce: randomBytes(18).toString("base64"),
       scriptUri: scriptUri.toString(),
       styleUri: styleUri.toString(),
+      terminalDiagnosticsEnabled: this.terminalDiagnosticsEnabled,
     });
     webview.onDidReceiveMessage((message: unknown) => {
       if (!isConsoleToExtensionMessage(message)) {
@@ -100,7 +103,11 @@ export class ConsoleViewProvider implements vscode.Disposable {
       this.handleMessage(message);
     });
     panel.onDidDispose(() => {
-      if (this.#panel === panel) this.#panel = undefined;
+      if (this.#panel === panel) {
+        this.#panel = undefined;
+        this.#messageQueue = undefined;
+        void messageQueue.close().catch(this.reportError);
+      }
     });
   }
 
@@ -114,8 +121,10 @@ export class ConsoleViewProvider implements vscode.Disposable {
       this.#serviceSubscription.dispose();
       await this.#delivery.dispose();
       await Promise.allSettled(this.#activeWork);
+      await this.#messageQueue?.close();
       this.#panel?.dispose();
       this.#panel = undefined;
+      this.#messageQueue = undefined;
     })();
     return this.#shutdownPromise;
   }
@@ -124,12 +133,13 @@ export class ConsoleViewProvider implements vscode.Disposable {
     switch (message.type) {
       case "webview.ready":
         this.consoleService.replayState();
-        if (this.#focusPromptOnReady && this.#panel !== undefined) {
+        if (this.#focusPromptOnReady && this.#messageQueue !== undefined) {
           this.#focusPromptOnReady = false;
-          void Promise.resolve(this.#panel.webview.postMessage({ type: "prompt.focus" })).catch(
-            this.reportError,
-          );
+          void this.#messageQueue.post({ type: "prompt.focus" }).catch(this.reportError);
         }
+        break;
+      case "terminal.run.render-ack":
+        if (this.terminalDiagnosticsEnabled) this.renderTrace(message);
         break;
       case "draft.changed":
         this.#delivery.scheduleDraft(SessionIdSchema.parse(message.sessionId), message.content);
@@ -313,8 +323,8 @@ export class ConsoleViewProvider implements vscode.Disposable {
   private async postAcknowledgement(
     message: PromptAcknowledgementMessage | undefined,
   ): Promise<void> {
-    if (message !== undefined && this.#panel !== undefined) {
-      await this.#panel.webview.postMessage(message);
+    if (message !== undefined && this.#messageQueue !== undefined) {
+      await this.#messageQueue.post(message);
     }
   }
 

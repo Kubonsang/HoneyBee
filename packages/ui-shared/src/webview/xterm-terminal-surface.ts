@@ -7,6 +7,7 @@ import type {
   TerminalRenderMetrics,
   TerminalSurface,
   TerminalSurfaceFactory,
+  TerminalWriteObserver,
 } from "./terminal-run-registry.js";
 
 const terminalTheme: ITheme = {
@@ -67,17 +68,16 @@ class XtermTerminalSurface implements TerminalSurface {
     this.#dataSubscription = this.#terminal.onData(onData);
   }
 
-  public write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void {
+  public write(data: string, observer?: TerminalWriteObserver): void {
     if (this.#disposed) return;
+    observer?.onWriteCalled?.(this.#measure());
     this.#terminal.write(data, () => {
       if (this.#disposed) return;
       this.#refreshVisibleRows();
-      const active = this.#terminal.buffer.active;
-      onParsed?.({
-        bufferLineCount: active.length,
-        baseY: active.baseY,
-        viewportY: active.viewportY,
-        rows: this.#terminal.rows,
+      observer?.onParsed?.(this.#measure());
+      requestAnimationFrame(() => {
+        if (this.#disposed) return;
+        observer?.onAnimationFrame?.(this.#measure());
       });
     });
   }
@@ -128,6 +128,23 @@ class XtermTerminalSurface implements TerminalSurface {
   #refreshVisibleRows(): void {
     if (!this.#opened || this.#container.hidden || this.#terminal.rows <= 0) return;
     this.#terminal.refresh(0, this.#terminal.rows - 1);
+  }
+
+  #measure(): TerminalRenderMetrics {
+    const active = this.#terminal.buffer.active;
+    return {
+      bufferLineCount: active.length,
+      baseY: active.baseY,
+      viewportY: active.viewportY,
+      rows: this.#terminal.rows,
+      columns: this.#terminal.cols,
+      containerWidth: this.#safeDimension(this.#container.clientWidth),
+      containerHeight: this.#safeDimension(this.#container.clientHeight),
+    };
+  }
+
+  #safeDimension(value: number): number {
+    return Number.isFinite(value) && value >= 0 ? value : 0;
   }
 }
 

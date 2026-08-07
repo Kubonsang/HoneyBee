@@ -8,6 +8,7 @@ import {
   type TerminalRenderMetrics,
   type TerminalSurface,
   type TerminalSurfaceFactory,
+  type TerminalWriteObserver,
 } from "./terminal-run-registry.js";
 
 class FakeSurface implements TerminalSurface {
@@ -21,9 +22,25 @@ class FakeSurface implements TerminalSurface {
 
   public constructor(readonly input: (data: string) => void) {}
 
-  public write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void {
+  public write(data: string, observer?: TerminalWriteObserver): void {
+    const before = this.metrics();
+    observer?.onWriteCalled?.(before);
     this.writes.push(data);
-    onParsed?.({ bufferLineCount: this.writes.length, baseY: 0, viewportY: 0, rows: 30 });
+    const after = this.metrics();
+    observer?.onParsed?.(after);
+    observer?.onAnimationFrame?.(after);
+  }
+
+  private metrics(): TerminalRenderMetrics {
+    return {
+      bufferLineCount: this.writes.length,
+      baseY: 0,
+      viewportY: 0,
+      rows: 30,
+      columns: 100,
+      containerWidth: 800,
+      containerHeight: 400,
+    };
   }
 
   public reset(): void {
@@ -230,10 +247,46 @@ describe("TerminalRunRegistry", () => {
         lastAppliedSeq: 0,
       },
       {
-        stage: "surface-rendered",
+        stage: "surface-write-called",
         key: a,
         seq: 1,
-        metrics: { bufferLineCount: 1, baseY: 0, viewportY: 0, rows: 30 },
+        metrics: {
+          bufferLineCount: 0,
+          baseY: 0,
+          viewportY: 0,
+          rows: 30,
+          columns: 100,
+          containerWidth: 800,
+          containerHeight: 400,
+        },
+      },
+      {
+        stage: "xterm-write-callback",
+        key: a,
+        seq: 1,
+        metrics: {
+          bufferLineCount: 1,
+          baseY: 0,
+          viewportY: 0,
+          rows: 30,
+          columns: 100,
+          containerWidth: 800,
+          containerHeight: 400,
+        },
+      },
+      {
+        stage: "animation-frame",
+        key: a,
+        seq: 1,
+        metrics: {
+          bufferLineCount: 1,
+          baseY: 0,
+          viewportY: 0,
+          rows: 30,
+          columns: 100,
+          containerWidth: 800,
+          containerHeight: 400,
+        },
       },
       {
         stage: "registry-result",

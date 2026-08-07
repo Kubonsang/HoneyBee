@@ -10,6 +10,19 @@ const html = createConsoleWebviewHtml({
 });
 
 describe("Console Webview accessibility structure", () => {
+  it("keeps content-free terminal diagnostics opt-in", () => {
+    expect(html).toContain('data-terminal-diagnostics="false"');
+    expect(
+      createConsoleWebviewHtml({
+        cspSource: "vscode-webview:",
+        nonce: "nonce",
+        scriptUri: "console.js",
+        styleUri: "console.css",
+        terminalDiagnosticsEnabled: true,
+      }),
+    ).toContain('data-terminal-diagnostics="true"');
+  });
+
   it("uses a labelled native Run selector and semantic action buttons", () => {
     expect(html).toContain(
       '<label for="run-selector" class="visually-hidden">Terminal run</label>',

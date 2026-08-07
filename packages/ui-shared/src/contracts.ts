@@ -1,4 +1,4 @@
-export const CONSOLE_WEBVIEW_VERSION = 7 as const;
+export const CONSOLE_WEBVIEW_VERSION = 8 as const;
 
 export type ConsoleConnectionStatus = "connecting" | "connected" | "disconnected" | "error";
 export type ConsoleLifecycleState =
@@ -163,6 +163,42 @@ export interface TerminalRunDataMessage extends TerminalRunKey {
   readonly data: string;
 }
 
+export type TerminalRunRenderStage =
+  | "window-message-received"
+  | "contract-validation"
+  | "registry-received"
+  | "registry-result"
+  | "surface-write-called"
+  | "xterm-write-callback"
+  | "animation-frame";
+
+export type TerminalRunRenderResult =
+  | "received"
+  | "accepted"
+  | "rejected"
+  | "applied"
+  | "duplicate"
+  | "gap"
+  | "missing"
+  | "queued"
+  | "parsed"
+  | "frame-observed";
+
+/** Content-free acknowledgement of one diagnostic terminal render boundary. */
+export interface TerminalRunRenderAckMessage extends TerminalRunKey {
+  readonly type: "terminal.run.render-ack";
+  readonly seq: number;
+  readonly stage: TerminalRunRenderStage;
+  readonly result: TerminalRunRenderResult;
+  readonly bufferLineCount?: number;
+  readonly baseY?: number;
+  readonly viewportY?: number;
+  readonly rows?: number;
+  readonly columns?: number;
+  readonly containerWidth?: number;
+  readonly containerHeight?: number;
+}
+
 export interface TerminalRunResetMessage extends TerminalRunKey {
   readonly type: "terminal.run.reset";
 }
@@ -185,6 +221,7 @@ export type ExtensionToConsoleMessage =
 
 export type ConsoleToExtensionMessage =
   | { readonly type: "webview.ready"; readonly version: typeof CONSOLE_WEBVIEW_VERSION }
+  | TerminalRunRenderAckMessage
   | { readonly type: "draft.changed"; readonly sessionId: string; readonly content: string }
   | PromptSendMessage
   | {
@@ -249,6 +286,64 @@ const hasRequestAndSessionId = (
 
 const isNonNegativeInteger = (value: unknown): value is number =>
   typeof value === "number" && Number.isInteger(value) && value >= 0;
+
+const terminalRunRenderStages: readonly TerminalRunRenderStage[] = [
+  "window-message-received",
+  "contract-validation",
+  "registry-received",
+  "registry-result",
+  "surface-write-called",
+  "xterm-write-callback",
+  "animation-frame",
+];
+
+const terminalRunRenderResults: readonly TerminalRunRenderResult[] = [
+  "received",
+  "accepted",
+  "rejected",
+  "applied",
+  "duplicate",
+  "gap",
+  "missing",
+  "queued",
+  "parsed",
+  "frame-observed",
+];
+
+const isOptionalNonNegativeNumber = (value: unknown): boolean =>
+  value === undefined || (typeof value === "number" && Number.isFinite(value) && value >= 0);
+
+const isTerminalRunRenderAck = (
+  value: Readonly<Record<string, unknown>>,
+): value is Readonly<Record<string, unknown>> & TerminalRunRenderAckMessage =>
+  hasOnlyKeys(value, [
+    "type",
+    "sessionId",
+    "runId",
+    "seq",
+    "stage",
+    "result",
+    "bufferLineCount",
+    "baseY",
+    "viewportY",
+    "rows",
+    "columns",
+    "containerWidth",
+    "containerHeight",
+  ]) &&
+  hasRunIdentity(value) &&
+  isNonNegativeInteger(value.seq) &&
+  typeof value.stage === "string" &&
+  terminalRunRenderStages.includes(value.stage as TerminalRunRenderStage) &&
+  typeof value.result === "string" &&
+  terminalRunRenderResults.includes(value.result as TerminalRunRenderResult) &&
+  isOptionalNonNegativeNumber(value.bufferLineCount) &&
+  isOptionalNonNegativeNumber(value.baseY) &&
+  isOptionalNonNegativeNumber(value.viewportY) &&
+  isOptionalNonNegativeNumber(value.rows) &&
+  isOptionalNonNegativeNumber(value.columns) &&
+  isOptionalNonNegativeNumber(value.containerWidth) &&
+  isOptionalNonNegativeNumber(value.containerHeight);
 
 const consoleLifecycleStates: readonly ConsoleLifecycleState[] = [
   "activating",
@@ -524,6 +619,8 @@ export const isConsoleToExtensionMessage = (value: unknown): value is ConsoleToE
   switch (value.type) {
     case "webview.ready":
       return hasOnlyKeys(value, ["type", "version"]) && value.version === CONSOLE_WEBVIEW_VERSION;
+    case "terminal.run.render-ack":
+      return isTerminalRunRenderAck(value);
     case "draft.changed":
       return (
         hasOnlyKeys(value, ["type", "sessionId", "content"]) &&

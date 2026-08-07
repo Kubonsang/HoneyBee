@@ -57,14 +57,41 @@ const state = {
 };
 
 describe("Console message contracts", () => {
-  it("requires protocol v7 and rejects older ready messages", () => {
+  it("requires protocol v8 and rejects older ready messages", () => {
     expect(
       isConsoleToExtensionMessage({
         type: "webview.ready",
         version: CONSOLE_WEBVIEW_VERSION,
       }),
     ).toBe(true);
-    expect(isConsoleToExtensionMessage({ type: "webview.ready", version: 6 })).toBe(false);
+    expect(isConsoleToExtensionMessage({ type: "webview.ready", version: 7 })).toBe(false);
+  });
+
+  it("strictly validates content-free terminal render acknowledgements", () => {
+    const acknowledgement = {
+      type: "terminal.run.render-ack",
+      sessionId: "session-1",
+      runId: "run-1",
+      seq: 4,
+      stage: "xterm-write-callback",
+      result: "parsed",
+      bufferLineCount: 8,
+      baseY: 0,
+      viewportY: 0,
+      rows: 24,
+      columns: 80,
+      containerWidth: 960,
+      containerHeight: 480,
+    } as const;
+    expect(isConsoleToExtensionMessage(acknowledgement)).toBe(true);
+    expect(isConsoleToExtensionMessage({ ...acknowledgement, terminalData: "forbidden" })).toBe(
+      false,
+    );
+    expect(isConsoleToExtensionMessage({ ...acknowledgement, containerWidth: -1 })).toBe(false);
+    expect(isConsoleToExtensionMessage({ ...acknowledgement, stage: "renderer-payload" })).toBe(
+      false,
+    );
+    expect(JSON.stringify(acknowledgement)).not.toContain("Prompt");
   });
 
   it("requires a request ID and non-empty content for prompt.send", () => {

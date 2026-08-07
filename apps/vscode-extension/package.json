@@ -229,6 +229,11 @@
           "maximum": 120000,
           "description": "Maximum time to wait for one runtime response."
         },
+        "honeyBee.console.renderDiagnostics": {
+          "type": "boolean",
+          "default": false,
+          "description": "Emit content-free terminal delivery and xterm render acknowledgements to the Honey Bee Output Channel. Reopen the Console after changing this setting."
+        },
         "honeyBee.agent.defaultProfile": {
           "type": "string",
           "default": "codex",

@@ -84,6 +84,8 @@ describe("XtermTerminalSurfaceFactory", () => {
       className: "",
       dataset: {} as Record<string, string>,
       hidden: false,
+      clientWidth: 640,
+      clientHeight: 360,
       remove: vi.fn(),
     } as unknown as HTMLDivElement;
     const appendedHidden: boolean[] = [];
@@ -92,6 +94,10 @@ describe("XtermTerminalSurfaceFactory", () => {
     } as unknown as HTMLElement;
     vi.stubGlobal("document", {
       createElement: () => container,
+    });
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+      callback(0);
+      return 1;
     });
 
     const surface = new XtermTerminalSurfaceFactory(host).create(
@@ -103,7 +109,11 @@ describe("XtermTerminalSurfaceFactory", () => {
     expect(terminal.openedHidden).toEqual([]);
 
     const parsedBeforeOpen = vi.fn();
-    surface.write("SESSION-A", parsedBeforeOpen);
+    const frameBeforeOpen = vi.fn();
+    surface.write("SESSION-A", {
+      onParsed: parsedBeforeOpen,
+      onAnimationFrame: frameBeforeOpen,
+    });
     expect(terminal.writes).toEqual(["SESSION-A"]);
     expect(terminal.openedHidden).toEqual([]);
     expect(parsedBeforeOpen).toHaveBeenCalledWith({
@@ -111,21 +121,30 @@ describe("XtermTerminalSurfaceFactory", () => {
       baseY: 0,
       viewportY: 0,
       rows: 24,
+      columns: 80,
+      containerWidth: 640,
+      containerHeight: 360,
     });
+    expect(frameBeforeOpen).toHaveBeenCalledWith(expect.objectContaining({ bufferLineCount: 2 }));
 
     surface.setVisible(true);
     expect(terminal.openedHidden).toEqual([false]);
     expect(surface.fit()).toEqual({ columns: 80, rows: 24 });
 
     const parsedVisible = vi.fn();
-    surface.write("SESSION-B", parsedVisible);
+    const writeCalled = vi.fn();
+    surface.write("SESSION-B", { onWriteCalled: writeCalled, onParsed: parsedVisible });
     expect(terminal.writes).toEqual(["SESSION-A", "SESSION-B"]);
     expect(parsedVisible).toHaveBeenCalledWith({
       bufferLineCount: 3,
       baseY: 0,
       viewportY: 0,
       rows: 24,
+      columns: 80,
+      containerWidth: 640,
+      containerHeight: 360,
     });
+    expect(writeCalled).toHaveBeenCalledWith(expect.objectContaining({ bufferLineCount: 2 }));
     expect(terminal.refreshes.at(-1)).toEqual({ start: 0, end: 23 });
 
     surface.setVisible(false);

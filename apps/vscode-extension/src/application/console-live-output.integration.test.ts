@@ -25,6 +25,7 @@ import {
   type TerminalRunKey,
   type TerminalSurface,
   type TerminalSurfaceFactory,
+  type TerminalWriteObserver,
   TerminalRunRegistry,
   terminalRunKey,
   type TerminalRunRegistryTrace,
@@ -34,9 +35,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   JsonlRuntimeClient,
   NodeChildProcessRuntimeTransport,
+  type RuntimePtyDataTrace,
 } from "../adapters/jsonl-runtime-client.js";
 import {
-  postConsoleMessage,
+  ConsoleMessageQueue,
   type ConsoleMessageTrace,
 } from "../presentation/console-message-bridge.js";
 import { ConsoleApplicationService, type ConsoleTerminalDataTrace } from "./console-service.js";
@@ -81,14 +83,23 @@ class MarkerSurface implements TerminalSurface {
 
   public constructor(readonly input: (data: string) => void) {}
 
-  public write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void {
+  public write(data: string, observer?: TerminalWriteObserver): void {
+    observer?.onWriteCalled?.(this.metrics());
     this.writes.push(data);
-    onParsed?.({
+    observer?.onParsed?.(this.metrics());
+    observer?.onAnimationFrame?.(this.metrics());
+  }
+
+  private metrics(): TerminalRenderMetrics {
+    return {
       bufferLineCount: this.writes.length,
       baseY: 0,
       viewportY: 0,
       rows: 30,
-    });
+      columns: 100,
+      containerWidth: 800,
+      containerHeight: 400,
+    };
   }
 
   public reset(): void {
@@ -147,6 +158,7 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
       readonly sequence: number;
     }[] = [];
     const applicationTrace: ConsoleTerminalDataTrace[] = [];
+    const runtimeTrace: RuntimePtyDataTrace[] = [];
     const bridgeTrace: ConsoleMessageTrace[] = [];
     const registryTrace: TerminalRunRegistryTrace[] = [];
     const contractTrace: {
@@ -170,9 +182,15 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
       environment: process.env,
     });
     let requestSequence = 0;
-    const runtime = new JsonlRuntimeClient(transport, {
-      requestId: () => "cmd-live-" + String(++requestSequence),
-    });
+    const runtime = new JsonlRuntimeClient(
+      transport,
+      {
+        requestId: () => "cmd-live-" + String(++requestSequence),
+      },
+      undefined,
+      undefined,
+      (event) => runtimeTrace.push(event),
+    );
     runtime.onEvent((event: RuntimeClientEvent) => {
       if (event.type !== "pty.data") return;
       for (const marker of markers) {
@@ -292,14 +310,15 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
       }
       return true;
     };
+    const postFailures: unknown[] = [];
+    const messageQueue = new ConsoleMessageQueue(
+      {
+        postMessage: async (posted) => routeToWebview(posted),
+      },
+      (event) => bridgeTrace.push(event),
+    );
     service.onMessage((message) => {
-      void postConsoleMessage(
-        {
-          postMessage: async (posted) => routeToWebview(posted),
-        },
-        message,
-        (event) => bridgeTrace.push(event),
-      );
+      void messageQueue.post(message).catch((error: unknown) => postFailures.push(error));
     });
 
     const sessionA = SessionIdSchema.parse("session-a");
@@ -388,6 +407,7 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
           runId: runtimeEvent.runId,
           sequence: runtimeEvent.sequence,
         };
+        expect(runtimeTrace).toContainEqual({ stage: "runtime-pty-data", ...identity });
         expect(applicationTrace).toContainEqual({ stage: "application-received", ...identity });
         expect(applicationTrace).toContainEqual({
           stage: "terminal-message-emitted",
@@ -411,12 +431,23 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
         );
         expect(registryTrace).toContainEqual(
           expect.objectContaining({
-            stage: "surface-rendered",
+            stage: "xterm-write-callback",
             key: { sessionId: identity.sessionId, runId: identity.runId },
             seq: identity.sequence,
           }),
         );
       }
+      await messageQueue.flush();
+      expect(postFailures).toEqual([]);
+      const contentFreeTrace = JSON.stringify([
+        runtimeTrace,
+        applicationTrace,
+        bridgeTrace,
+        registryTrace,
+        contractTrace,
+        applyResults,
+      ]);
+      for (const marker of markers) expect(contentFreeTrace).not.toContain(marker);
 
       service.beginShutdown();
       await service.shutdownRuntime("extension-shutdown");
@@ -428,6 +459,7 @@ windowsDescribe("Console live cmd.exe incremental rendering", () => {
       }
       service.disposeListeners();
       await service.disposeRuntime().catch(() => undefined);
+      await messageQueue.close();
       registry.dispose();
       await rm(temporaryDirectory, {
         recursive: true,

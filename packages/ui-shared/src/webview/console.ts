@@ -8,6 +8,7 @@ import {
   type ConsoleViewState,
   type PromptAcknowledgementMessage,
   type TerminalRunKey,
+  type TerminalRunRenderAckMessage,
 } from "../contracts.js";
 import {
   PromptDeliveryTracker,
@@ -76,6 +77,30 @@ const assumeDeliveredButton = requiredElement<HTMLButtonElement>("assume-deliver
 const retryPromptButton = requiredElement<HTMLButtonElement>("retry-prompt-button");
 
 let visibleTerminalKey: TerminalRunKey | undefined;
+const terminalDiagnosticsEnabled = consoleShell.dataset.terminalDiagnostics === "true";
+
+const postRenderAck = (message: Omit<TerminalRunRenderAckMessage, "type">): void => {
+  if (terminalDiagnosticsEnabled) {
+    vscode.postMessage({ type: "terminal.run.render-ack", ...message });
+  }
+};
+
+const rawTerminalDataIdentity = (
+  value: unknown,
+): { readonly sessionId: string; readonly runId: string; readonly seq: number } | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const record = value as Readonly<Record<string, unknown>>;
+  return record.type === "terminal.run.data" &&
+    typeof record.sessionId === "string" &&
+    record.sessionId.length > 0 &&
+    typeof record.runId === "string" &&
+    record.runId.length > 0 &&
+    typeof record.seq === "number" &&
+    Number.isInteger(record.seq) &&
+    record.seq >= 0
+    ? { sessionId: record.sessionId, runId: record.runId, seq: record.seq }
+    : undefined;
+};
 
 const terminalRegistry = new TerminalRunRegistry({
   factory: new XtermTerminalSurfaceFactory(terminalElement),
@@ -113,6 +138,38 @@ const terminalRegistry = new TerminalRunRegistry({
         "One or more terminal output events were missed. Honey Bee requested a bounded replay.";
       terminalWarning.hidden = false;
     }
+  },
+  onTrace: (event) => {
+    if (event.stage === "registry-received") {
+      postRenderAck({
+        ...event.key,
+        seq: event.seq,
+        stage: event.stage,
+        result: "received",
+      });
+      return;
+    }
+    if (event.stage === "registry-result") {
+      postRenderAck({
+        ...event.key,
+        seq: event.seq,
+        stage: event.stage,
+        result: event.result,
+      });
+      return;
+    }
+    postRenderAck({
+      ...event.key,
+      seq: event.seq,
+      stage: event.stage,
+      result:
+        event.stage === "surface-write-called"
+          ? "queued"
+          : event.stage === "xterm-write-callback"
+            ? "parsed"
+            : "frame-observed",
+      ...event.metrics,
+    });
   },
 });
 
@@ -528,8 +585,34 @@ const handlePromptAcknowledgement = (message: PromptAcknowledgementMessage): voi
 };
 
 window.addEventListener("message", (event: MessageEvent<unknown>) => {
-  if (!isExtensionToConsoleMessage(event.data)) return;
+  const rawIdentity = rawTerminalDataIdentity(event.data);
+  if (rawIdentity !== undefined) {
+    postRenderAck({
+      ...rawIdentity,
+      stage: "window-message-received",
+      result: "received",
+    });
+  }
+  if (!isExtensionToConsoleMessage(event.data)) {
+    if (rawIdentity !== undefined) {
+      postRenderAck({
+        ...rawIdentity,
+        stage: "contract-validation",
+        result: "rejected",
+      });
+    }
+    return;
+  }
   const message = event.data;
+  if (message.type === "terminal.run.data") {
+    postRenderAck({
+      sessionId: message.sessionId,
+      runId: message.runId,
+      seq: message.seq,
+      stage: "contract-validation",
+      result: "accepted",
+    });
+  }
   switch (message.type) {
     case "console.state":
       renderState(message.state);

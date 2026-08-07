@@ -328,7 +328,7 @@ The Webview sends only `sessionId + runId`. The Extension revalidates Session ow
 
 ### Automated evidence added for PR #6
 
-- Strict protocol tests cover v7, Run select/follow/open-log only-key validation, required non-empty identities, state timestamps/replay enums, unique Runs, and consistent active/viewed projections.
+- Strict protocol v8 extends the v7 Run-navigation model with content-free terminal render acknowledgements. Tests cover Run select/follow/open-log only-key validation, required non-empty identities, state timestamps/replay enums, unique Runs, consistent active/viewed projections, and strict rejection of diagnostic payload fields.
 - Pure projection tests cover active-first/recent stable ordering, replay mapping, duplicate rejection, the 50-item policy, and active/viewed inclusion.
 - Reducer and Application tests cover archived read-only controls, Prompt and terminal mutation blocking, idempotent selection, cross-Session rejection, Return to live, Runtime call counts, and authoritative log lookup including a Korean/spaced path.
 - Accessibility/presentation tests cover the native labelled selector, semantic buttons, polite status regions, color-independent language, human termination reasons, and distinct complete/truncated/gap/surface-only/metadata-only text.
@@ -349,23 +349,43 @@ Manual QA found that a live `cmd.exe /D /K` Run showed its initial prompt but di
 
 Content-free tracing covers these boundaries: Runtime `pty.data`, `ConsoleApplicationService` receive, `terminal.run.data` emission and Webview post settlement, strict contract acceptance, Registry Run key/status/last sequence, `applyData` result, surface write completion, and xterm buffer/render metrics. Production diagnostics contain only Session ID, Run ID, sequence, status/result, and numeric buffer metrics. Prompt and terminal bodies are not copied to Output Channel or durable storage.
 
-### Root cause and correction
+### QA2 recurrence and current diagnostic correction
 
-The Webview created each xterm instance by calling `Terminal.open()` while its Run container was hidden with zero layout dimensions. A later Session/Run selection made the container visible, but xterm had no reliable visible renderer initialization contract for that lifecycle. Existing fake-surface tests parsed strings synchronously and therefore missed the browser renderer failure.
+QA2 reproduced the same visible failure after lazy `Terminal.open()` was shipped: the installed VSIX still showed only the initial prompt while its PTY log contained the raw command and result. Hidden zero-dimension initialization was therefore an incomplete hypothesis, not a confirmed root cause. The release remains blocked and the previous automated PASS is not treated as Electron Webview painting evidence.
 
-`XtermTerminalSurface` now creates the emulator and parser immediately but defers `Terminal.open()` until the Run is first visible. Data received before visibility remains queued by xterm. The first visible transition opens once; subsequent hide/show transitions reuse the same emulator. Parsed live writes refresh visible rows and expose content-free buffer metrics to the injected trace. No Session switch clears or resets a surface.
+Console protocol v8 adds an opt-in, content-free `terminal.run.render-ack` from the actual Webview window. It distinguishes window receipt, strict contract validation, Registry receipt/result, surface write invocation, the real xterm write callback, and the next animation frame. Buffer line count, `baseY`, `viewportY`, rows, columns, and container width/height are returned without terminal or Prompt content.
 
-### Release-blocker regression evidence
+Extension-to-Webview delivery now has one FIFO queue per Webview generation. `console.state`, `terminal.run.open`, `terminal.run.data`, Prompt acknowledgement, and focus messages await the preceding post before crossing the bridge. A rejected post does not reorder or poison later messages. Queue shutdown is awaited before the panel is disposed. This establishes ordering ownership but is not by itself proof that Chromium painted a frame.
+
+### Automated boundary evidence and limitation
 
 A real Windows integration launches the packaged Runtime and two actual `cmd.exe /D /K` Sessions. It sends `echo SESSION-A` through raw terminal input, sends `echo SESSION-B` through the Prompt delivery pipeline, receives a delayed marker while the first Run is hidden, isolates a second Session, and starts a fresh second Run for the original Session. It verifies:
 
-- Runtime, Application receive/emission, Webview post, contract validation, Registry application, and surface-rendered traces retain identical Session/Run/sequence identity;
+- Runtime, Application receive/emission, queued Webview post, contract validation, Registry application, and surface callback traces retain identical Session/Run/sequence identity;
 - the PTY log and rendered surface contain the non-sensitive fixture markers in the same order;
 - hidden Run output is applied to its retained surface and visible after return;
 - another Session and a later Run of the same Session never receive the earlier Run's markers;
 - duplicate/gap/snapshot Registry behavior and the existing Windows ConPTY, Korean/spaced-path, interrupt, immediate-exit, and Git-bundled Vim tests remain green.
 
-The final automated run passed 56 test files and 236 tests. The official VS Code 1.131.0 Extension Host test also passed. Human observation of actual GPU/browser painting, Windows IME, clipboard, accessibility themes/zoom, and forced Runtime/Extension Host termination remains a release gate.
+The real Windows `cmd.exe` integration still terminates at an injected MarkerSurface, and the xterm unit test still mocks `@xterm/xterm`. Neither is reported as proof of Electron Webview renderer output. Human observation of an installed diagnostic VSIX, with screenshot or recording evidence, remains the release gate.
+
+### Diagnostic VSIX procedure
+
+1. Set `"honeyBee.console.renderDiagnostics": true` in VS Code Settings and reopen the Honey Bee Console panel.
+2. Open **Output: Honey Bee**. Start `cmd.exe /D /K`, click the visible live terminal, and type `echo RAW-A`.
+3. Confirm one Session/Run/sequence identity advances through this exact stage order:
+
+   `runtime-pty-data` -> `application-received` -> `terminal-message-emitted` -> `post-requested` -> `post-settled delivered=true` -> `window-message-received` -> `contract-validation result=accepted` -> `registry-received` -> `registry-result result=applied` -> `surface-write-called` -> `xterm-write-callback` -> `animation-frame`.
+
+4. Interpret the first missing or divergent stage:
+   - no `window-message-received`: Webview bridge/subscription;
+   - validation rejected: v8 message contract;
+   - Registry missing/duplicate/gap: Run identity or sequence/replay;
+   - applied without `xterm-write-callback`: xterm write/open lifecycle;
+   - callback with growing buffer but zero container dimensions: layout/visibility;
+   - non-zero layout and animation-frame metrics while pixels remain unchanged: renderer refresh/Webview paint.
+5. Capture only the visible `RAW-A` marker and content-free Output lines. Do not capture Prompt bodies, unrelated terminal content, secrets, full local paths, or PTY logs.
+6. Repeat with Composer `echo COMPOSER-B`, Session A/B switching, hidden output then return, and a fresh second Run. The installed VSIX is not accepted until the command text, result, and next prompt are immediately visible and marker order matches Open Log.
 
 ### Terminal-first layout for resumed QA
 

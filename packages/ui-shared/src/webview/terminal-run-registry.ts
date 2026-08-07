@@ -18,10 +18,19 @@ export interface TerminalRenderMetrics {
   readonly baseY: number;
   readonly viewportY: number;
   readonly rows: number;
+  readonly columns: number;
+  readonly containerWidth: number;
+  readonly containerHeight: number;
+}
+
+export interface TerminalWriteObserver {
+  readonly onWriteCalled?: (metrics: TerminalRenderMetrics) => void;
+  readonly onParsed?: (metrics: TerminalRenderMetrics) => void;
+  readonly onAnimationFrame?: (metrics: TerminalRenderMetrics) => void;
 }
 
 export interface TerminalSurface {
-  write(data: string, onParsed?: (metrics: TerminalRenderMetrics) => void): void;
+  write(data: string, observer?: TerminalWriteObserver): void;
   reset(): void;
   setVisible(visible: boolean): void;
   fit(): TerminalDimensions | undefined;
@@ -61,7 +70,7 @@ export type TerminalRunRegistryTrace =
       readonly lastAppliedSeq: number;
     }
   | {
-      readonly stage: "surface-rendered";
+      readonly stage: "surface-write-called" | "xterm-write-callback" | "animation-frame";
       readonly key: TerminalRunKey;
       readonly seq: number;
       readonly metrics: TerminalRenderMetrics;
@@ -186,13 +195,16 @@ export class TerminalRunRegistry {
       return { status: "duplicate" };
     }
     const expectedSeq = record.lastAppliedSeq + 1;
-    record.surface.write(message.data, (metrics) => {
-      this.#onTrace({
-        stage: "surface-rendered",
-        key: record.key,
-        seq: message.seq,
-        metrics,
-      });
+    record.surface.write(message.data, {
+      onWriteCalled: (metrics) => {
+        this.#recordSurfaceTrace("surface-write-called", record.key, message.seq, metrics);
+      },
+      onParsed: (metrics) => {
+        this.#recordSurfaceTrace("xterm-write-callback", record.key, message.seq, metrics);
+      },
+      onAnimationFrame: (metrics) => {
+        this.#recordSurfaceTrace("animation-frame", record.key, message.seq, metrics);
+      },
     });
     record.lastAppliedSeq = message.seq;
     record.lastAccessedAt = this.#now();
@@ -345,6 +357,15 @@ export class TerminalRunRegistry {
       result,
       lastAppliedSeq,
     });
+  }
+
+  #recordSurfaceTrace(
+    stage: "surface-write-called" | "xterm-write-callback" | "animation-frame",
+    key: TerminalRunKey,
+    seq: number,
+    metrics: TerminalRenderMetrics,
+  ): void {
+    this.#onTrace({ stage, key, seq, metrics });
   }
 
   #enforceRetention(): void {
