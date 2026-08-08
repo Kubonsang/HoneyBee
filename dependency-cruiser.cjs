@@ -12,7 +12,7 @@ module.exports = {
       severity: "error",
       from: { path: "^packages/domain/" },
       to: {
-        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles|ui-shared)/)",
+        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
       },
     },
     {
@@ -20,28 +20,26 @@ module.exports = {
       severity: "error",
       from: { path: "^packages/event-contracts/" },
       to: {
-        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles|ui-shared)/)",
+        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
       },
     },
     {
       name: "runtime-does-not-depend-on-ui-or-extension",
       severity: "error",
       from: { path: "^packages/session-runtime/" },
-      to: { path: "^(apps/|packages/ui-shared/)" },
-    },
-    {
-      name: "ui-shared-does-not-depend-on-implementations",
-      severity: "error",
-      from: { path: "^packages/ui-shared/" },
-      to: {
-        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
-      },
+      to: { path: "^apps/" },
     },
     {
       name: "packages-do-not-import-apps",
       severity: "error",
       from: { path: "^packages/" },
       to: { path: "^apps/" },
+    },
+    {
+      name: "core-does-not-depend-on-presentation-or-runtime-adapters",
+      severity: "error",
+      from: { path: "^packages/core/" },
+      to: { path: "^(apps/|packages/session-runtime/)" },
     },
   ],
   options: {

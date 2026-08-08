@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "producer": {
+    "command": "codex",
+    "args": ["exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"],
+    "cwd": ".."
+  },
+  "reviewer": {
+    "command": "${APPDATA}\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+    "args": ["run", "--pure"],
+    "cwd": ".."
+  },
+  "timeoutMs": 300000,
+  "maxOutputBytes": 1048576
+}

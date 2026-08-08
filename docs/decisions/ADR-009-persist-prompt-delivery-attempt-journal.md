@@ -1,6 +1,6 @@
 # ADR-009: Persist Prompt delivery Attempts and require explicit unknown-outcome recovery
 
-- Status: Accepted
+- Status: Retired — VS Code Extension removed by ADR-013
 - Date: 2026-07-30
 
 ## Context
