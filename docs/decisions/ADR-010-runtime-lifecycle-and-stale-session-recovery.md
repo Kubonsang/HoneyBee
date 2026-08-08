@@ -1,6 +1,6 @@
 # ADR-010: Correlate ephemeral Runtime Runs and recover stale active Sessions
 
-- Status: Accepted
+- Status: Retired — VS Code Extension removed by ADR-013
 - Date: 2026-07-30
 
 ## Context

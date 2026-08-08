@@ -83,15 +83,4 @@ describe("InMemorySessionRunRepository", () => {
     );
     expect(next.ok).toBe(true);
   });
-
-  it("lists only Runs owned by the requested Session", async () => {
-    const repository = new InMemorySessionRunRepository([
-      starting("run-1"),
-      starting("run-2", {
-        sessionId: "session-2" as SessionRunRecord["sessionId"],
-      }),
-    ]);
-    const listed = await repository.listBySessionId(starting("run-1").sessionId);
-    expect(listed.ok ? listed.value.map(({ runId }) => runId) : []).toEqual(["run-1"]);
-  });
 });

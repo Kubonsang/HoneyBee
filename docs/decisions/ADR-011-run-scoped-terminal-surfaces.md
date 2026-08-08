@@ -1,6 +1,6 @@
 # ADR-011: Isolate terminal emulator surfaces by Session Run
 
-- Status: Accepted
+- Status: Retired — VS Code Extension removed by ADR-013
 - Date: 2026-07-31
 - Navigation projection: Superseded by ADR-012; Run isolation and retention remain current
 

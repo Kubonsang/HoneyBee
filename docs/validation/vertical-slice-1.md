@@ -1,5 +1,7 @@
 # Vertical Slice 1 validation
 
+> Historical record only. The VS Code Extension validated here was retired by ADR-013 and is no longer part of the repository.
+
 Date: 2026-07-30 (Asia/Seoul)
 
 ## Outcome

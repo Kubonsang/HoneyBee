@@ -39,17 +39,6 @@ export class InMemorySessionRunRepository implements SessionRunRepository {
     return ok(run === undefined ? undefined : cloneRun(run));
   }
 
-  public async listBySessionId(
-    sessionId: SessionId,
-  ): Promise<Result<readonly SessionRunRecord[], RepositoryError>> {
-    return ok(
-      [...this.#runs.values()]
-        .filter((run) => run.sessionId === sessionId)
-        .sort(compareRuns)
-        .map(cloneRun),
-    );
-  }
-
   public async getActiveBySessionId(
     sessionId: SessionId,
   ): Promise<Result<SessionRunRecord | undefined, RepositoryError>> {

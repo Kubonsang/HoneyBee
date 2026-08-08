@@ -1,6 +1,6 @@
 # ADR-008: Persist delivered Prompt receipts without storing Prompt content
 
-- Status: Accepted
+- Status: Retired — VS Code Extension removed by ADR-013
 - Decision date: 2026-07-30
 
 ## Context

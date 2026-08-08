@@ -1,6 +1,6 @@
 # ADR-012: Retained Run navigation and degraded replay
 
-- Status: Accepted
+- Status: Retired — VS Code Extension removed by ADR-013
 - Date: 2026-07-31
 
 ## Context

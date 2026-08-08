@@ -1,0 +1,21 @@
+{
+  "name": "honeybee-cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "bin": {
+    "honeybee": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json --pretty false",
+    "start": "node dist/cli.js",
+    "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.json --pretty false"
+  },
+  "dependencies": {
+    "@honeybee/core": "workspace:*"
+  },
+  "license": "MIT"
+}

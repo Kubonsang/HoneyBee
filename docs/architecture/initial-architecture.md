@@ -1,6 +1,6 @@
 # Honey Bee 초기 아키텍처
 
-- 상태: 초기 기준선
+- 상태: 폐기됨 — ADR-013의 Core/CLI 구조로 대체
 - 기준일: 2026-07-29
 - 적용 범위: 현재 Vertical Slice
 - 관련 결정: [ADR-001](../decisions/ADR-001-windows-first.md) ~ [ADR-007](../decisions/ADR-007-unity-cli-adapter-boundary.md)

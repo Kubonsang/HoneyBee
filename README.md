@@ -1,13 +1,13 @@
 # Honey Bee
 
-Honey Bee is a Windows-first VS Code vertical slice for managing AI-agent sessions and streaming each agent through a real PTY console. The current slice keeps the VS Code extension, JSONL runtime sidecar, domain contracts, persistence, agent adapter, and webview bundle in one pnpm workspace.
+Honey Bee is a CLI-first orchestrator. Its current proof starts a producer Agent and a reviewer Agent as two real OS processes, captures the producer's result, hands that result to the reviewer through HoneyBee Core, and returns the reviewer's final result.
 
 ## Requirements
 
-- Windows 11 (ConPTY is required for the end-to-end runtime tests)
+- Windows 11
 - Node.js 24 or newer with Corepack
-- VS Code 1.96 or newer
-- Git for Windows (its bundled Vim is exercised by the PTY integration test when available)
+- Codex and OpenCode only for the optional real-Agent example
+- Git for Windows only for the retained PTY/Vim regression tests
 
 ## Install and build
 
@@ -20,49 +20,40 @@ corepack pnpm security:install-hooks
 corepack pnpm build
 ```
 
-The build compiles the packages, bundles the extension and webview with esbuild, and packages the Windows PTY sidecar plus x64/arm64 native assets under `apps/vscode-extension/dist/runtime`.
+The primary artifacts are `apps/cli` and `packages/core`. The build also compiles retained lower-level packages while the CLI migration continues.
 
-## Run the extension
+## Prove the two-process handoff
 
-Open an Extension Development Host with the repository as its workspace:
+Run the deterministic smoke proof. It launches two separate Node Agent processes, prints both PIDs and the `producer -> reviewer` handoff, and returns the reviewer result.
 
 ```powershell
-code --new-window --extensionDevelopmentPath=apps/vscode-extension .
+corepack pnpm build
+corepack pnpm honeybee demo --task "count bees" --json
 ```
 
-Open the Honey Bee activity-bar view, create a session, and select it. The Session tree opens a terminal-first Console in an editor-area panel; **Honey Bee: Open Console** opens it again. Use **Start** from the compact Run Bar. The Prompt Composer is collapsed by default and opens from **Compose Prompt** or `Ctrl+Alt+P`. By default, the extension resolves its packaged `dist/runtime/cli.cjs` to an absolute path and launches it with `node`, so it also works when the opened Unity workspace is outside this repository. Explicit runtime command/argument overrides, agent command/arguments, and profiles can be changed under the `honeyBee.*` VS Code settings.
+Run installed Agent CLIs with a config file:
 
-For a deterministic console smoke test, point `honeyBee.agent.command` to `node` and set `honeyBee.agent.args` to the absolute path of `packages/test-fixtures/dist/echo-cli.js`. Echo Fixture accepts `unicode`, `ansi`, `burst 10000`, `exit 7`, and `quit`; arbitrary input is echoed literally.
+```powershell
+corepack pnpm honeybee run --config examples/codex-opencode.windows.json --task "Summarize this repository and check the summary"
+```
 
-## Session process recovery
+The config contract is `schemaVersion: 1` plus `producer` and `reviewer` objects. Each Agent has a `command`, optional `args`, `cwd`, and `env`. HoneyBee sends each Prompt through stdin and treats stdout as that Agent's result. Relative working directories resolve from the config file, and `${VARIABLE}` references in `command` and `cwd` resolve from the environment. `examples/codex-opencode.windows.json` invokes OpenCode's native executable instead of its PowerShell/CMD shim so HoneyBee can retain `shell: false`. It assumes Codex and OpenCode are already installed and authenticated; the deterministic `demo` requires neither network nor an AI account.
 
-Honey Bee restores Session metadata and Drafts. It does not automatically restart Agent processes after an Extension Runtime restart. A Session that belonged to a previous ephemeral Runtime is shown as stopped, with its prior Run recorded as interrupted, so the user can decide when to start a new Run.
+The implementation boundary is:
 
-A normal Extension shutdown first rejects new Runtime mutations, drains Prompt durability work, asks the Runtime to stop active PTYs, persists final Run status, and then disposes the transport. Cleanup is bounded; Windows process-tree termination remains best effort without a native Job Object helper.
-
-## Run-scoped terminal screens
-
-Each Agent Run owns a separate in-memory xterm surface. Switching Sessions hides and shows those surfaces without clearing or replaying the live emulator, so Vim alternate-screen, cursor modes, selection, and scroll position do not leak between Sessions. Starting a new Run for the same Session creates a fresh terminal. Terminal input, resize, interrupt, and stop are accepted only for the selected current Run.
-
-Terminal transcripts and emulator state are not stored in VS Code `globalState`. Hiding and revealing the editor Console uses `retainContextWhenHidden` and preserves the live surface. Reload Window or Webview/Extension Host destruction can only use bounded raw ANSI replay; if it was truncated or has a sequence gap, Honey Bee states that the reconstructed screen may be incomplete.
-
-The labelled **Terminal run** selector lists up to 50 recent Runs for the selected Session without creating an xterm surface for every item. The active Run and the Run currently being viewed are separate. Selecting an archived Run makes Prompt, input, resize, interrupt, and stop controls read-only; **Return to live** restores the current interactive Run. Replay status distinguishes retained, truncated, sequence-gap, surface-only, and metadata-only screens. **Open log** is offered only when the Extension can resolve the exact Run's Runtime-origin path; no local path is sent to the Webview.
+```text
+apps/cli -> packages/core -> child process A
+                         -> handoff
+                         -> child process B -> final result
+```
 
 ## Quality and tests
 
 ```powershell
 corepack pnpm verify
-corepack pnpm test:vscode
 ```
 
-`verify` runs the public-source secret scan, production license allowlist,
-formatting, ESLint, strict package typechecks, both esbuild/TypeScript builds,
-Vitest (including Windows ConPTY and Git-bundled Vim TUI integration), and
-dependency-cruiser architecture rules. The Vim test derives the Git
-installation root from the installed `git.exe`, runs `usr/bin/vim.exe` when
-present, and skips only when unavailable. `test:vscode` additionally
-downloads/launches an official VS Code test host and checks extension
-activation and command registration.
+`verify` runs the public-source secret scan, production license allowlist, formatting, ESLint, strict package typechecks, TypeScript builds, Vitest, and dependency-cruiser architecture rules.
 
 ## Security and public-source policy
 
@@ -81,9 +72,6 @@ protection. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ## License
 
-Honey Bee is available under the [MIT License](LICENSE). Production dependency
-licenses are allowlisted and checked from the lockfile-installed graph. Full
-license texts and generated legal notices are copied into extension build
-artifacts; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Honey Bee is available under the [MIT License](LICENSE). Production dependency licenses are allowlisted and checked from the lockfile-installed graph; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
-The implementation intentionally stops at the vertical-slice boundary: no Git worktree/copy-on-write storage driver, production tool integrations, or dedicated Vim prompt mode is claimed. Git-bundled Vim TUI is validated through ConPTY; Neovim, visual layout, and Korean IME composition remain manual blockers. See [Vertical Slice 1 validation](docs/validation/vertical-slice-1.md) for the exact 12-case evidence matrix and manual checklist.
+The current scope is deliberately limited to one producer-to-reviewer handoff. PTY/TUI orchestration, persistence, retries, parallel fan-out, and graph workflows remain future work. See [ADR-013](docs/decisions/ADR-013-core-cli-first-handoff-proof.md).
