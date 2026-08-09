@@ -1,35 +1,54 @@
 #!/usr/bin/env node
 
+import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
   ChildProcessAgentRunner,
-  HandoffWorkflow,
+  FileArtifactStore,
+  FileOrchestrationJournal,
+  FileRunRepository,
   HoneyBeeCoreError,
-  type HandoffEvent,
-  type HandoffRunRequest,
+  OrchestrationWorkflow,
+  RunIdSchema,
+  StepIdSchema,
+  type OrchestrationEventV1,
+  type OrchestrationJournal,
+  type WorkflowRunRequest,
 } from "@honeybee/core";
 
-import { loadHandoffConfig } from "./config.js";
+import { loadWorkflowConfig } from "./config.js";
 
-const VERSION = "0.1.0";
-const HELP = `HoneyBee CLI ${VERSION}
+const VERSION = "0.2.0";
+const HELP = `HoneyBee ${VERSION}
 
 Usage:
   honeybee demo --task <text> [--json]
-  honeybee run --config <file> --task <text> [--json]
+  honeybee run --config <path> --task <text> [--json]
+  honeybee run show <run-id> [--json]
+  honeybee run delete <run-id> --yes [--json]
+  honeybee version
 
 Commands:
-  demo  Prove the handoff with two deterministic, real child processes.
-  run   Run a producer -> reviewer handoff using configured CLI agents.
+  demo        Run a deterministic two-process sequential workflow.
+  run         Run a schemaVersion 1 or 2 Agent configuration.
+  run show    Replay the JSONL journal for one Run.
+  run delete  Delete exactly one Run and its Artifacts.
 `;
 
-interface ParsedArguments {
-  readonly command: "demo" | "run" | "help" | "version";
-  readonly task?: string;
-  readonly config?: string;
-  readonly json: boolean;
-}
+type ParsedArguments =
+  | Readonly<{ command: "help"; json: boolean }>
+  | Readonly<{ command: "version"; json: boolean }>
+  | Readonly<{
+      command: "execute";
+      mode: "demo" | "run";
+      task?: string;
+      config?: string;
+      json: boolean;
+    }>
+  | Readonly<{ command: "show"; runId: string; json: boolean }>
+  | Readonly<{ command: "delete"; runId: string; yes: boolean; json: boolean }>;
 
 const optionValue = (args: readonly string[], name: string): string | undefined => {
   const index = args.indexOf(name);
@@ -46,40 +65,175 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
   if (args[0] === "version" || args.includes("--version")) {
     return { command: "version", json: false };
   }
+  if (args[0] === "run" && (args[1] === "show" || args[1] === "delete")) {
+    const runId = args[2];
+    if (runId === undefined || runId.startsWith("--")) throw new Error("run-id is required.");
+    return args[1] === "show"
+      ? { command: "show", runId, json: args.includes("--json") }
+      : {
+          command: "delete",
+          runId,
+          yes: args.includes("--yes"),
+          json: args.includes("--json"),
+        };
+  }
   if (args[0] !== "demo" && args[0] !== "run") {
     throw new Error(`Unknown command: ${args[0] ?? ""}`);
   }
   const task = optionValue(args, "--task");
   const config = optionValue(args, "--config");
   return {
-    command: args[0],
+    command: "execute",
+    mode: args[0],
     ...(task === undefined ? {} : { task }),
     ...(config === undefined ? {} : { config }),
     json: args.includes("--json"),
   };
 };
 
-const eventLine = (event: HandoffEvent): string => {
+const eventLine = (event: OrchestrationEventV1): string => {
   switch (event.type) {
+    case "workflow.started":
+      return `[workflow] started run=${event.runId} steps=${event.payload.stepCount}`;
+    case "artifact.stored":
+      return `[artifact] stored kind=${event.payload.artifact.kind} id=${event.payload.artifact.artifactId}`;
+    case "step.assigned":
+      return `[${event.stepId}] assigned ${event.payload.stepIndex + 1}/${event.payload.totalSteps}`;
     case "agent.started":
-      return `[${event.role}] started pid=${event.pid} command=${event.command}`;
-    case "agent.completed":
-      return `[${event.role}] completed pid=${event.pid} duration=${event.durationMs}ms output=${event.outputBytes}B`;
+      return `[${event.stepId}] agent started pid=${event.payload.pid}`;
+    case "agent.exited":
+      return `[${event.stepId}] agent exited pid=${event.payload.pid} code=${String(event.payload.exitCode)} duration=${event.payload.durationMs}ms`;
     case "handoff.created":
-      return `[handoff] ${event.from} -> ${event.to} content=${event.contentBytes}B`;
+      return `[handoff] ${event.payload.fromStepId} -> ${event.payload.toStepId}`;
+    case "step.completed":
+    case "step.blocked":
+    case "step.escalated":
+    case "step.failed":
+      return `[${event.stepId}] ${event.type.slice("step.".length)}`;
     case "workflow.completed":
-      return `[workflow] completed result=${event.resultBytes}B`;
+    case "workflow.blocked":
+    case "workflow.escalated":
+    case "workflow.failed":
+      return `[workflow] ${event.type.slice("workflow.".length)}`;
   }
 };
 
-const demoRequest = (task: string): HandoffRunRequest => {
+const demoRequest = (runId: WorkflowRunRequest["runId"], task: string): WorkflowRunRequest => {
   const demoAgentPath = fileURLToPath(new URL("./demo-agent.js", import.meta.url));
   return {
+    runId,
     task,
-    producer: { command: process.execPath, args: [demoAgentPath, "producer"] },
-    reviewer: { command: process.execPath, args: [demoAgentPath, "reviewer"] },
+    steps: [
+      {
+        id: StepIdSchema.parse("producer"),
+        agent: { command: process.execPath, args: [demoAgentPath, "producer"] },
+      },
+      {
+        id: StepIdSchema.parse("reviewer"),
+        agent: { command: process.execPath, args: [demoAgentPath, "reviewer"] },
+      },
+    ],
     timeoutMs: 10_000,
   };
+};
+
+const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
+
+const output = (value: unknown, json: boolean): void => {
+  process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${String(value)}\n`);
+};
+
+const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
+  if (args.task === undefined || args.task.trim().length === 0)
+    throw new Error("--task is required.");
+  const config =
+    args.mode === "run"
+      ? await (async () => {
+          if (args.config === undefined) throw new Error("--config is required for run.");
+          return loadWorkflowConfig(args.config);
+        })()
+      : undefined;
+  const runId = RunIdSchema.parse(randomUUID());
+  const root = stateRoot();
+  const repository = new FileRunRepository(root);
+  await repository.create(runId);
+  const fileJournal = new FileOrchestrationJournal(root);
+  const eventOutput = args.json ? process.stderr : process.stdout;
+  const journal: OrchestrationJournal = {
+    append: async (eventRunId, event) => {
+      await fileJournal.append(eventRunId, event);
+      eventOutput.write(`${eventLine(event)}\n`);
+    },
+    replay: (eventRunId) => fileJournal.replay(eventRunId),
+  };
+  let request: WorkflowRunRequest;
+  if (args.mode === "demo") {
+    request = demoRequest(runId, args.task);
+  } else {
+    if (config === undefined) throw new Error("--config is required for run.");
+    request = {
+      runId,
+      task: args.task,
+      steps: config.steps,
+      ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
+      ...(config.maxOutputBytes === undefined ? {} : { maxOutputBytes: config.maxOutputBytes }),
+    };
+  }
+  const result = await new OrchestrationWorkflow(
+    new ChildProcessAgentRunner(),
+    new FileArtifactStore(root),
+    journal,
+  ).run(request);
+  const journalPath = path.join(root, runId, "events.jsonl");
+
+  if (args.json) {
+    output({ ok: result.status === "completed", ...result, journalPath }, true);
+  } else if (result.status === "completed") {
+    output(`\nFinal result\n${result.result}\nRun: ${runId}`, false);
+  } else if (result.status === "blocked") {
+    output(`\nBlocked\n${result.reason}\nRun: ${runId}`, false);
+  } else {
+    output(`\nEscalated\n${result.reason}\n${result.question}\nRun: ${runId}`, false);
+  }
+  if (result.status === "blocked") process.exitCode = 2;
+  if (result.status === "escalated") process.exitCode = 3;
+};
+
+const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Promise<void> => {
+  const runId = RunIdSchema.parse(args.runId);
+  const root = stateRoot();
+  await new FileRunRepository(root).open(runId);
+  const replay = await new FileOrchestrationJournal(root).replay(runId);
+  if (replay.status === "indeterminate") {
+    const payload = {
+      ok: false,
+      status: "indeterminate",
+      code: replay.code,
+      message: replay.message,
+    };
+    if (args.json) output(payload, true);
+    else output(`이 Run은 비정상 종료되었고 결과를 확정할 수 없음 (${runId})`, false);
+    process.exitCode = 1;
+    return;
+  }
+  const status = replay.terminal.type.slice("workflow.".length);
+  output(
+    args.json
+      ? { ok: true, runId, status, terminal: replay.terminal, eventCount: replay.events.length }
+      : `Run ${runId}: ${status}`,
+    args.json,
+  );
+};
+
+const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>): Promise<void> => {
+  const runId = RunIdSchema.parse(args.runId);
+  if (!args.yes) {
+    output(`Refusing to delete Run ${runId} without --yes.`, args.json);
+    process.exitCode = 1;
+    return;
+  }
+  await new FileRunRepository(stateRoot()).delete(runId);
+  output(args.json ? { ok: true, runId, deleted: true } : `Deleted Run ${runId}.`, args.json);
 };
 
 const main = async (): Promise<void> => {
@@ -92,54 +246,15 @@ const main = async (): Promise<void> => {
     process.stdout.write(`${VERSION}\n`);
     return;
   }
-  if (args.task === undefined || args.task.trim().length === 0) {
-    throw new Error("--task is required.");
-  }
-
-  let request: HandoffRunRequest;
-  if (args.command === "demo") {
-    request = demoRequest(args.task);
-  } else {
-    if (args.config === undefined) throw new Error("--config is required for run.");
-    request = await loadHandoffConfig(args.config, args.task);
-  }
-
-  const eventOutput = args.json ? process.stderr : process.stdout;
-  const workflow = new HandoffWorkflow(new ChildProcessAgentRunner(), (event) => {
-    eventOutput.write(`${eventLine(event)}\n`);
-  });
-  const result = await workflow.run(request);
-
-  if (args.json) {
-    process.stdout.write(
-      `${JSON.stringify({
-        ok: true,
-        task: result.task,
-        producer: {
-          pid: result.producer.pid,
-          command: result.producer.command,
-          exitCode: result.producer.exitCode,
-          durationMs: result.producer.durationMs,
-        },
-        handoff: result.handoff,
-        reviewer: {
-          pid: result.reviewer.pid,
-          command: result.reviewer.command,
-          exitCode: result.reviewer.exitCode,
-          durationMs: result.reviewer.durationMs,
-        },
-        result: result.result,
-      })}\n`,
-    );
-    return;
-  }
-  process.stdout.write(`\nFinal result\n${result.result}\n`);
+  if (args.command === "execute") return execute(args);
+  if (args.command === "show") return showRun(args);
+  if (args.command === "delete") return deleteRun(args);
 };
 
 void main().catch((error: unknown) => {
   const payload =
     error instanceof HoneyBeeCoreError
-      ? { ok: false, code: error.code, role: error.role, message: error.message }
+      ? { ok: false, code: error.code, stepId: error.stepId, message: error.message }
       : {
           ok: false,
           code: "cli.invalid-request",

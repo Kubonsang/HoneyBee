@@ -1,23 +1,36 @@
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+
+import { ContentDigestSchema } from "@honeybee/orchestration-contracts";
 
 import { HoneyBeeCoreError } from "./errors.js";
-import type { AgentProcessRequest, AgentProcessResult, AgentProcessRunner } from "./types.js";
+import type {
+  AgentExitObservation,
+  AgentProcessRequest,
+  AgentProcessResult,
+  AgentProcessRunner,
+} from "./types.js";
 
 const mergedEnvironment = (
   overrides: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv => ({ ...process.env, ...overrides });
 
+const digest = (chunks: readonly Buffer[]) =>
+  ContentDigestSchema.parse(
+    `sha256:${createHash("sha256").update(Buffer.concat(chunks)).digest("hex")}`,
+  );
+
 export class ChildProcessAgentRunner implements AgentProcessRunner {
   public run(
     request: AgentProcessRequest,
-    onStarted?: (pid: number) => void,
+    lifecycle: Parameters<AgentProcessRunner["run"]>[1],
   ): Promise<AgentProcessResult> {
     if (request.command.command.trim().length === 0) {
       return Promise.reject(
         new HoneyBeeCoreError(
           "validation.invalid-command",
-          `The ${request.role} command cannot be empty.`,
-          request.role,
+          `The ${request.stepId} command cannot be empty.`,
+          request.stepId,
         ),
       );
     }
@@ -28,7 +41,8 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         cwd: request.command.cwd ?? process.cwd(),
         env: mergedEnvironment({
           ...request.command.env,
-          HONEYBEE_AGENT_ROLE: request.role,
+          HONEYBEE_RUN_ID: request.runId,
+          HONEYBEE_STEP_ID: request.stepId,
         }),
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
@@ -36,39 +50,44 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
-      let outputBytes = 0;
-      let terminalError: HoneyBeeCoreError | undefined;
+      let stdoutBytes = 0;
+      let stderrBytes = 0;
+      let termination: AgentProcessResult["termination"] = "exited";
       let settled = false;
+      let startedPersisted = false;
+      let startBarrier: Promise<void> = Promise.resolve();
 
-      const terminateWith = (error: HoneyBeeCoreError): void => {
-        terminalError ??= error;
-        if (child.exitCode === null) child.kill();
+      const terminate = (reason: "timed-out" | "output-limit"): void => {
+        if (termination === "exited") termination = reason;
+        if (child.exitCode === null && child.signalCode === null) child.kill();
       };
 
-      const collect = (target: Buffer[], chunk: Buffer | string): void => {
+      const collect = (target: Buffer[], stream: "stdout" | "stderr", chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        outputBytes += buffer.byteLength;
-        if (outputBytes > request.maxOutputBytes) {
-          terminateWith(
-            new HoneyBeeCoreError(
-              "agent.output-limit",
-              `The ${request.role} agent exceeded the output limit.`,
-              request.role,
-              { maxOutputBytes: request.maxOutputBytes },
-            ),
-          );
+        if (stream === "stdout") stdoutBytes += buffer.byteLength;
+        else stderrBytes += buffer.byteLength;
+        if (stdoutBytes + stderrBytes > request.maxOutputBytes) {
+          terminate("output-limit");
           return;
         }
         target.push(buffer);
       };
 
-      child.stdout.on("data", (chunk: Buffer | string) => collect(stdoutChunks, chunk));
-      child.stderr.on("data", (chunk: Buffer | string) => collect(stderrChunks, chunk));
+      child.stdout.on("data", (chunk: Buffer | string) => collect(stdoutChunks, "stdout", chunk));
+      child.stderr.on("data", (chunk: Buffer | string) => collect(stderrChunks, "stderr", chunk));
+      child.stdin.on("error", () => undefined);
 
       child.once("spawn", () => {
         if (child.pid === undefined) return;
-        onStarted?.(child.pid);
-        child.stdin.end(request.prompt, "utf8");
+        startBarrier = lifecycle.onStarted(child.pid).then(() => {
+          startedPersisted = true;
+          if (child.exitCode === null && child.signalCode === null) {
+            child.stdin.end(request.prompt, "utf8");
+          }
+        });
+        void startBarrier.catch(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill();
+        });
       });
 
       child.once("error", (error) => {
@@ -78,55 +97,46 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         reject(
           new HoneyBeeCoreError(
             "agent.spawn-failed",
-            `Failed to start the ${request.role} agent process.`,
-            request.role,
+            `Failed to start the ${request.stepId} agent process.`,
+            request.stepId,
             { cause: error.message },
           ),
         );
       });
 
-      child.once("close", (exitCode) => {
+      child.once("close", (exitCode, signal) => {
         if (settled) return;
         settled = true;
         clearTimeout(timeout);
-        if (terminalError !== undefined) {
-          reject(terminalError);
-          return;
-        }
-        const stdout = Buffer.concat(stdoutChunks).toString("utf8");
-        const stderr = Buffer.concat(stderrChunks).toString("utf8");
-        if (exitCode !== 0) {
-          reject(
-            new HoneyBeeCoreError(
-              "agent.non-zero-exit",
-              `The ${request.role} agent exited with code ${String(exitCode)}.`,
-              request.role,
-              { exitCode, stderr },
-            ),
-          );
-          return;
-        }
-        resolve({
-          role: request.role,
-          pid: child.pid ?? -1,
-          command: request.command.command,
-          exitCode,
-          stdout,
-          stderr,
-          durationMs: Date.now() - startedAt,
-        });
+        void (async () => {
+          try {
+            await startBarrier;
+            const observation: AgentExitObservation = {
+              pid: child.pid ?? -1,
+              exitCode,
+              signal,
+              durationMs: Date.now() - startedAt,
+              stdoutBytes,
+              stderrBytes,
+              stdoutDigest: digest(stdoutChunks),
+              stderrDigest: digest(stderrChunks),
+            };
+            if (startedPersisted) await lifecycle.onExited(observation);
+            resolve({
+              ...observation,
+              stepId: request.stepId,
+              command: request.command.command,
+              termination,
+              stdout: Buffer.concat(stdoutChunks).toString("utf8"),
+              stderr: Buffer.concat(stderrChunks).toString("utf8"),
+            });
+          } catch (error) {
+            reject(error);
+          }
+        })();
       });
 
-      const timeout = setTimeout(() => {
-        terminateWith(
-          new HoneyBeeCoreError(
-            "agent.timed-out",
-            `The ${request.role} agent timed out.`,
-            request.role,
-            { timeoutMs: request.timeoutMs },
-          ),
-        );
-      }, request.timeoutMs);
+      const timeout = setTimeout(() => terminate("timed-out"), request.timeoutMs);
     });
   }
 }

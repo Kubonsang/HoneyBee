@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 
 const MAX_PUBLIC_FILE_BYTES = 5 * 1024 * 1024;
@@ -46,6 +46,7 @@ function listCandidatePaths() {
     .toString("utf8")
     .split("\0")
     .filter(Boolean)
+    .filter((path) => mode === "staged" || existsSync(path))
     .sort((left, right) => left.localeCompare(right));
 }
 

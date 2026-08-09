@@ -1,64 +1,82 @@
 # HoneyBee
 
-HoneyBee is a CLI-first orchestrator for handing work between real AI agent processes.
+HoneyBee is a CLI-first sequential orchestrator for handing work between real AI Agent processes.
 
-Its current proof is intentionally small: HoneyBee starts a producer, captures its result, sends that result and the original task to a reviewer through HoneyBee Core, and returns the reviewer's final answer. Both agents run as separate OS processes.
+Version 0.2 runs a static chain of two or more one-shot CLI Agents. HoneyBee validates and persists each Agent input, starts the process, validates its structured response, and passes the verified result to the next step.
 
 ```text
-task -> producer process -> HoneyBee Core -> reviewer process -> final result
+task Artifact -> step input Artifact -> Agent process -> step result Artifact
+                                                    -> next step through HoneyBee Core
 ```
 
-> The former VS Code Extension and its Webview package have been retired and removed. `packages/core` and `apps/cli` are now the product boundary; an editor integration may be reconsidered later.
+> The former VS Code Extension and Webview packages have been retired. `packages/core`, `packages/orchestration-contracts`, and `apps/cli` are the current product boundary.
 
 ## Requirements
 
 - Windows 11
 - Node.js 24 or newer with Corepack
 - Codex and OpenCode only for the optional real-Agent example
-- Git for Windows only for the retained PTY/Vim regression tests
+- Git for Windows only for retained PTY regression tests outside the v0.2 execution path
 
 ## Quick start
-
-From a PowerShell prompt in the repository root:
 
 ```powershell
 corepack enable
 corepack pnpm install --frozen-lockfile
-corepack pnpm security:install-hooks
-corepack pnpm build
-corepack pnpm honeybee demo --task "count bees"
-```
-
-The primary artifacts are `apps/cli` and `packages/core`. The deterministic demo requires neither network access nor an AI account.
-
-## Prove the two-process handoff
-
-Run the deterministic smoke proof. It launches two separate Node Agent processes, prints both PIDs and the `producer -> reviewer` handoff, and returns the reviewer result.
-
-```powershell
 corepack pnpm build
 corepack pnpm honeybee demo --task "count bees" --json
 ```
 
+The deterministic demo starts two separate Node processes and requires no network or AI account.
+
+## Workflow config
+
+The canonical config format is `schemaVersion: 2` with a static ordered `steps` array:
+
+```json
+{
+  "schemaVersion": 2,
+  "steps": [
+    { "id": "producer", "agent": { "command": "agent-a" } },
+    { "id": "reviewer", "agent": { "command": "agent-b" } }
+  ],
+  "timeoutMs": 120000,
+  "maxOutputBytes": 1048576
+}
+```
+
+Step IDs must match `^[a-z][a-z0-9_-]{0,63}$` and be unique. Agent commands support optional `args`, `cwd`, and `env`. Relative working directories resolve from the config file. `${VARIABLE}` references in `command` and `cwd` resolve from the environment. Legacy schemaVersion 1 producer/reviewer configs are loaded as equivalent two-step v2 workflows.
+
 ## Run Codex -> OpenCode
 
-Install and authenticate both CLIs, then run the included Windows config:
+Install and authenticate both CLIs, then run:
 
 ```powershell
 corepack pnpm honeybee run --config examples/codex-opencode.windows.json --task "Summarize this repository and check the summary"
 ```
 
-The config contract is `schemaVersion: 1` plus `producer` and `reviewer` objects. Each Agent has a `command`, optional `args`, `cwd`, and `env`. HoneyBee sends each Prompt through stdin and treats stdout as that Agent's result. Relative working directories resolve from the config file, and `${VARIABLE}` references in `command` and `cwd` resolve from the environment. `examples/codex-opencode.windows.json` invokes OpenCode's native executable instead of its PowerShell/CMD shim so HoneyBee can retain `shell: false`. It assumes Codex and OpenCode are already installed and authenticated; the deterministic `demo` requires neither network nor an AI account.
+HoneyBee sends a validated `AgentInputEnvelope` through stdin. The Agent returns one sentinel-delimited JSON response with `completed`, `blocked`, or `escalated` status. HoneyBee remains the only communication path between Agents.
 
-The implementation boundary is:
+## Run state and Artifacts
+
+Each run is stored below `.honeybee/runs/<runId>/`:
 
 ```text
-apps/cli -> packages/core -> child process A
-                         -> handoff
-                         -> child process B -> final result
+events.jsonl
+blobs/sha256/<digest-prefix>/<digest-rest>
+tmp/
 ```
 
-This is a real process handoff: HoneyBee writes the task to Codex's stdin, captures Codex's stdout, sends the original task plus that result to OpenCode's stdin, and returns OpenCode's stdout.
+The JSONL journal contains only typed lifecycle metadata and Artifact references. Task text, serialized Agent inputs, completed content, blocked reasons, and escalation questions are separate immutable Artifacts. Every Artifact read rechecks its byte length and SHA-256 digest.
+
+Inspect or delete one exact run:
+
+```powershell
+corepack pnpm honeybee run show <run-id> --json
+corepack pnpm honeybee run delete <run-id> --yes
+```
+
+A run is conclusive only when its final valid journal event is `workflow.completed`, `workflow.blocked`, `workflow.escalated`, or `workflow.failed`. Otherwise HoneyBee reports the run as indeterminate and does not infer, retry, or resume work.
 
 ## Quality and tests
 
@@ -68,23 +86,16 @@ corepack pnpm verify
 
 `verify` runs the public-source secret scan, production license allowlist, formatting, ESLint, strict package typechecks, TypeScript builds, Vitest, and dependency-cruiser architecture rules.
 
-## Security and public-source policy
+## Security
 
-The original SRS and technical-architecture DOCX files are private source
-references and are intentionally excluded from Git. Runtime logs, SQLite
-state, build output, environment files, registry credentials, private keys,
-and common credential files are also blocked by `.gitignore` and the security
-scanner.
+`.honeybee/` contains local plaintext task and Agent output Artifacts and is excluded from Git. JSONL error events use strict metadata allowlists and never serialize generic Error details, stdout, stderr, prompts, task text, results, reasons, or questions.
 
-Before committing, run `corepack pnpm security:install-hooks` once per clone.
-The pre-commit hook scans the exact staged content and rejects forbidden paths,
-known token/key formats, and unexpectedly large files. `corepack pnpm
-security:scan` scans all tracked and unignored files. GitHub Actions repeats
-the checks, and the public repository uses GitHub secret scanning with push
-protection. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+Before committing, run `corepack pnpm security:install-hooks` once per clone. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
+
+## Scope
+
+v0.2 is deliberately a small sequential orchestration kernel. DAGs, fan-out, parallel Agent execution, retries, restart resume, PTY/TUI orchestration, and Unity/testplay integration are out of scope. See [ADR-013](docs/decisions/ADR-013-core-cli-first-handoff-proof.md) and [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md).
 
 ## License
 
-Honey Bee is available under the [MIT License](LICENSE). Production dependency licenses are allowlisted and checked from the lockfile-installed graph; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
-
-The current scope is deliberately limited to one producer-to-reviewer handoff. PTY/TUI orchestration, persistence, retries, parallel fan-out, and graph workflows remain future work. See [ADR-013](docs/decisions/ADR-013-core-cli-first-handoff-proof.md).
+HoneyBee is available under the [MIT License](LICENSE).
