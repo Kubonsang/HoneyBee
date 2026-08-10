@@ -126,6 +126,17 @@ describe("filesystem run persistence", () => {
 
     expect((await journal.replay(runId)).status).toBe("terminal");
 
+    const beforeRejectedAppend = await readFile(path.join(root, runId, "events.jsonl"), "utf8");
+    await expect(
+      new FileOrchestrationJournal(root).append(
+        runId,
+        event(runId, 3, "workflow.failed", { errorCode: "must-not-append" }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toBe(
+      beforeRejectedAppend,
+    );
+
     const extra = event(runId, 3, "workflow.failed", { errorCode: "unexpected" });
     await appendFile(path.join(root, runId, "events.jsonl"), `${JSON.stringify(extra)}\n`, "utf8");
     expect((await new FileOrchestrationJournal(root).replay(runId)).status).toBe("indeterminate");

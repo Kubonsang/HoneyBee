@@ -120,4 +120,45 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(deleted.exitCode).toBe(0);
     await expect(readFile(output.journalPath, "utf8")).rejects.toBeDefined();
   }, 20_000);
+
+  it("returns runId and journalPath when an Agent fails", async () => {
+    const cwd = await temporaryDirectory();
+    const configPath = path.join(cwd, "failure.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        steps: [
+          {
+            id: "first",
+            agent: { command: process.execPath, args: [demoAgentPath, "fail"] },
+          },
+          {
+            id: "second",
+            agent: { command: process.execPath, args: [demoAgentPath, "second"] },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const execution = await runCli(
+      ["run", "--config", configPath, "--task", "fail safely", "--json"],
+      cwd,
+    );
+    expect(execution.exitCode).toBe(1);
+    const errorLine = execution.stderr.trim().split("\n").at(-1);
+    expect(errorLine).toBeDefined();
+    const failure = JSON.parse(errorLine ?? "{}") as {
+      code: string;
+      runId: string;
+      journalPath: string;
+    };
+    expect(failure).toMatchObject({ code: "agent.non-zero-exit" });
+    expect(failure.runId).toMatch(/^[0-9a-f-]{36}$/u);
+    expect(await readFile(failure.journalPath, "utf8")).toContain("workflow.failed");
+
+    const shown = await runCli(["run", "show", failure.runId, "--json"], cwd);
+    expect(shown.exitCode).toBe(0);
+    expect(JSON.parse(shown.stdout)).toMatchObject({ status: "failed" });
+  }, 20_000);
 });

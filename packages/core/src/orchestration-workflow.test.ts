@@ -73,6 +73,7 @@ class RecordingJournal implements OrchestrationJournal {
 type Behavior =
   | Readonly<{ kind: "response"; response: Omit<AgentResponseEnvelopeV1, "runId" | "stepId"> }>
   | Readonly<{ kind: "protocol-error" }>
+  | Readonly<{ kind: "input-write-error" }>
   | Readonly<{ kind: "non-zero" }>;
 
 class RecordingRunner implements AgentProcessRunner {
@@ -101,6 +102,20 @@ class RecordingRunner implements AgentProcessRunner {
         content: `output-${request.stepId}`,
       },
     };
+    if (behavior.kind === "input-write-error") {
+      const observation = {
+        pid,
+        exitCode: 0,
+        signal: null,
+        durationMs: 2,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+        stdoutDigest: contentDigest(""),
+        stderrDigest: contentDigest(""),
+      } as const;
+      await lifecycle.onExited(observation);
+      throw new HoneyBeeCoreError("agent.input-write-failed", "input failed", request.stepId);
+    }
     let stdout: string;
     let exitCode = 0;
     let stderr = "";
@@ -217,6 +232,11 @@ describe("OrchestrationWorkflow", () => {
       "protocol.invalid-agent-response",
     ],
     ["process", new RecordingRunner({ first: { kind: "non-zero" } }), "agent.non-zero-exit"],
+    [
+      "input write",
+      new RecordingRunner({ first: { kind: "input-write-error" } }),
+      "agent.input-write-failed",
+    ],
   ] as const)(
     "fails closed on %s failure without leaking process text",
     async (_name, runner, code) => {

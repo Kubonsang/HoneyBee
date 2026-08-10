@@ -15,10 +15,8 @@ const mergedEnvironment = (
   overrides: Readonly<Record<string, string>> | undefined,
 ): NodeJS.ProcessEnv => ({ ...process.env, ...overrides });
 
-const digest = (chunks: readonly Buffer[]) =>
-  ContentDigestSchema.parse(
-    `sha256:${createHash("sha256").update(Buffer.concat(chunks)).digest("hex")}`,
-  );
+const digest = (hash: ReturnType<typeof createHash>) =>
+  ContentDigestSchema.parse(`sha256:${hash.digest("hex")}`);
 
 export class ChildProcessAgentRunner implements AgentProcessRunner {
   public run(
@@ -50,12 +48,25 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
+      const stdoutHash = createHash("sha256");
+      const stderrHash = createHash("sha256");
       let stdoutBytes = 0;
       let stderrBytes = 0;
       let termination: AgentProcessResult["termination"] = "exited";
       let settled = false;
       let startedPersisted = false;
       let startBarrier: Promise<void> = Promise.resolve();
+      let inputFailure: HoneyBeeCoreError | undefined;
+
+      const rememberInputFailure = (error?: Error): HoneyBeeCoreError => {
+        inputFailure ??= new HoneyBeeCoreError(
+          "agent.input-write-failed",
+          `Failed to deliver input to the ${request.stepId} agent process.`,
+          request.stepId,
+          error === undefined ? undefined : { cause: error.message },
+        );
+        return inputFailure;
+      };
 
       const terminate = (reason: "timed-out" | "output-limit"): void => {
         if (termination === "exited") termination = reason;
@@ -64,8 +75,13 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
 
       const collect = (target: Buffer[], stream: "stdout" | "stderr", chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (stream === "stdout") stdoutBytes += buffer.byteLength;
-        else stderrBytes += buffer.byteLength;
+        if (stream === "stdout") {
+          stdoutBytes += buffer.byteLength;
+          stdoutHash.update(buffer);
+        } else {
+          stderrBytes += buffer.byteLength;
+          stderrHash.update(buffer);
+        }
         if (stdoutBytes + stderrBytes > request.maxOutputBytes) {
           terminate("output-limit");
           return;
@@ -75,14 +91,48 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
 
       child.stdout.on("data", (chunk: Buffer | string) => collect(stdoutChunks, "stdout", chunk));
       child.stderr.on("data", (chunk: Buffer | string) => collect(stderrChunks, "stderr", chunk));
-      child.stdin.on("error", () => undefined);
+      child.stdin.on("error", (error: Error) => rememberInputFailure(error));
+
+      const writeInput = (): Promise<void> =>
+        new Promise((writeResolve, writeReject) => {
+          let writeSettled = false;
+          const cleanup = (): void => {
+            child.stdin.off("error", onError);
+            child.stdin.off("close", onClose);
+          };
+          const fail = (error?: Error): void => {
+            if (writeSettled) return;
+            writeSettled = true;
+            cleanup();
+            writeReject(rememberInputFailure(error));
+          };
+          const onError = (error: Error): void => fail(error);
+          const onClose = (): void => {
+            if (!child.stdin.writableFinished) fail();
+          };
+          child.stdin.once("error", onError);
+          child.stdin.once("close", onClose);
+          child.stdin.end(request.prompt, "utf8", () => {
+            if (writeSettled) return;
+            writeSettled = true;
+            cleanup();
+            writeResolve();
+          });
+        });
 
       child.once("spawn", () => {
         if (child.pid === undefined) return;
-        startBarrier = lifecycle.onStarted(child.pid).then(() => {
+        startBarrier = lifecycle.onStarted(child.pid).then(async () => {
           startedPersisted = true;
           if (child.exitCode === null && child.signalCode === null) {
-            child.stdin.end(request.prompt, "utf8");
+            try {
+              await writeInput();
+            } catch (error) {
+              inputFailure = error instanceof HoneyBeeCoreError ? error : rememberInputFailure();
+              if (child.exitCode === null && child.signalCode === null) child.kill();
+            }
+          } else {
+            inputFailure = rememberInputFailure();
           }
         });
         void startBarrier.catch(() => {
@@ -118,10 +168,11 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
               durationMs: Date.now() - startedAt,
               stdoutBytes,
               stderrBytes,
-              stdoutDigest: digest(stdoutChunks),
-              stderrDigest: digest(stderrChunks),
+              stdoutDigest: digest(stdoutHash),
+              stderrDigest: digest(stderrHash),
             };
             if (startedPersisted) await lifecycle.onExited(observation);
+            if (inputFailure !== undefined) throw inputFailure;
             resolve({
               ...observation,
               stepId: request.stepId,

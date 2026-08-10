@@ -143,6 +143,18 @@ const output = (value: unknown, json: boolean): void => {
   process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${String(value)}\n`);
 };
 
+class CliRunExecutionError extends Error {
+  public override readonly name = "CliRunExecutionError";
+
+  public constructor(
+    public readonly runId: ReturnType<typeof RunIdSchema.parse>,
+    public readonly journalPath: string,
+    public override readonly cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause));
+  }
+}
+
 const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
   if (args.task === undefined || args.task.trim().length === 0)
     throw new Error("--task is required.");
@@ -166,6 +178,7 @@ const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): 
     },
     replay: (eventRunId) => fileJournal.replay(eventRunId),
   };
+  const journalPath = path.join(root, runId, "events.jsonl");
   let request: WorkflowRunRequest;
   if (args.mode === "demo") {
     request = demoRequest(runId, args.task);
@@ -183,8 +196,11 @@ const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): 
     new ChildProcessAgentRunner(),
     new FileArtifactStore(root),
     journal,
-  ).run(request);
-  const journalPath = path.join(root, runId, "events.jsonl");
+  )
+    .run(request)
+    .catch((error: unknown) => {
+      throw new CliRunExecutionError(runId, journalPath, error);
+    });
 
   if (args.json) {
     output({ ok: result.status === "completed", ...result, journalPath }, true);
@@ -252,13 +268,26 @@ const main = async (): Promise<void> => {
 };
 
 void main().catch((error: unknown) => {
+  const runError = error instanceof CliRunExecutionError ? error : undefined;
+  const cause = runError?.cause ?? error;
   const payload =
-    error instanceof HoneyBeeCoreError
-      ? { ok: false, code: error.code, stepId: error.stepId, message: error.message }
+    cause instanceof HoneyBeeCoreError
+      ? {
+          ok: false,
+          code: cause.code,
+          stepId: cause.stepId,
+          message: cause.message,
+          ...(runError === undefined
+            ? {}
+            : { runId: runError.runId, journalPath: runError.journalPath }),
+        }
       : {
           ok: false,
           code: "cli.invalid-request",
-          message: error instanceof Error ? error.message : String(error),
+          message: cause instanceof Error ? cause.message : String(cause),
+          ...(runError === undefined
+            ? {}
+            : { runId: runError.runId, journalPath: runError.journalPath }),
         };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
   process.exitCode = 1;

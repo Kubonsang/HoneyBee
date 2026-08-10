@@ -79,20 +79,23 @@ const loadV1 = (parsed: Record<string, unknown>, directory: string): WorkflowCon
   });
 
 const loadV2 = (parsed: Record<string, unknown>, directory: string): WorkflowConfigV2 => {
-  if (!Array.isArray(parsed.steps)) throw new Error("steps must be an array.");
-  const steps: WorkflowStep[] = parsed.steps.map((value, index) => {
-    if (!isRecord(value) || typeof value.id !== "string") {
-      throw new Error(`steps[${index}] must have an id.`);
-    }
+  const original = WorkflowConfigV2Schema.safeParse(parsed);
+  if (!original.success) {
+    throw new Error(`Invalid schemaVersion 2 config: ${original.error.message}`);
+  }
+  const steps: WorkflowStep[] = original.data.steps.map((value, index) => {
     return {
-      id: value.id as WorkflowStep["id"],
+      id: value.id,
       agent: readAgentCommand(value.agent, `steps[${index}].agent`, directory),
     };
   });
   const result = WorkflowConfigV2Schema.safeParse({
     schemaVersion: 2,
     steps,
-    ...commonLimits(parsed),
+    ...(original.data.timeoutMs === undefined ? {} : { timeoutMs: original.data.timeoutMs }),
+    ...(original.data.maxOutputBytes === undefined
+      ? {}
+      : { maxOutputBytes: original.data.maxOutputBytes }),
   });
   if (!result.success) throw new Error(`Invalid schemaVersion 2 config: ${result.error.message}`);
   return result.data;

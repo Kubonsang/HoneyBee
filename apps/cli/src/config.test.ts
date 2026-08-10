@@ -67,4 +67,42 @@ describe("loadWorkflowConfig", () => {
       async (configPath) => expect(loadWorkflowConfig(configPath)).rejects.toThrow("Invalid"),
     );
   });
+
+  it.each([
+    [
+      "root",
+      {
+        schemaVersion: 2,
+        unexpected: true,
+        steps: [
+          { id: "first", agent: { command: "a" } },
+          { id: "second", agent: { command: "b" } },
+        ],
+      },
+    ],
+    [
+      "step",
+      {
+        schemaVersion: 2,
+        steps: [
+          { id: "first", agent: { command: "a" }, unexpected: true },
+          { id: "second", agent: { command: "b" } },
+        ],
+      },
+    ],
+    [
+      "agent",
+      {
+        schemaVersion: 2,
+        steps: [
+          { id: "first", agent: { command: "a", unexpected: true } },
+          { id: "second", agent: { command: "b" } },
+        ],
+      },
+    ],
+  ] as const)("rejects unknown v2 %s fields before normalization", async (_scope, candidate) => {
+    await withConfig(candidate, async (configPath) =>
+      expect(loadWorkflowConfig(configPath)).rejects.toThrow("Invalid schemaVersion 2 config"),
+    );
+  });
 });

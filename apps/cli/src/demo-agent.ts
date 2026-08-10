@@ -22,19 +22,24 @@ try {
   const envelope = AgentInputEnvelopeV1Schema.parse(
     JSON.parse(block(prompt, "HONEYBEE_INPUT_BEGIN", "HONEYBEE_INPUT_END")),
   );
-  const content =
-    envelope.previous === null
-      ? `DEMO_HANDOFF pid=${process.pid} step=${label} task=${envelope.task.content}`
-      : `DEMO_RESULT pid=${process.pid} step=${label} previous=${envelope.previous.content} task=${envelope.task.content}`;
-  process.stdout.write(
-    `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify({
-      schemaVersion: 1,
-      runId: envelope.runId,
-      stepId: envelope.step.id,
-      status: "completed",
-      content,
-    })}\nHONEYBEE_RESPONSE_END`,
-  );
+  if (label === "fail") {
+    process.stderr.write("deterministic Agent failure\n");
+    process.exitCode = 7;
+  } else {
+    const content =
+      envelope.previous === null
+        ? `DEMO_HANDOFF pid=${process.pid} step=${label} task=${envelope.task.content}`
+        : `DEMO_RESULT pid=${process.pid} step=${label} previous=${envelope.previous.content} task=${envelope.task.content}`;
+    process.stdout.write(
+      `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify({
+        schemaVersion: 1,
+        runId: envelope.runId,
+        stepId: envelope.step.id,
+        status: "completed",
+        content,
+      })}\nHONEYBEE_RESPONSE_END`,
+    );
+  }
 } catch (error) {
   process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
   process.exitCode = 2;

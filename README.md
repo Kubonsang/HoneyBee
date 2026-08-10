@@ -47,6 +47,8 @@ The canonical config format is `schemaVersion: 2` with a static ordered `steps` 
 
 Step IDs must match `^[a-z][a-z0-9_-]{0,63}$` and be unique. Agent commands support optional `args`, `cwd`, and `env`. Relative working directories resolve from the config file. `${VARIABLE}` references in `command` and `cwd` resolve from the environment. Legacy schemaVersion 1 producer/reviewer configs are loaded as equivalent two-step v2 workflows.
 
+SchemaVersion 2 objects are strict at the root, step, and Agent levels. Unknown fields are rejected instead of being silently ignored.
+
 ## Run Codex -> OpenCode
 
 Install and authenticate both CLIs, then run:
@@ -77,6 +79,8 @@ corepack pnpm honeybee run delete <run-id> --yes
 ```
 
 A run is conclusive only when its final valid journal event is `workflow.completed`, `workflow.blocked`, `workflow.escalated`, or `workflow.failed`. Otherwise HoneyBee reports the run as indeterminate and does not infer, retry, or resume work.
+
+If an Agent or workflow fails after Run creation, the CLI error includes `runId` and `journalPath` so the same Run can be investigated with `run show`.
 
 ## Quality and tests
 

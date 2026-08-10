@@ -49,6 +49,7 @@ ADR-013은 두 실제 CLI 프로세스 사이의 handoff를 증명했다. 다음
 - generic Error serialization과 Core error details spread를 금지한다.
 - stdout, stderr, prompt, task, content, reason, question 원문은 event payload에 허용하지 않는다.
 - process 오류에는 `errorCode`, `exitCode`, `signal`, `durationMs`, `stdoutBytes`, `stderrBytes`처럼 allowlist된 metadata만 기록한다.
+- `stdoutBytes`/`stderrBytes`와 각 digest는 output-limit으로 종료된 경우에도 process에서 실제 관측한 동일한 byte 범위를 뜻한다. 보관된 출력 chunk 범위와 혼용하지 않는다.
 - terminal workflow event는 `completed`, `blocked`, `escalated`, `failed` 중 정확히 하나이며 마지막 유효 event여야 한다.
 - terminal 이후 event, sequence 오류, malformed frame, schema 또는 run ID 불일치, terminal 부재는 `indeterminate`다.
 - orphan blob은 run 상태에 영향을 주지 않는다. Journal만이 run 상태의 권위다.
@@ -72,6 +73,8 @@ ADR-013은 두 실제 CLI 프로세스 사이의 handoff를 증명했다. 다음
 12. 마지막 step이면 terminal workflow event
 
 Process, protocol 또는 Artifact 실패는 journal이 사용 가능할 때 `step.failed`와 마지막 `workflow.failed`를 기록한다. Journal append/flush가 실패하면 즉시 실행을 중단하고 terminal 결과를 추론하지 않는다.
+
+Process spawn 후 stdin 전달이 실패하면 `agent.input-write-failed`로 처리한다. OS process 종료는 `agent.exited`로 먼저 기록하고 workflow는 fail-closed 한다.
 
 ## Crash model
 

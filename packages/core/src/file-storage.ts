@@ -222,7 +222,16 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
 
     try {
       const directory = await this.requireRunDirectory(validatedRunId);
-      const handle = await open(path.join(directory, "events.jsonl"), "a");
+      const journalPath = path.join(directory, "events.jsonl");
+      const existing = await this.#readAppendableEvents(validatedRunId, journalPath);
+      if (
+        validatedEvent.sequence !== existing.length + 1 ||
+        (existing.length === 0 && validatedEvent.type !== "workflow.started") ||
+        (existing.length > 0 && validatedEvent.type === "workflow.started")
+      ) {
+        throw new HoneyBeeCoreError("journal.write-failed", "Journal sequence invariants failed.");
+      }
+      const handle = await open(journalPath, "a");
       try {
         await handle.writeFile(`${JSON.stringify(validatedEvent)}\n`, "utf8");
         await handle.sync();
@@ -278,6 +287,49 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
       return indeterminate();
     }
     return { status: "terminal", events, terminal };
+  }
+
+  async #readAppendableEvents(
+    runId: RunId,
+    journalPath: string,
+  ): Promise<readonly OrchestrationEventV1[]> {
+    let serialized: string;
+    try {
+      serialized = await readFile(journalPath, "utf8");
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return [];
+      throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal could not be read.");
+    }
+    if (serialized.length === 0) return [];
+    if (!serialized.endsWith("\n")) {
+      throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is incomplete.");
+    }
+    const lines = serialized.slice(0, -1).split("\n");
+    if (lines.some((line) => line.length === 0)) {
+      throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is malformed.");
+    }
+    const events: OrchestrationEventV1[] = [];
+    for (const [index, line] of lines.entries()) {
+      let value: unknown;
+      try {
+        value = JSON.parse(line) as unknown;
+      } catch {
+        throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is malformed.");
+      }
+      const parsed = OrchestrationEventV1Schema.safeParse(value);
+      if (!parsed.success || parsed.data.runId !== runId || parsed.data.sequence !== index + 1) {
+        throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is invalid.");
+      }
+      if (TERMINAL_WORKFLOW_EVENT_TYPES.has(parsed.data.type as TerminalWorkflowEvent["type"])) {
+        this.#terminalRuns.add(runId);
+        throw new HoneyBeeCoreError("journal.write-failed", "Journal is already terminal.");
+      }
+      events.push(parsed.data);
+    }
+    if (events[0]?.type !== "workflow.started") {
+      throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal has no start event.");
+    }
+    return events;
   }
 }
 

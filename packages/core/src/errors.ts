@@ -5,6 +5,7 @@ export type HoneyBeeCoreErrorCode =
   | "validation.invalid-workflow"
   | "validation.invalid-command"
   | "agent.spawn-failed"
+  | "agent.input-write-failed"
   | "agent.timed-out"
   | "agent.output-limit"
   | "agent.non-zero-exit"
