@@ -1,5 +1,5 @@
 {
-  "name": "@honeybee/core",
+  "name": "@honeybee/orchestration-contracts",
   "version": "0.2.0",
   "private": true,
   "type": "module",
@@ -17,7 +17,7 @@
     "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.json --pretty false"
   },
   "dependencies": {
-    "@honeybee/orchestration-contracts": "workspace:*"
+    "zod": "^4.0.0"
   },
   "license": "MIT"
 }

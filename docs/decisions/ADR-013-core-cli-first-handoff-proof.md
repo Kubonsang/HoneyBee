@@ -2,6 +2,7 @@
 
 - 상태: 승인
 - 기준일: 2026-08-08
+- 후속 결정: ADR-014가 이 proof를 strict sequential orchestration kernel로 확장한다.
 
 ## 결정
 

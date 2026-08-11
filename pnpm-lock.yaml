@@ -46,6 +46,9 @@ importers:
       '@honeybee/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@honeybee/orchestration-contracts':
+        specifier: workspace:*
+        version: link:../../packages/orchestration-contracts
 
   packages/agent-adapters:
     dependencies:
@@ -53,7 +56,11 @@ importers:
         specifier: workspace:*
         version: link:../domain
 
-  packages/core: {}
+  packages/core:
+    dependencies:
+      '@honeybee/orchestration-contracts':
+        specifier: workspace:*
+        version: link:../orchestration-contracts
 
   packages/domain:
     dependencies:
@@ -66,6 +73,12 @@ importers:
       '@honeybee/domain':
         specifier: workspace:*
         version: link:../domain
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
+
+  packages/orchestration-contracts:
+    dependencies:
       zod:
         specifier: ^4.0.0
         version: 4.4.3
