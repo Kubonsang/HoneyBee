@@ -1,6 +1,14 @@
-# Honey Bee
+# HoneyBee
 
-Honey Bee is a CLI-first orchestrator. Its current proof starts a producer Agent and a reviewer Agent as two real OS processes, captures the producer's result, hands that result to the reviewer through HoneyBee Core, and returns the reviewer's final result.
+HoneyBee is a CLI-first orchestrator for handing work between real AI agent processes.
+
+Its current proof is intentionally small: HoneyBee starts a producer, captures its result, sends that result and the original task to a reviewer through HoneyBee Core, and returns the reviewer's final answer. Both agents run as separate OS processes.
+
+```text
+task -> producer process -> HoneyBee Core -> reviewer process -> final result
+```
+
+> The former VS Code Extension and its Webview package have been retired and removed. `packages/core` and `apps/cli` are now the product boundary; an editor integration may be reconsidered later.
 
 ## Requirements
 
@@ -9,7 +17,7 @@ Honey Bee is a CLI-first orchestrator. Its current proof starts a producer Agent
 - Codex and OpenCode only for the optional real-Agent example
 - Git for Windows only for the retained PTY/Vim regression tests
 
-## Install and build
+## Quick start
 
 From a PowerShell prompt in the repository root:
 
@@ -18,9 +26,10 @@ corepack enable
 corepack pnpm install --frozen-lockfile
 corepack pnpm security:install-hooks
 corepack pnpm build
+corepack pnpm honeybee demo --task "count bees"
 ```
 
-The primary artifacts are `apps/cli` and `packages/core`. The build also compiles retained lower-level packages while the CLI migration continues.
+The primary artifacts are `apps/cli` and `packages/core`. The deterministic demo requires neither network access nor an AI account.
 
 ## Prove the two-process handoff
 
@@ -31,7 +40,9 @@ corepack pnpm build
 corepack pnpm honeybee demo --task "count bees" --json
 ```
 
-Run installed Agent CLIs with a config file:
+## Run Codex -> OpenCode
+
+Install and authenticate both CLIs, then run the included Windows config:
 
 ```powershell
 corepack pnpm honeybee run --config examples/codex-opencode.windows.json --task "Summarize this repository and check the summary"
@@ -46,6 +57,8 @@ apps/cli -> packages/core -> child process A
                          -> handoff
                          -> child process B -> final result
 ```
+
+This is a real process handoff: HoneyBee writes the task to Codex's stdin, captures Codex's stdout, sends the original task plus that result to OpenCode's stdin, and returns OpenCode's stdout.
 
 ## Quality and tests
 
