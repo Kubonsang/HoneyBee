@@ -1,65 +1,142 @@
-export type AgentRole = "producer" | "reviewer";
-
-export interface AgentCommand {
-  readonly command: string;
-  readonly args?: readonly string[];
-  readonly cwd?: string;
-  readonly env?: Readonly<Record<string, string>>;
-}
+import type {
+  ArtifactId,
+  ArtifactKind,
+  ArtifactMediaType,
+  ArtifactRef,
+  ContentDigest,
+  FailureMetadata,
+  OrchestrationEventV1,
+  RunId,
+  StepId,
+  TerminalWorkflowEvent,
+  WorkflowStep,
+} from "@honeybee/orchestration-contracts";
 
 export interface AgentProcessRequest {
-  readonly role: AgentRole;
+  readonly runId: RunId;
+  readonly stepId: StepId;
   readonly prompt: string;
-  readonly command: AgentCommand;
+  readonly command: WorkflowStep["agent"];
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
 }
 
-export interface AgentProcessResult {
-  readonly role: AgentRole;
+export interface AgentExitObservation {
   readonly pid: number;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly durationMs: number;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly stdoutDigest?: ContentDigest;
+  readonly stderrDigest?: ContentDigest;
+}
+
+export interface AgentProcessLifecycle {
+  readonly onStarted: (pid: number) => Promise<void>;
+  readonly onExited: (observation: AgentExitObservation) => Promise<void>;
+}
+
+export interface AgentProcessResult extends AgentExitObservation {
+  readonly stepId: StepId;
   readonly command: string;
-  readonly exitCode: number;
+  readonly termination: "exited" | "timed-out" | "output-limit";
   readonly stdout: string;
   readonly stderr: string;
-  readonly durationMs: number;
 }
 
 export interface AgentProcessRunner {
-  run(request: AgentProcessRequest, onStarted?: (pid: number) => void): Promise<AgentProcessResult>;
+  run(request: AgentProcessRequest, lifecycle: AgentProcessLifecycle): Promise<AgentProcessResult>;
 }
 
-export type HandoffEvent =
-  | Readonly<{ type: "agent.started"; role: AgentRole; pid: number; command: string }>
-  | Readonly<{
-      type: "agent.completed";
-      role: AgentRole;
-      pid: number;
-      durationMs: number;
-      outputBytes: number;
-    }>
-  | Readonly<{
-      type: "handoff.created";
-      from: "producer";
-      to: "reviewer";
-      contentBytes: number;
-    }>
-  | Readonly<{ type: "workflow.completed"; resultBytes: number }>;
+export interface ArtifactPutRequest {
+  readonly runId: RunId;
+  readonly artifactId: ArtifactId;
+  readonly kind: ArtifactKind;
+  readonly mediaType: ArtifactMediaType;
+  readonly content: string;
+}
 
-export interface HandoffRunRequest {
+export interface ArtifactGetRequest {
+  readonly runId: RunId;
+  readonly artifact: ArtifactRef;
+}
+
+export interface ArtifactStore {
+  put(request: ArtifactPutRequest): Promise<ArtifactRef>;
+  get(request: ArtifactGetRequest): Promise<string>;
+}
+
+export interface RunRecord {
+  readonly runId: RunId;
+}
+
+export interface RunRepository {
+  create(runId: RunId): Promise<void>;
+  open(runId: RunId): Promise<RunRecord>;
+  delete(runId: RunId): Promise<void>;
+}
+
+export type JournalReplay =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV1[];
+      terminal: TerminalWorkflowEvent;
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
+export interface OrchestrationJournal {
+  append(runId: RunId, event: OrchestrationEventV1): Promise<void>;
+  replay(runId: RunId): Promise<JournalReplay>;
+}
+
+export interface WorkflowRunRequest {
+  readonly runId: RunId;
   readonly task: string;
-  readonly producer: AgentCommand;
-  readonly reviewer: AgentCommand;
+  readonly steps: readonly WorkflowStep[];
   readonly timeoutMs?: number;
   readonly maxOutputBytes?: number;
 }
 
-export interface HandoffRunResult {
-  readonly task: string;
-  readonly producer: AgentProcessResult;
-  readonly reviewer: AgentProcessResult;
-  readonly handoff: string;
-  readonly result: string;
+export interface WorkflowStepResult {
+  readonly stepId: StepId;
+  readonly status: "completed" | "blocked" | "escalated";
+  readonly pid: number;
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+  readonly input: ArtifactRef;
+  readonly output?: ArtifactRef;
+  readonly reason?: ArtifactRef;
+  readonly question?: ArtifactRef;
 }
 
-export type HandoffEventListener = (event: HandoffEvent) => void;
+interface WorkflowRunResultBase {
+  readonly runId: RunId;
+  readonly task: ArtifactRef;
+  readonly steps: readonly WorkflowStepResult[];
+}
+
+export type WorkflowRunResult =
+  | (WorkflowRunResultBase &
+      Readonly<{ status: "completed"; result: string; resultArtifact: ArtifactRef }>)
+  | (WorkflowRunResultBase &
+      Readonly<{ status: "blocked"; reason: string; reasonArtifact: ArtifactRef }>)
+  | (WorkflowRunResultBase &
+      Readonly<{
+        status: "escalated";
+        reason: string;
+        question: string;
+        reasonArtifact: ArtifactRef;
+        questionArtifact: ArtifactRef;
+      }>);
+
+export interface OrchestrationWorkflowOptions {
+  readonly now?: () => Date;
+  readonly randomId?: () => string;
+}
+
+export type JournalFailureMetadata = FailureMetadata;

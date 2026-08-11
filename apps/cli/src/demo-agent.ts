@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { createHash } from "node:crypto";
+import { AgentInputEnvelopeV1Schema } from "@honeybee/orchestration-contracts";
 
 const readInput = async (): Promise<string> => {
   process.stdin.setEncoding("utf8");
@@ -9,31 +9,38 @@ const readInput = async (): Promise<string> => {
   return input;
 };
 
-const block = (input: string, name: string): string => {
-  const match = new RegExp(
-    `HONEYBEE_${name}_BEGIN\\n([\\s\\S]*?)\\nHONEYBEE_${name}_END`,
-    "u",
-  ).exec(input);
-  if (match?.[1] === undefined) {
-    process.stderr.write(`Missing ${name.toLocaleLowerCase()} block.\n`);
-    process.exit(2);
-  }
-  return match[1];
+const block = (input: string, begin: string, end: string): string => {
+  const start = input.indexOf(begin);
+  const finish = input.indexOf(end);
+  if (start < 0 || finish < start) throw new Error(`Missing ${begin} block.`);
+  return input.slice(start + begin.length, finish).trim();
 };
 
-const role = process.argv[2];
-const input = await readInput();
-if (role === "producer") {
-  const task = block(input, "TASK");
-  process.stdout.write(`DEMO_HANDOFF pid=${process.pid} task=${task}`);
-} else if (role === "reviewer") {
-  const task = block(input, "TASK");
-  const handoff = block(input, "HANDOFF");
-  const digest = createHash("sha256").update(handoff, "utf8").digest("hex").slice(0, 12);
-  process.stdout.write(
-    `DEMO_RESULT pid=${process.pid} received=${digest} producer=${handoff} task=${task}`,
+try {
+  const label = process.argv[2] ?? "agent";
+  const prompt = await readInput();
+  const envelope = AgentInputEnvelopeV1Schema.parse(
+    JSON.parse(block(prompt, "HONEYBEE_INPUT_BEGIN", "HONEYBEE_INPUT_END")),
   );
-} else {
-  process.stderr.write("Expected producer or reviewer role.\n");
-  process.exit(2);
+  if (label === "fail") {
+    process.stderr.write("deterministic Agent failure\n");
+    process.exitCode = 7;
+  } else {
+    const content =
+      envelope.previous === null
+        ? `DEMO_HANDOFF pid=${process.pid} step=${label} task=${envelope.task.content}`
+        : `DEMO_RESULT pid=${process.pid} step=${label} previous=${envelope.previous.content} task=${envelope.task.content}`;
+    process.stdout.write(
+      `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify({
+        schemaVersion: 1,
+        runId: envelope.runId,
+        stepId: envelope.step.id,
+        status: "completed",
+        content,
+      })}\nHONEYBEE_RESPONSE_END`,
+    );
+  }
+} catch (error) {
+  process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+  process.exitCode = 2;
 }

@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import process from "node:process";
 
 const MAX_PUBLIC_FILE_BYTES = 5 * 1024 * 1024;
@@ -50,7 +50,7 @@ function listCandidatePaths() {
 }
 
 function readCandidate(path) {
-  if (mode === "staged") {
+  if (mode === "staged" || !existsSync(path)) {
     return git(["show", `:${path}`], "buffer");
   }
   return readFileSync(path);
