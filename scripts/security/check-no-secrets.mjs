@@ -46,12 +46,11 @@ function listCandidatePaths() {
     .toString("utf8")
     .split("\0")
     .filter(Boolean)
-    .filter((path) => mode === "staged" || existsSync(path))
     .sort((left, right) => left.localeCompare(right));
 }
 
 function readCandidate(path) {
-  if (mode === "staged") {
+  if (mode === "staged" || !existsSync(path)) {
     return git(["show", `:${path}`], "buffer");
   }
   return readFileSync(path);

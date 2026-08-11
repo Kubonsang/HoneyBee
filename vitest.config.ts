@@ -7,7 +7,7 @@ export default defineConfig({
     },
     environment: "node",
     exclude: ["**/dist/**", "**/node_modules/**", "**/.vscode-test/**"],
-    include: ["apps/**/*.test.ts", "packages/**/*.test.ts"],
+    include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.mjs"],
     passWithNoTests: false,
     reporters: ["default"],
   },

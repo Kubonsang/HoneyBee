@@ -13,7 +13,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import { HoneyBeeCoreError } from "./errors.js";
-import { OrchestrationWorkflow } from "./orchestration-workflow.js";
+import { OrchestrationWorkflow, parseAgentResponse } from "./orchestration-workflow.js";
 import type {
   AgentProcessRequest,
   AgentProcessResult,
@@ -158,6 +158,41 @@ const steps = (...ids: string[]) =>
   ids.map((id) => ({ id: id as StepId, agent: { command: `agent-${id}` } }));
 
 describe("OrchestrationWorkflow", () => {
+  it("keeps event sequences independent across overlapping runs", async () => {
+    const artifacts = new MemoryArtifactStore();
+    const journal = new RecordingJournal();
+    const workflow = new OrchestrationWorkflow(new RecordingRunner(), artifacts, journal);
+    const runIds = [RunIdSchema.parse(randomUUID()), RunIdSchema.parse(randomUUID())] as const;
+
+    await Promise.all(
+      runIds.map(async (runId) =>
+        workflow.run({ runId, task: "task", steps: steps("first", "second") }),
+      ),
+    );
+
+    for (const runId of runIds) {
+      const sequences = journal.events
+        .filter((event) => event.runId === runId)
+        .map((event) => event.sequence);
+      expect(sequences).toEqual(sequences.map((_, index) => index + 1));
+    }
+  });
+
+  it("treats response markers inside JSON string content as payload", () => {
+    const runId = RunIdSchema.parse(randomUUID());
+    const stepId = "review" as StepId;
+    const content = "Explain HONEYBEE_RESPONSE_BEGIN before HONEYBEE_RESPONSE_END.";
+    const stdout = `log before\r\nHONEYBEE_RESPONSE_BEGIN\r\n${JSON.stringify({
+      schemaVersion: 1,
+      runId,
+      stepId,
+      status: "completed",
+      content,
+    })}\r\nHONEYBEE_RESPONSE_END\r\nlog after`;
+
+    expect(parseAgentResponse(stdout, runId, stepId)).toMatchObject({ content });
+  });
+
   it("runs a strict three-step chain and persists the exact serialized Agent inputs", async () => {
     const runId = RunIdSchema.parse(randomUUID());
     const artifacts = new MemoryArtifactStore();
