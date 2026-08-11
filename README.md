@@ -65,12 +65,17 @@ Agents define executable programs. Harnesses define how HoneyBee communicates wi
       "timeoutMs": 120000
     }
   ],
+  "outputs": {
+    "result": { "from": { "stepId": "select", "output": "content" } }
+  },
   "maxParallelism": 2,
   "maxOutputBytes": 1048576
 }
 ```
 
 IDs must match `^[a-z][a-z0-9_-]{0,63}$`. Config objects are strict at every level, graph references and output ports must exist, and combined dependency/data/condition edges must be acyclic. Omitting `maxParallelism` defaults to `1`.
+
+The CLI convenience `result` is emitted only when `workflow.outputs.result` explicitly binds a step output. With no such binding, DAG execution still returns every completed step Artifact in `outputs`, but omits `result`; config order never chooses an implicit leaf.
 
 SchemaVersion 1 producer/reviewer and schemaVersion 2 ordered-step configs are translated to equivalent v3 linear DAGs with `maxParallelism: 1`. Their commands continue to receive `AgentInputEnvelopeV1` and return the legacy `content` response through the `stdio-framed-v1` compatibility harness; loading an old config never silently switches its Agent protocol.
 
@@ -98,7 +103,9 @@ corepack pnpm honeybee run resolve-attempt <run-id> <step-id> --retry
 corepack pnpm honeybee run delete <run-id> --yes
 ```
 
-One executor lease owns Journal writes for a Run. Lease publication and stale takeover use atomic ownership-directory transitions, and `run delete` must hold the same exclusive lease while removing the Run. Other CLI processes publish idempotent control requests that become authoritative only after the executor records `control.accepted`.
+One executor lease owns Journal writes for a Run. Its owner record binds the PID to the OS process creation identity so PID reuse cannot keep a stale lease alive. Lease publication and stale takeover use atomic ownership-directory transitions, and `run delete` must hold the same exclusive lease while removing the Run. Other CLI processes publish idempotent control requests that become authoritative only after the executor records `control.accepted`.
+
+Control commands remain asynchronous. Their JSON response reports `disposition: "queued"` while an executor is present, or `"queued-awaiting-executor"` with `requiresResume: true` when a paused/interrupted Run has no executor. In the latter case the request stays pending until `run resume` starts an executor.
 
 Pause stops new scheduling and waits for in-flight attempts to finish. Cancel stops scheduling, signals in-flight processes, and force-terminates them after the configured grace period. Approval is a non-Agent step that stores an approved/rejected decision Artifact for subsequent conditional branches.
 
@@ -110,11 +117,12 @@ Each Run is stored below `.honeybee/runs/<runId>/`:
 
 ```text
 events.jsonl
-executor.lock
 control/inbox/<requestId>.json
 blobs/sha256/<digest-prefix>/<digest-rest>
 tmp/
 ```
+
+Executor ownership is stored separately at `.honeybee/runs/.leases/active/<runId>/owner.json` so deleting one Run cannot erase the lease that serializes deletion.
 
 The JSONL Journal contains typed lifecycle metadata and Artifact references only. Prompts, tasks, Agent output, reasons, questions, stdout, and stderr remain outside the Journal. Every Artifact read recalculates byte length and SHA-256 digest.
 

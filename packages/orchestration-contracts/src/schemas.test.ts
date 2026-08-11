@@ -179,6 +179,24 @@ describe("orchestration contracts", () => {
       ],
     } as const;
     expect(WorkflowConfigV3Schema.safeParse(base).success).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "next", output: "content" } } },
+      }).success,
+    ).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "missing", output: "content" } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "next", output: "missing" } } },
+      }).success,
+    ).toBe(false);
     expect(WorkflowConfigV3Schema.safeParse({ ...base, unexpected: true }).success).toBe(false);
     expect(
       WorkflowConfigV3Schema.safeParse({

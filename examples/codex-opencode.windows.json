@@ -35,6 +35,9 @@
       "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } }
     }
   ],
+  "outputs": {
+    "result": { "from": { "stepId": "reviewer", "output": "content" } }
+  },
   "maxParallelism": 1,
   "defaultTimeoutMs": 300000,
   "maxOutputBytes": 1048576

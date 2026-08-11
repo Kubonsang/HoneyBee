@@ -184,7 +184,7 @@ const pointerValue = (value: unknown, pointer: string): { found: boolean; value?
     .slice(1)
     .split("/")
     .map((entry) => entry.replace(/~1/gu, "/").replace(/~0/gu, "~"))) {
-    if (typeof current !== "object" || current === null || !(token in current)) {
+    if (typeof current !== "object" || current === null || !Object.hasOwn(current, token)) {
       return { found: false };
     }
     current = (current as Record<string, unknown>)[token];
@@ -337,7 +337,7 @@ export class DagOrchestrationWorkflow {
     const state = this.#replayState(config, events);
     const writer = new EventWriter(this.journal, runId, events.length, this.#now, this.#randomId);
     if (replay.status === "terminal") {
-      return this.#result(runId, start.payload.task, state, false);
+      return this.#result(runId, start.payload.task, config, state, false);
     }
     if (state.runState === "paused") {
       await writer.emit("workflow.resumed", {});
@@ -389,7 +389,13 @@ export class DagOrchestrationWorkflow {
     const config = WorkflowConfigV3Schema.parse(
       JSON.parse(await this.artifacts.get({ runId, artifact: start.payload.config })) as unknown,
     );
-    return this.#result(runId, start.payload.task, this.#replayState(config, events), false);
+    return this.#result(
+      runId,
+      start.payload.task,
+      config,
+      this.#replayState(config, events),
+      false,
+    );
   }
 
   async #execute(context: ExecutionContext): Promise<DagWorkflowRunResult> {
@@ -422,7 +428,7 @@ export class DagOrchestrationWorkflow {
         }
         await context.writer.emit("workflow.cancelled", {});
         context.state.runState = "cancelled";
-        return this.#result(context.runId, context.taskArtifact, context.state);
+        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
       }
       if (
         !context.pauseRequested &&
@@ -431,7 +437,7 @@ export class DagOrchestrationWorkflow {
         await Promise.allSettled([...running.values()]);
         if (fatalError !== undefined) throw fatalError;
         context.state.runState = "interrupted";
-        return this.#result(context.runId, context.taskArtifact, context.state);
+        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
       }
 
       let progressed = false;
@@ -477,7 +483,7 @@ export class DagOrchestrationWorkflow {
         }
         await context.writer.emit("workflow.paused", {});
         context.state.runState = "paused";
-        return this.#result(context.runId, context.taskArtifact, context.state);
+        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
       }
 
       if ([...context.state.steps.values()].every((runtime) => settled(runtime.state))) {
@@ -489,7 +495,7 @@ export class DagOrchestrationWorkflow {
         await Promise.allSettled([...running.values()]);
         if (fatalError !== undefined) throw fatalError;
         context.state.runState = "interrupted";
-        return this.#result(context.runId, context.taskArtifact, context.state);
+        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
       }
 
       if (!progressed) {
@@ -839,7 +845,6 @@ export class DagOrchestrationWorkflow {
       { attempt, reason, question },
       runtime.definition.id,
     );
-    context.state.failure = { errorCode: "agent.interrupted" };
     runtime.state = "escalated";
   }
 
@@ -1297,12 +1302,13 @@ export class DagOrchestrationWorkflow {
       await context.writer.emit("workflow.completed", { outputs });
       context.state.runState = "completed";
     }
-    return this.#result(context.runId, context.taskArtifact, context.state);
+    return this.#result(context.runId, context.taskArtifact, context.config, context.state);
   }
 
   async #result(
     runId: RunId,
     task: ArtifactRef,
+    config: WorkflowConfigV3,
     state: RuntimeState,
     includeContent = true,
   ): Promise<DagWorkflowRunResult> {
@@ -1317,10 +1323,13 @@ export class DagOrchestrationWorkflow {
     const outputs = Object.fromEntries(
       steps.filter((step) => step.state === "completed").map((step) => [step.stepId, step.outputs]),
     ) as Record<StepId, Record<PortName, ArtifactRef>>;
-    const final = [...steps]
-      .reverse()
-      .find((step) => step.outputs["content" as PortName] !== undefined);
-    const finalArtifact = final?.outputs["content" as PortName];
+    const resultBinding = Object.entries(config.outputs ?? {}).find(
+      ([name]) => name === "result",
+    )?.[1];
+    const finalArtifact =
+      resultBinding === undefined
+        ? undefined
+        : state.steps.get(resultBinding.from.stepId)?.outputs[resultBinding.from.output];
     const result =
       !includeContent || finalArtifact === undefined
         ? undefined

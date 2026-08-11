@@ -71,6 +71,32 @@ describe("FileRunControl", () => {
     expect(await controls.executorPresent(runId)).toBe(false);
   });
 
+  it("treats a reused PID with a different process incarnation as stale", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const active = path.join(root, ".leases", "active", runId);
+    await mkdir(active, { recursive: true });
+    await writeFile(
+      path.join(active, "owner.json"),
+      `${JSON.stringify({
+        schemaVersion: 2,
+        leaseId: randomUUID(),
+        pid: process.pid,
+        processIdentity: "win32:impossible-incarnation",
+      })}\n`,
+      "utf8",
+    );
+
+    const controls = new FileRunControl(root);
+    expect(await controls.executorPresent(runId)).toBe(false);
+    const lease = await controls.acquire(runId);
+    expect(await controls.executorPresent(runId)).toBe(true);
+    expect(await readdir(path.join(root, ".leases", "stale"))).toHaveLength(1);
+    await lease.release();
+  });
+
   it("keeps the exclusive lease valid while the Run directory is deleted", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
     directories.push(root);

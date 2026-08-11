@@ -231,6 +231,7 @@ describe("HoneyBee CLI sequential orchestration", () => {
             outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
           },
         ],
+        outputs: { result: { from: { stepId: "join", output: "content" } } },
         maxParallelism: 2,
       }),
       "utf8",
@@ -363,6 +364,60 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(result.steps.find((step) => step.stepId === "slow")?.pid).toBe(
       pausedResult.steps.find((step) => step.stepId === "slow")?.pid,
     );
+  }, 20_000);
+
+  it("reports queued control that is waiting for an executor", async () => {
+    const cwd = await temporaryDirectory();
+    const configPath = path.join(cwd, "paused-control.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 3,
+        agents: [
+          { id: "slow", command: process.execPath, args: [demoAgentPath, "slow"] },
+          { id: "after", command: process.execPath, args: [demoAgentPath, "after"] },
+        ],
+        harnesses: [{ id: "stdio", kind: "stdio-framed-v2", protocolVersion: 2 }],
+        steps: [
+          {
+            id: "slow",
+            type: "agent",
+            agentRef: "slow",
+            harnessRef: "stdio",
+            outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+          },
+          {
+            id: "after",
+            type: "agent",
+            agentRef: "after",
+            harnessRef: "stdio",
+            needs: ["slow"],
+            outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+          },
+        ],
+        maxParallelism: 1,
+      }),
+      "utf8",
+    );
+    const active = startCli(["run", "--config", configPath, "--task", "pause", "--json"], cwd);
+    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
+    expect(runId).toBeDefined();
+    expect((await runCli(["run", "pause", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
+    expect((await active.completed).exitCode).toBe(4);
+
+    const queued = await runCli(["run", "cancel", runId ?? "", "--json"], cwd);
+    expect(queued.exitCode).toBe(0);
+    expect(JSON.parse(queued.stdout)).toMatchObject({
+      pending: true,
+      disposition: "queued-awaiting-executor",
+      executorPresent: false,
+      requiresResume: true,
+    });
+
+    const resumed = await runCli(["run", "resume", runId ?? "", "--json"], cwd);
+    expect(resumed.exitCode).toBe(130);
+    expect(JSON.parse(resumed.stdout)).toMatchObject({ status: "cancelled" });
   }, 20_000);
 
   it("retries an allowlisted real Agent failure and persists both attempts", async () => {

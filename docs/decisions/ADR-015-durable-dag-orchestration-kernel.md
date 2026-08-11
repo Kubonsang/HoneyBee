@@ -17,6 +17,7 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 - `needs` control edge, named Artifact input edge, condition reference를 합친 graph가 acyclic이어야 한다.
 - 여러 root/leaf, fan-out과 fan-in을 허용한다. ready step 선택은 Step ID 순으로 결정하며 동시에 실행하는 Agent attempt는 `maxParallelism`을 넘지 않는다.
 - 결과 집계·비교·선택은 여러 Artifact input을 받는 일반 Agent step이 담당한다.
+- CLI 편의 `result`는 config의 `outputs.result`가 특정 step output을 명시적으로 가리킬 때만 제공한다. binding이 없으면 모든 step output Artifact는 보존하되 config 배열 순서로 임의 leaf를 선택하지 않는다.
 
 ### Artifact와 조건
 
@@ -35,9 +36,10 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 
 ### Single writer와 control
 
-- 하나의 executor lease만 Run Journal을 기록한다. 완성된 ownership directory를 atomic publish하고, stale lease는 관측한 lease ID별 tombstone으로 atomic 이동해 takeover 경쟁자가 새 live lease를 제거하지 못하게 한다. Run 삭제도 같은 lease를 획득한 동안 수행한다.
+- 하나의 executor lease만 Run Journal을 기록한다. owner는 PID와 OS process creation identity를 함께 기록하며 둘이 일치할 때만 같은 live executor로 판단한다. 완성된 ownership directory를 atomic publish하고, stale lease는 관측한 lease ID별 tombstone으로 atomic 이동해 takeover 경쟁자가 새 live lease를 제거하지 못하게 한다. Run 삭제도 같은 lease를 획득한 동안 수행한다.
 - pause, cancel, approval, interrupted resolution 명령은 원자적 control inbox에 UUID request로 저장한다.
 - inbox와 lock은 운영 수단일 뿐 Run 상태의 권위가 아니다. executor가 `control.accepted`를 flush한 뒤에만 요청에 semantic 의미가 생긴다.
+- control CLI는 executor 유무의 관측 snapshot을 응답한다. executor가 없으면 요청은 `queued-awaiting-executor`이며 사용자가 `run resume`을 실행할 때까지 inbox에 대기한다.
 - pause는 새 scheduling을 막고 in-flight attempt가 끝난 checkpoint에서 `workflow.paused`가 된다.
 - approval은 Agent를 실행하지 않는 step이다. approve/reject 모두 JSON decision Artifact를 출력하며 조건 branch가 후속 경로를 선택한다.
 - cancel은 새 scheduling을 막고 in-flight process에 종료 신호를 보낸 뒤 bounded grace 후 강제 종료한다.

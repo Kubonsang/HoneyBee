@@ -90,6 +90,8 @@ const linearV3 = (
   limits: Readonly<{ timeoutMs?: number; maxOutputBytes?: number }>,
 ): WorkflowConfigV3 => {
   const harnessId = HarnessIdSchema.parse("stdio");
+  const finalStep = commands.at(-1);
+  if (finalStep === undefined) throw new Error("A sequential workflow needs at least one step.");
   return WorkflowConfigV3Schema.parse({
     schemaVersion: 3,
     agents: commands.map((entry) => canonicalAgent(entry.id, entry.command)),
@@ -114,6 +116,14 @@ const linearV3 = (
           }),
       outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
     })),
+    outputs: {
+      result: {
+        from: {
+          stepId: StepIdSchema.parse(finalStep.id),
+          output: PortNameSchema.parse("content"),
+        },
+      },
+    },
     maxParallelism: 1,
     ...(limits.timeoutMs === undefined ? {} : { defaultTimeoutMs: limits.timeoutMs }),
     ...(limits.maxOutputBytes === undefined ? {} : { maxOutputBytes: limits.maxOutputBytes }),

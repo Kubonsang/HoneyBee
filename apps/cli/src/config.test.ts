@@ -41,6 +41,9 @@ describe("loadWorkflowConfig", () => {
           expect(config.agents[1]?.command).toBe("C:\\Agent Home\\npm\\opencode.exe");
           expect(config.agents[1]?.cwd).toBe(path.dirname(configPath));
           expect(config.steps[1]).toMatchObject({ needs: ["producer"] });
+          expect(config.outputs).toEqual({
+            result: { from: { stepId: "reviewer", output: "content" } },
+          });
         },
       );
     } finally {

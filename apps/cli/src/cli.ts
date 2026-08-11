@@ -190,6 +190,7 @@ const demoConfig = (): WorkflowConfigV3 => {
         outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
       },
     ],
+    outputs: { result: { from: { stepId: "reviewer", output: "content" } } },
     defaultTimeoutMs: 10_000,
     maxParallelism: 1,
   });
@@ -432,11 +433,25 @@ const submitControl = async (
     ...(stepId === undefined ? {} : { stepId }),
     timestamp: new Date().toISOString(),
   } as const;
-  await new FileRunControl(root).submit(request);
+  const controls = new FileRunControl(root);
+  await controls.submit(request);
+  const executorPresent = await controls.executorPresent(runId);
+  const disposition = executorPresent ? "queued" : "queued-awaiting-executor";
   output(
     args.json
-      ? { ok: true, runId, requestId: request.requestId, action: request.action, pending: true }
-      : `Queued ${request.action} for Run ${runId}.`,
+      ? {
+          ok: true,
+          runId,
+          requestId: request.requestId,
+          action: request.action,
+          pending: true,
+          disposition,
+          executorPresent,
+          requiresResume: !executorPresent,
+        }
+      : executorPresent
+        ? `Queued ${request.action} for Run ${runId}.`
+        : `Queued ${request.action} for Run ${runId}; no executor is active, so run resume is required.`,
     args.json,
   );
 };

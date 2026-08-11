@@ -337,6 +337,11 @@ export const ArtifactBindingSchema = z
   .strict();
 export type ArtifactBinding = z.infer<typeof ArtifactBindingSchema>;
 
+export const WorkflowOutputBindingSchema = z
+  .object({ from: z.object({ stepId: StepIdSchema, output: PortNameSchema }).strict() })
+  .strict();
+export type WorkflowOutputBinding = z.infer<typeof WorkflowOutputBindingSchema>;
+
 export const OutputDeclarationSchema = z.object({ mediaType: ArtifactMediaTypeSchema }).strict();
 export type OutputDeclaration = z.infer<typeof OutputDeclarationSchema>;
 
@@ -483,6 +488,7 @@ export const WorkflowConfigV3Schema = z
     agents: z.array(AgentDefinitionSchema),
     harnesses: z.array(HarnessDefinitionSchema).min(1),
     steps: z.array(WorkflowStepV3Schema).min(1),
+    outputs: z.record(PortNameSchema, WorkflowOutputBindingSchema).optional(),
     maxParallelism: z.number().int().min(1).max(64).optional(),
     defaultTimeoutMs: z.number().int().positive().optional(),
     maxOutputBytes: z.number().int().positive().optional(),
@@ -574,7 +580,10 @@ export const WorkflowConfigV3Schema = z
           continue;
         }
         for (const [port, binding] of Object.entries(step.inputs ?? {})) {
-          if (binding.from.stepId === reference && !(binding.from.output in source.outputs)) {
+          if (
+            binding.from.stepId === reference &&
+            !Object.hasOwn(source.outputs, binding.from.output)
+          ) {
             context.addIssue({
               code: "custom",
               path: ["steps", index, "inputs", port],
@@ -632,6 +641,22 @@ export const WorkflowConfigV3Schema = z
         }
       };
       validateCondition(step.when);
+    }
+    for (const [name, binding] of Object.entries(config.outputs ?? {})) {
+      const source = steps.get(binding.from.stepId);
+      if (source === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputs", name],
+          message: `Unknown workflow output step: ${binding.from.stepId}`,
+        });
+      } else if (!Object.hasOwn(source.outputs, binding.from.output)) {
+        context.addIssue({
+          code: "custom",
+          path: ["outputs", name],
+          message: `Unknown workflow output port: ${binding.from.output}`,
+        });
+      }
     }
     const visiting = new Set<StepId>();
     const visited = new Set<StepId>();

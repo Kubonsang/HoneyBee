@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdir, open, readFile, readdir, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 
 import {
   ControlRequestSchema,
@@ -27,10 +29,77 @@ const processExists = (pid: number): boolean => {
   }
 };
 
+const execFileAsync = promisify(execFile);
+
+interface ProcessObservation {
+  readonly status: "alive" | "missing";
+  readonly identity?: string;
+}
+
+const readProcessIdentity = async (pid: number): Promise<string> => {
+  if (process.platform === "win32") {
+    const command =
+      `$process = Get-Process -Id ${pid} -ErrorAction Stop; ` +
+      "[Console]::Out.Write($process.StartTime.ToUniversalTime().Ticks)";
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
+      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+    );
+    const ticks = stdout.trim();
+    if (!/^\d+$/u.test(ticks)) throw new Error("Invalid Windows process creation time.");
+    return `win32:${ticks}`;
+  }
+  if (process.platform === "linux") {
+    const [bootId, stat] = await Promise.all([
+      readFile("/proc/sys/kernel/random/boot_id", "utf8"),
+      readFile(`/proc/${pid}/stat`, "utf8"),
+    ]);
+    const commandEnd = stat.lastIndexOf(")");
+    const fields =
+      commandEnd < 0
+        ? []
+        : stat
+            .slice(commandEnd + 1)
+            .trim()
+            .split(/\s+/u);
+    const startTicks = fields[19];
+    if (startTicks === undefined || !/^\d+$/u.test(startTicks)) {
+      throw new Error("Invalid Linux process start time.");
+    }
+    return `linux:${bootId.trim()}:${startTicks}`;
+  }
+  const { stdout } = await execFileAsync("ps", ["-o", "lstart=", "-p", String(pid)], {
+    encoding: "utf8",
+    timeout: 5_000,
+    windowsHide: true,
+  });
+  const startedAt = stdout.trim().replace(/\s+/gu, " ");
+  if (startedAt.length === 0) throw new Error("Missing process creation time.");
+  return `${process.platform}:${startedAt}`;
+};
+
+const observeProcess = async (pid: number): Promise<ProcessObservation> => {
+  if (!processExists(pid)) return { status: "missing" };
+  try {
+    return { status: "alive", identity: await readProcessIdentity(pid) };
+  } catch {
+    return processExists(pid) ? { status: "alive" } : { status: "missing" };
+  }
+};
+
+let currentProcessObservation: Promise<ProcessObservation> | undefined;
+const observeLeaseProcess = (pid: number): Promise<ProcessObservation> => {
+  if (pid !== process.pid) return observeProcess(pid);
+  currentProcessObservation ??= observeProcess(pid);
+  return currentProcessObservation;
+};
+
 interface LeaseObservation {
   readonly identity: string;
   readonly leaseId?: string;
   readonly pid?: number;
+  readonly processIdentity?: string;
 }
 
 interface LeasePaths {
@@ -52,13 +121,27 @@ export class FileRunControl implements RunLeaseManager {
 
   public async acquire(runId: RunId): Promise<RunLease> {
     const validated = RunIdSchema.parse(runId);
+    const ownerProcess = await observeLeaseProcess(process.pid);
+    if (ownerProcess.status !== "alive" || ownerProcess.identity === undefined) {
+      throw new HoneyBeeCoreError(
+        "run.lease-failed",
+        "Could not establish the executor process identity.",
+      );
+    }
     const leaseId = randomUUID();
     const paths = await this.#leasePaths(validated, leaseId);
     await mkdir(paths.candidate);
     const ownerPath = path.join(paths.candidate, "owner.json");
     const owner = await open(ownerPath, "wx");
     try {
-      await owner.writeFile(`${JSON.stringify({ schemaVersion: 1, leaseId, pid: process.pid })}\n`);
+      await owner.writeFile(
+        `${JSON.stringify({
+          schemaVersion: 2,
+          leaseId,
+          pid: process.pid,
+          processIdentity: ownerProcess.identity,
+        })}\n`,
+      );
       await owner.sync();
     } finally {
       await owner.close();
@@ -97,7 +180,7 @@ export class FileRunControl implements RunLeaseManager {
 
         const current = await this.#readLease(paths.active);
         if (current === undefined) continue;
-        if (current.pid !== undefined && processExists(current.pid)) {
+        if (await this.#leaseIsActive(current)) {
           throw new HoneyBeeCoreError(
             "run.already-running",
             `Run ${validated} already has an executor.`,
@@ -186,7 +269,7 @@ export class FileRunControl implements RunLeaseManager {
     const validated = RunIdSchema.parse(runId);
     const paths = await this.#leasePaths(validated, randomUUID());
     const lease = await this.#readLease(paths.active);
-    return lease?.pid !== undefined && processExists(lease.pid);
+    return lease === undefined ? false : this.#leaseIsActive(lease);
   }
 
   #runDirectory(runId: RunId): string {
@@ -228,12 +311,20 @@ export class FileRunControl implements RunLeaseManager {
           "pid" in parsed && Number.isSafeInteger(parsed.pid) && (parsed.pid as number) > 0
             ? (parsed.pid as number)
             : undefined;
+        const processIdentity =
+          "processIdentity" in parsed &&
+          typeof parsed.processIdentity === "string" &&
+          parsed.processIdentity.length > 0 &&
+          parsed.processIdentity.length <= 512
+            ? parsed.processIdentity
+            : undefined;
         const validatedLeaseId = EventIdSchema.safeParse(leaseId);
         if (validatedLeaseId.success) {
           return {
             identity: validatedLeaseId.data,
             leaseId: validatedLeaseId.data,
             ...(pid === undefined ? {} : { pid }),
+            ...(processIdentity === undefined ? {} : { processIdentity }),
           };
         }
       }
@@ -250,5 +341,13 @@ export class FileRunControl implements RunLeaseManager {
         throw new HoneyBeeCoreError("run.lease-failed", "Could not inspect the executor lease.");
       }
     }
+  }
+
+  async #leaseIsActive(lease: LeaseObservation): Promise<boolean> {
+    if (lease.pid === undefined) return false;
+    const process = await observeLeaseProcess(lease.pid);
+    if (process.status === "missing") return false;
+    if (lease.processIdentity === undefined || process.identity === undefined) return true;
+    return lease.processIdentity === process.identity;
   }
 }

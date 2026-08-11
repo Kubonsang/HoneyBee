@@ -8,6 +8,7 @@ import {
   ContentDigestSchema,
   EventIdSchema,
   HarnessIdSchema,
+  PortNameSchema,
   RunIdSchema,
   StepIdSchema,
   TERMINAL_WORKFLOW_EVENT_V2_TYPES,
@@ -105,6 +106,7 @@ interface RunnerOptions {
   readonly delayByStep?: ReadonlyMap<string, number>;
   readonly failOnce?: ReadonlySet<string>;
   readonly jsonSteps?: ReadonlySet<string>;
+  readonly escalateSteps?: ReadonlySet<string>;
 }
 
 class DagRunner implements AgentProcessRunner {
@@ -154,10 +156,17 @@ class DagRunner implements AgentProcessRunner {
         : `${request.stepId}:${Object.values(input.inputs)
             .map((value) => value.content)
             .join("+")}`;
-    const stdout =
-      fails || termination === "cancelled"
-        ? ""
-        : `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify({
+    const response =
+      this.options.escalateSteps?.has(request.stepId) === true
+        ? {
+            schemaVersion: 2,
+            runId: request.runId,
+            stepId: request.stepId,
+            status: "escalated",
+            reason: "human decision required",
+            question: "Should this continue?",
+          }
+        : {
             schemaVersion: 2,
             runId: request.runId,
             stepId: request.stepId,
@@ -168,7 +177,11 @@ class DagRunner implements AgentProcessRunner {
                 { mediaType: declaration.mediaType, content: output },
               ]),
             ),
-          })}\nHONEYBEE_RESPONSE_END`;
+          };
+    const stdout =
+      fails || termination === "cancelled"
+        ? ""
+        : `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify(response)}\nHONEYBEE_RESPONSE_END`;
     const observation = {
       pid,
       exitCode: fails ? 7 : termination === "cancelled" ? null : 0,
@@ -197,7 +210,11 @@ const harnessId = HarnessIdSchema.parse("stdio");
 const textOutput = { content: { mediaType: "text/plain; charset=utf-8" as const } };
 const jsonOutput = { content: { mediaType: "application/json" as const } };
 
-const config = (steps: WorkflowConfigV3["steps"], maxParallelism = 2): WorkflowConfigV3 =>
+const config = (
+  steps: WorkflowConfigV3["steps"],
+  maxParallelism = 2,
+  outputs?: WorkflowConfigV3["outputs"],
+): WorkflowConfigV3 =>
   WorkflowConfigV3Schema.parse({
     schemaVersion: 3,
     agents: steps
@@ -207,6 +224,7 @@ const config = (steps: WorkflowConfigV3["steps"], maxParallelism = 2): WorkflowC
       .map((id) => agent(id)),
     harnesses: [{ id: harnessId, kind: "stdio-framed-v2", protocolVersion: 2 }],
     steps,
+    ...(outputs === undefined ? {} : { outputs }),
     maxParallelism,
   });
 
@@ -383,13 +401,64 @@ describe("DagOrchestrationWorkflow", () => {
               },
             },
           }),
+          agentStep("prototype", {
+            when: {
+              artifact: {
+                stepId: "decision",
+                output: "content",
+                pointer: "/toString",
+                op: "exists",
+              },
+            },
+          }),
         ]),
       ),
     );
 
     expect(result.steps.find((step) => step.stepId === "selected")?.state).toBe("completed");
     expect(result.steps.find((step) => step.stepId === "rejected")?.state).toBe("skipped");
+    expect(result.steps.find((step) => step.stepId === "prototype")?.state).toBe("skipped");
     expect(journal.events.some((event) => event.type === "step.skipped")).toBe(true);
+  });
+
+  it("returns convenience content only from an explicit workflow result output", async () => {
+    const withoutBinding = await new DagOrchestrationWorkflow(
+      new DagRunner(),
+      new MemoryArtifacts(),
+      new MemoryJournal(),
+    ).run(request(config([agentStep("left"), agentStep("right")])));
+    expect(withoutBinding.result).toBeUndefined();
+
+    const withBinding = await new DagOrchestrationWorkflow(
+      new DagRunner(),
+      new MemoryArtifacts(),
+      new MemoryJournal(),
+    ).run(
+      request(
+        config([agentStep("right"), agentStep("left")], 2, {
+          [PortNameSchema.parse("result")]: {
+            from: {
+              stepId: StepIdSchema.parse("right"),
+              output: PortNameSchema.parse("content"),
+            },
+          },
+        }),
+      ),
+    );
+    expect(withBinding.result).toBe("right:");
+  });
+
+  it("keeps escalation as a semantic outcome without failure metadata", async () => {
+    const journal = new MemoryJournal();
+    const result = await new DagOrchestrationWorkflow(
+      new DagRunner({ escalateSteps: new Set(["review"]) }),
+      new MemoryArtifacts(),
+      journal,
+    ).run(request(config([agentStep("review")])));
+
+    expect(result.status).toBe("escalated");
+    expect(result.failure).toBeUndefined();
+    expect(journal.events.at(-1)?.type).toBe("workflow.escalated");
   });
 
   it("retries only an allowlisted failure within the bounded attempt budget", async () => {
