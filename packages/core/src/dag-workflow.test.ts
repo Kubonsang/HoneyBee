@@ -17,11 +17,13 @@ import {
   type ControlRequest,
   type OrchestrationEventV2,
   type RunId,
+  type StepId,
   type WorkflowConfigV3,
 } from "@honeybee/orchestration-contracts";
 import { describe, expect, it, vi } from "vitest";
 
 import { DagOrchestrationWorkflow } from "./dag-workflow.js";
+import { HoneyBeeCoreError } from "./errors.js";
 import type {
   AgentProcessRequest,
   AgentProcessResult,
@@ -53,6 +55,15 @@ class MemoryArtifacts implements ArtifactStore {
     const value = this.values.get(request.artifact.artifactId);
     if (value === undefined) throw new Error("missing Artifact");
     return value;
+  }
+}
+
+class InterruptingArtifacts extends MemoryArtifacts {
+  public override async put(request: ArtifactPutRequest): Promise<ArtifactRef> {
+    if (request.kind === "step-output" && request.content.startsWith("interrupt:")) {
+      throw new HoneyBeeCoreError("artifact.write-failed", "simulated output persistence failure");
+    }
+    return super.put(request);
   }
 }
 
@@ -91,6 +102,7 @@ class MemoryControls implements RunControlPort {
 
 interface RunnerOptions {
   readonly delayMs?: number;
+  readonly delayByStep?: ReadonlyMap<string, number>;
   readonly failOnce?: ReadonlySet<string>;
   readonly jsonSteps?: ReadonlySet<string>;
 }
@@ -123,7 +135,10 @@ class DagRunner implements AgentProcessRunner {
     await lifecycle.onStarted(pid);
     const termination = await Promise.race([
       new Promise<"exited">((resolve) =>
-        setTimeout(() => resolve("exited"), this.options.delayMs ?? 5),
+        setTimeout(
+          () => resolve("exited"),
+          this.options.delayByStep?.get(request.stepId) ?? this.options.delayMs ?? 5,
+        ),
       ),
       new Promise<"cancelled">((resolve) =>
         request.signal?.addEventListener("abort", () => resolve("cancelled"), { once: true }),
@@ -147,21 +162,18 @@ class DagRunner implements AgentProcessRunner {
             runId: request.runId,
             stepId: request.stepId,
             status: "completed",
-            outputs: {
-              content: {
-                mediaType:
-                  this.options.jsonSteps?.has(request.stepId) === true
-                    ? "application/json"
-                    : "text/plain; charset=utf-8",
-                content: output,
-              },
-            },
+            outputs: Object.fromEntries(
+              Object.entries(input.outputs).map(([name, declaration]) => [
+                name,
+                { mediaType: declaration.mediaType, content: output },
+              ]),
+            ),
           })}\nHONEYBEE_RESPONSE_END`;
     const observation = {
       pid,
       exitCode: fails ? 7 : termination === "cancelled" ? null : 0,
       signal: termination === "cancelled" ? ("SIGTERM" as const) : null,
-      durationMs: this.options.delayMs ?? 5,
+      durationMs: this.options.delayByStep?.get(request.stepId) ?? this.options.delayMs ?? 5,
       stdoutBytes: Buffer.byteLength(stdout),
       stderrBytes: 0,
       stdoutDigest: digest(stdout),
@@ -213,6 +225,80 @@ const request = (workflowConfig: WorkflowConfigV3) => ({
   config: workflowConfig,
 });
 
+const seedRunningControlCheckpoint = async (
+  artifacts: MemoryArtifacts,
+  journal: MemoryJournal,
+  workflowConfig: WorkflowConfigV3,
+  action: "pause" | "cancel",
+): Promise<RunId> => {
+  const runId = RunIdSchema.parse(randomUUID());
+  const step = workflowConfig.steps.find((candidate) => candidate.type === "agent");
+  if (step === undefined || step.type !== "agent") throw new Error("Agent step required");
+  const configArtifact = await artifacts.put({
+    runId,
+    artifactId: ArtifactIdSchema.parse(randomUUID()),
+    kind: "workflow-config",
+    mediaType: "application/json",
+    content: JSON.stringify(workflowConfig),
+  });
+  const taskArtifact = await artifacts.put({
+    runId,
+    artifactId: ArtifactIdSchema.parse(randomUUID()),
+    kind: "task",
+    mediaType: "text/plain; charset=utf-8",
+    content: "task",
+  });
+  const inputArtifact = await artifacts.put({
+    runId,
+    artifactId: ArtifactIdSchema.parse(randomUUID()),
+    kind: "step-input",
+    mediaType: "application/json",
+    content: "{}",
+  });
+  const requestId = EventIdSchema.parse(randomUUID());
+  const emit = async (
+    sequence: number,
+    type: OrchestrationEventV2["type"],
+    payload: unknown,
+    stepId?: StepId,
+  ) =>
+    journal.append(runId, {
+      schemaVersion: 2,
+      eventId: EventIdSchema.parse(randomUUID()),
+      runId,
+      sequence,
+      timestamp: new Date().toISOString(),
+      type,
+      ...(stepId === undefined ? {} : { stepId }),
+      payload,
+    } as OrchestrationEventV2);
+  await emit(1, "workflow.started", {
+    stepCount: workflowConfig.steps.length,
+    maxParallelism: workflowConfig.maxParallelism ?? 1,
+    config: configArtifact,
+    task: taskArtifact,
+  });
+  await emit(2, "artifact.stored", { artifact: configArtifact });
+  await emit(3, "artifact.stored", { artifact: taskArtifact });
+  await emit(4, "artifact.stored", { artifact: inputArtifact }, step.id);
+  await emit(
+    5,
+    "step.attempt.started",
+    { attempt: 1, agentId: step.agentRef, harnessId: step.harnessRef, input: inputArtifact },
+    step.id,
+  );
+  await emit(
+    6,
+    "step.assigned",
+    { attempt: 1, agentId: step.agentRef, harnessId: step.harnessRef },
+    step.id,
+  );
+  await emit(7, "agent.started", { attempt: 1, pid: 999 }, step.id);
+  await emit(8, "control.accepted", { requestId, action });
+  await emit(9, action === "pause" ? "workflow.pausing" : "workflow.cancelling", { requestId });
+  return runId;
+};
+
 describe("DagOrchestrationWorkflow", () => {
   it("runs parallel fan-out up to the limit and supplies verified fan-in inputs", async () => {
     const runner = new DagRunner({ delayMs: 25 });
@@ -240,6 +326,32 @@ describe("DagOrchestrationWorkflow", () => {
     expect(result.status).toBe("completed");
     expect(runner.maxActive).toBe(2);
     expect(Object.keys(runner.inputs.get("join")?.inputs ?? {}).sort()).toEqual(["left", "right"]);
+  });
+
+  it("serializes the exact named output contract into every v2 Agent input", async () => {
+    const runner = new DagRunner();
+    const result = await new DagOrchestrationWorkflow(
+      runner,
+      new MemoryArtifacts(),
+      new MemoryJournal(),
+    ).run(
+      request(
+        config([
+          agentStep("multi", {
+            outputs: {
+              summary: { mediaType: "text/plain; charset=utf-8" },
+              report: { mediaType: "text/plain; charset=utf-8" },
+            },
+          }),
+        ]),
+      ),
+    );
+
+    expect(runner.inputs.get("multi")?.outputs).toEqual({
+      summary: { mediaType: "text/plain; charset=utf-8" },
+      report: { mediaType: "text/plain; charset=utf-8" },
+    });
+    expect(Object.keys(result.steps[0]?.outputs ?? {}).sort()).toEqual(["report", "summary"]);
   });
 
   it("evaluates JSON Artifact conditions and records the unselected branch as skipped", async () => {
@@ -398,6 +510,114 @@ describe("DagOrchestrationWorkflow", () => {
     const resumed = await workflow.resume(run.runId);
     expect(resumed.status).toBe("completed");
     expect(runner.attempts.get("only")).toBe(1);
+  });
+
+  it("restores accepted pausing and cancelling checkpoints after an executor crash", async () => {
+    const pauseArtifacts = new MemoryArtifacts();
+    const pauseJournal = new MemoryJournal();
+    const pauseRunner = new DagRunner();
+    const pauseRunId = await seedRunningControlCheckpoint(
+      pauseArtifacts,
+      pauseJournal,
+      config([agentStep("paused-step")], 1),
+      "pause",
+    );
+    const pauseWorkflow = new DagOrchestrationWorkflow(pauseRunner, pauseArtifacts, pauseJournal);
+    const resumedPause = await pauseWorkflow.resume(pauseRunId);
+    expect(resumedPause.status).toBe("paused");
+    expect(resumedPause.steps[0]?.state).toBe("interrupted");
+    expect(pauseRunner.attempts.size).toBe(0);
+
+    const cancelArtifacts = new MemoryArtifacts();
+    const cancelJournal = new MemoryJournal();
+    const cancelRunner = new DagRunner();
+    const cancelRunId = await seedRunningControlCheckpoint(
+      cancelArtifacts,
+      cancelJournal,
+      config([agentStep("cancelled-step")], 1),
+      "cancel",
+    );
+    const cancelWorkflow = new DagOrchestrationWorkflow(
+      cancelRunner,
+      cancelArtifacts,
+      cancelJournal,
+    );
+    const resumedCancellation = await cancelWorkflow.resume(cancelRunId);
+    expect(resumedCancellation.status).toBe("cancelled");
+    expect(resumedCancellation.steps[0]?.state).toBe("cancelled");
+    expect(cancelRunner.attempts.size).toBe(0);
+  });
+
+  it("coalesces repeated pause requests and ignores pause after cancellation", async () => {
+    const pauseControls = new MemoryControls();
+    const pauseJournal = new MemoryJournal();
+    const pauseRun = request(config([agentStep("only")], 1));
+    for (let index = 0; index < 2; index += 1) {
+      await pauseControls.submit({
+        requestId: EventIdSchema.parse(randomUUID()),
+        runId: pauseRun.runId,
+        action: "pause",
+        timestamp: new Date().toISOString(),
+      });
+    }
+    const paused = await new DagOrchestrationWorkflow(
+      new DagRunner(),
+      new MemoryArtifacts(),
+      pauseJournal,
+      pauseControls,
+    ).run(pauseRun);
+    expect(paused.status).toBe("paused");
+    expect(pauseJournal.events.filter((event) => event.type === "workflow.pausing")).toHaveLength(
+      1,
+    );
+    expect(pauseControls.requests).toHaveLength(0);
+
+    const cancelControls = new MemoryControls();
+    const cancelJournal = new MemoryJournal();
+    const cancelRun = request(config([agentStep("only")], 1));
+    await cancelControls.submit({
+      requestId: EventIdSchema.parse(randomUUID()),
+      runId: cancelRun.runId,
+      action: "cancel",
+      timestamp: new Date().toISOString(),
+    });
+    await cancelControls.submit({
+      requestId: EventIdSchema.parse(randomUUID()),
+      runId: cancelRun.runId,
+      action: "pause",
+      timestamp: new Date().toISOString(),
+    });
+    const cancelled = await new DagOrchestrationWorkflow(
+      new DagRunner(),
+      new MemoryArtifacts(),
+      cancelJournal,
+      cancelControls,
+    ).run(cancelRun);
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelJournal.events.some((event) => event.type === "workflow.pausing")).toBe(false);
+    expect(cancelControls.requests).toHaveLength(0);
+  });
+
+  it("drains active siblings before returning an interrupted Run", async () => {
+    const runner = new DagRunner({
+      delayByStep: new Map([
+        ["interrupt", 5],
+        ["sibling", 150],
+      ]),
+    });
+    const journal = new MemoryJournal();
+    const result = await new DagOrchestrationWorkflow(
+      runner,
+      new InterruptingArtifacts(),
+      journal,
+    ).run(request(config([agentStep("interrupt"), agentStep("sibling")], 2)));
+
+    expect(result.status).toBe("interrupted");
+    expect(runner.active).toBe(0);
+    expect(result.steps.find((step) => step.stepId === "sibling")?.state).toBe("completed");
+    const eventCount = journal.events.length;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(journal.events).toHaveLength(eventCount);
   });
 
   it("cancels an in-flight Agent and does not schedule pending work", async () => {

@@ -449,13 +449,13 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     return;
   }
   const root = stateRoot();
-  if (await new FileRunControl(root).executorPresent(runId)) {
-    throw new HoneyBeeCoreError(
-      "run.already-running",
-      "Cannot delete a Run with an active executor.",
-    );
+  const controls = new FileRunControl(root);
+  const lease = await controls.acquire(runId);
+  try {
+    await new FileRunRepository(root).delete(runId);
+  } finally {
+    await lease.release();
   }
-  await new FileRunRepository(root).delete(runId);
   output(args.json ? { ok: true, runId, deleted: true } : `Deleted Run ${runId}.`, args.json);
 };
 

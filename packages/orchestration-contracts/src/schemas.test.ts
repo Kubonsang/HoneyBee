@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   AgentInputEnvelopeV1Schema,
+  AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
   RunIdSchema,
@@ -61,6 +62,85 @@ describe("orchestration contracts", () => {
         reason: "needs input",
       }).success,
     ).toBe(true);
+
+    expect(
+      AgentInputEnvelopeV2Schema.safeParse({
+        schemaVersion: 2,
+        runId,
+        step: { id: "review", attempt: 1 },
+        task: { artifact: artifact("task"), content: "task" },
+        inputs: {},
+        outputs: {
+          summary: { mediaType: "text/plain; charset=utf-8" },
+          report: { mediaType: "application/json" },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      AgentInputEnvelopeV2Schema.safeParse({
+        schemaVersion: 2,
+        runId,
+        step: { id: "review", attempt: 1 },
+        task: { artifact: artifact("task"), content: "task" },
+        inputs: {},
+        outputs: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  it("limits protocol v1 harnesses to the legacy content contract", () => {
+    const legacy = {
+      schemaVersion: 3,
+      agents: [{ id: "worker", command: "worker" }],
+      harnesses: [{ id: "legacy", kind: "stdio-framed-v1", protocolVersion: 1 }],
+      steps: [
+        {
+          id: "worker",
+          type: "agent",
+          agentRef: "worker",
+          harnessRef: "legacy",
+          outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+        },
+      ],
+    } as const;
+    expect(WorkflowConfigV3Schema.safeParse(legacy).success).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...legacy,
+        steps: [
+          {
+            ...legacy.steps[0],
+            outputs: { report: { mediaType: "application/json" } },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...legacy,
+        agents: [
+          { id: "source", command: "source" },
+          { id: "worker", command: "worker" },
+        ],
+        harnesses: [
+          { id: "modern", kind: "stdio-framed-v2", protocolVersion: 2 },
+          ...legacy.harnesses,
+        ],
+        steps: [
+          {
+            id: "source",
+            type: "agent",
+            agentRef: "source",
+            harnessRef: "modern",
+            outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+          },
+          {
+            ...legacy.steps[0],
+            inputs: { previous: { from: { stepId: "source", output: "content" } } },
+          },
+        ],
+      }).success,
+    ).toBe(false);
   });
 
   it("strictly validates v3 graph references, cycles, and JSON conditions", () => {

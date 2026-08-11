@@ -256,4 +256,68 @@ describe("filesystem run persistence", () => {
       ),
     ).rejects.toMatchObject({ code: "journal.write-failed" });
   });
+
+  it("accepts interrupted-to-cancelled closure after restoring a cancelling Run", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const config = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const input = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "step-input",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const requestId = EventIdSchema.parse(randomUUID());
+    const journal = new FileOrchestrationJournal(root);
+    const events: OrchestrationEventV2[] = [
+      eventV2(runId, 1, "workflow.started", {
+        stepCount: 1,
+        maxParallelism: 1,
+        config,
+        task,
+      }),
+      eventV2(runId, 2, "artifact.stored", { artifact: config }),
+      eventV2(runId, 3, "artifact.stored", { artifact: task }),
+      eventV2(runId, 4, "artifact.stored", { artifact: input }, "worker"),
+      eventV2(
+        runId,
+        5,
+        "step.attempt.started",
+        { attempt: 1, agentId: "worker", harnessId: "stdio", input },
+        "worker",
+      ),
+      eventV2(
+        runId,
+        6,
+        "step.assigned",
+        { attempt: 1, agentId: "worker", harnessId: "stdio" },
+        "worker",
+      ),
+      eventV2(runId, 7, "agent.started", { attempt: 1, pid: 42 }, "worker"),
+      eventV2(runId, 8, "control.accepted", { requestId, action: "cancel" }),
+      eventV2(runId, 9, "workflow.cancelling", { requestId }),
+      eventV2(runId, 10, "step.attempt.interrupted", { attempt: 1 }, "worker"),
+      eventV2(runId, 11, "step.cancelled", { attempt: 1 }, "worker"),
+      eventV2(runId, 12, "workflow.cancelled", {}),
+    ];
+    for (const entry of events) await journal.append(runId, entry);
+
+    expect((await journal.replay(runId)).status).toBe("terminal");
+  });
 });

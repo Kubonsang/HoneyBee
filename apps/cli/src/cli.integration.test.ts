@@ -4,6 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { FileRunControl } from "@honeybee/core";
+import { RunIdSchema } from "@honeybee/orchestration-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -122,6 +124,9 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(new Set(output.steps.map((step) => step.pid)).size).toBe(3);
     expect(output.result).toContain("step=finalize");
 
+    const journal = await readFile(output.journalPath, "utf8");
+    expect(journal).toContain('"kind":"step-content"');
+
     const shown = await runCli(["run", "show", output.runId, "--json"], cwd);
     expect(shown.exitCode).toBe(0);
     expect(JSON.parse(shown.stdout)).toMatchObject({ status: "completed" });
@@ -135,6 +140,16 @@ describe("HoneyBee CLI sequential orchestration", () => {
     const refused = await runCli(["run", "delete", output.runId, "--json"], cwd);
     expect(refused.exitCode).toBe(1);
     expect(await readFile(output.journalPath, "utf8")).toContain("workflow.completed");
+
+    const controls = new FileRunControl(path.join(cwd, ".honeybee", "runs"));
+    const executorLease = await controls.acquire(RunIdSchema.parse(output.runId));
+    try {
+      const raced = await runCli(["run", "delete", output.runId, "--yes", "--json"], cwd);
+      expect(raced.exitCode).toBe(1);
+      expect(await readFile(output.journalPath, "utf8")).toContain("workflow.completed");
+    } finally {
+      await executorLease.release();
+    }
 
     const deleted = await runCli(["run", "delete", output.runId, "--yes", "--json"], cwd);
     expect(deleted.exitCode).toBe(0);

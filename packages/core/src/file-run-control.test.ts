@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -41,5 +41,49 @@ describe("FileRunControl", () => {
     await lease.release();
     expect(await controls.executorPresent(runId)).toBe(false);
     await (await controls.acquire(runId)).release();
+  });
+
+  it("allows exactly one atomic takeover of a stale executor lease", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const active = path.join(root, ".leases", "active", runId);
+    await mkdir(active, { recursive: true });
+    await writeFile(
+      path.join(active, "owner.json"),
+      `${JSON.stringify({ schemaVersion: 1, leaseId: randomUUID(), pid: 2_147_483_647 })}\n`,
+      "utf8",
+    );
+
+    const controls = new FileRunControl(root);
+    const attempts = await Promise.allSettled([controls.acquire(runId), controls.acquire(runId)]);
+    const acquired = attempts.find((attempt) => attempt.status === "fulfilled");
+    const rejected = attempts.find((attempt) => attempt.status === "rejected");
+    expect(acquired?.status).toBe("fulfilled");
+    expect(rejected?.status).toBe("rejected");
+    if (rejected?.status === "rejected") {
+      expect(rejected.reason).toMatchObject({ code: "run.already-running" });
+    }
+    expect(await controls.executorPresent(runId)).toBe(true);
+    expect(await readdir(path.join(root, ".leases", "stale"))).toHaveLength(1);
+    if (acquired?.status === "fulfilled") await acquired.value.release();
+    expect(await controls.executorPresent(runId)).toBe(false);
+  });
+
+  it("keeps the exclusive lease valid while the Run directory is deleted", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    const repository = new FileRunRepository(root);
+    await repository.create(runId);
+    const controls = new FileRunControl(root);
+    const deletionLease = await controls.acquire(runId);
+
+    await expect(controls.acquire(runId)).rejects.toMatchObject({ code: "run.already-running" });
+    await repository.delete(runId);
+    expect(await controls.executorPresent(runId)).toBe(true);
+    await deletionLease.release();
+    expect(await controls.executorPresent(runId)).toBe(false);
   });
 });

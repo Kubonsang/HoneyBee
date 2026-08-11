@@ -34,6 +34,9 @@ describe("loadWorkflowConfig", () => {
         async (configPath) => {
           const config = await loadWorkflowConfig(configPath);
           expect(config.schemaVersion).toBe(3);
+          expect(config.harnesses).toEqual([
+            { id: "stdio", kind: "stdio-framed-v1", protocolVersion: 1 },
+          ]);
           expect(config.steps.map((step) => step.id)).toEqual(["producer", "reviewer"]);
           expect(config.agents[1]?.command).toBe("C:\\Agent Home\\npm\\opencode.exe");
           expect(config.agents[1]?.cwd).toBe(path.dirname(configPath));

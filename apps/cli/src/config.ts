@@ -93,7 +93,7 @@ const linearV3 = (
   return WorkflowConfigV3Schema.parse({
     schemaVersion: 3,
     agents: commands.map((entry) => canonicalAgent(entry.id, entry.command)),
-    harnesses: [{ id: harnessId, kind: "stdio-framed-v2", protocolVersion: 2 }],
+    harnesses: [{ id: harnessId, kind: "stdio-framed-v1", protocolVersion: 1 }],
     steps: commands.map((entry, index) => ({
       id: StepIdSchema.parse(entry.id),
       type: "agent",

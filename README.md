@@ -72,13 +72,13 @@ Agents define executable programs. Harnesses define how HoneyBee communicates wi
 
 IDs must match `^[a-z][a-z0-9_-]{0,63}$`. Config objects are strict at every level, graph references and output ports must exist, and combined dependency/data/condition edges must be acyclic. Omitting `maxParallelism` defaults to `1`.
 
-SchemaVersion 1 producer/reviewer and schemaVersion 2 ordered-step configs are translated to equivalent v3 linear DAGs with `maxParallelism: 1`.
+SchemaVersion 1 producer/reviewer and schemaVersion 2 ordered-step configs are translated to equivalent v3 linear DAGs with `maxParallelism: 1`. Their commands continue to receive `AgentInputEnvelopeV1` and return the legacy `content` response through the `stdio-framed-v1` compatibility harness; loading an old config never silently switches its Agent protocol.
 
 The optional [Codex → OpenCode example](examples/codex-opencode.windows.json) uses the same v3 Agent/Harness separation.
 
 ## Agent protocol
 
-HoneyBee stores the exact validated `AgentInputEnvelopeV2` as a `step-input` Artifact before starting a process. Named inputs are always re-read from the Artifact Store and integrity-checked. A completed Agent response returns exactly the declared named outputs; `blocked` and `escalated` remain semantic outcomes independent of exit code.
+HoneyBee stores the exact validated Agent input envelope as a `step-input` Artifact before starting a process. A v3 `AgentInputEnvelopeV2` includes an authoritative `outputs` map declaring every required port and media type. Named inputs are always re-read from the Artifact Store and integrity-checked. A completed Agent response returns exactly those declared named outputs; `blocked` and `escalated` remain semantic outcomes independent of exit code.
 
 UTF-8 text and JSON output Artifacts are supported. JSON Artifact values can drive the restricted `all`, `any`, `not`, `stepOutcome`, and JSON Pointer comparison condition DSL. Arbitrary JavaScript and shell conditions are not executed.
 
@@ -98,7 +98,7 @@ corepack pnpm honeybee run resolve-attempt <run-id> <step-id> --retry
 corepack pnpm honeybee run delete <run-id> --yes
 ```
 
-One executor lease owns Journal writes for a Run. Other CLI processes publish idempotent control requests that become authoritative only after the executor records `control.accepted`.
+One executor lease owns Journal writes for a Run. Lease publication and stale takeover use atomic ownership-directory transitions, and `run delete` must hold the same exclusive lease while removing the Run. Other CLI processes publish idempotent control requests that become authoritative only after the executor records `control.accepted`.
 
 Pause stops new scheduling and waits for in-flight attempts to finish. Cancel stops scheduling, signals in-flight processes, and force-terminates them after the configured grace period. Approval is a non-Agent step that stores an approved/rejected decision Artifact for subsequent conditional branches.
 

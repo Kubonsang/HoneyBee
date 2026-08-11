@@ -1,4 +1,5 @@
-import { mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { lstat, mkdir, open, readFile, readdir, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -26,6 +27,22 @@ const processExists = (pid: number): boolean => {
   }
 };
 
+interface LeaseObservation {
+  readonly identity: string;
+  readonly leaseId?: string;
+  readonly pid?: number;
+}
+
+interface LeasePaths {
+  readonly active: string;
+  readonly candidate: string;
+  readonly stale: string;
+  readonly released: string;
+}
+
+const contentionError = (error: unknown): boolean =>
+  ["EEXIST", "ENOTEMPTY", "EPERM", "EACCES", "ENOENT"].includes(errorCode(error) ?? "");
+
 export class FileRunControl implements RunLeaseManager {
   readonly #root: string;
 
@@ -34,37 +51,74 @@ export class FileRunControl implements RunLeaseManager {
   }
 
   public async acquire(runId: RunId): Promise<RunLease> {
-    const directory = this.#runDirectory(runId);
-    const lockPath = path.join(directory, "executor.lock");
-    for (let attempt = 0; attempt < 2; attempt += 1) {
-      try {
-        const handle = await open(lockPath, "wx");
-        await handle.writeFile(`${process.pid}\n`, "utf8");
-        await handle.sync();
-        let released = false;
-        return {
-          release: async () => {
-            if (released) return;
-            released = true;
-            await handle.close();
-            await unlink(lockPath).catch(() => undefined);
-          },
-        };
-      } catch (error) {
-        if (errorCode(error) !== "EEXIST") {
-          throw new HoneyBeeCoreError("run.lease-failed", `Could not acquire Run ${runId}.`);
+    const validated = RunIdSchema.parse(runId);
+    const leaseId = randomUUID();
+    const paths = await this.#leasePaths(validated, leaseId);
+    await mkdir(paths.candidate);
+    const ownerPath = path.join(paths.candidate, "owner.json");
+    const owner = await open(ownerPath, "wx");
+    try {
+      await owner.writeFile(`${JSON.stringify({ schemaVersion: 1, leaseId, pid: process.pid })}\n`);
+      await owner.sync();
+    } finally {
+      await owner.close();
+    }
+
+    let acquired = false;
+    try {
+      for (let attempt = 0; attempt < 16; attempt += 1) {
+        try {
+          await rename(paths.candidate, paths.active);
+          acquired = true;
+          let released = false;
+          return {
+            release: async () => {
+              if (released) return;
+              released = true;
+              const current = await this.#readLease(paths.active);
+              if (current?.leaseId !== leaseId) return;
+              try {
+                await rename(paths.active, paths.released);
+              } catch (error) {
+                if (errorCode(error) === "ENOENT") return;
+                throw new HoneyBeeCoreError(
+                  "run.lease-failed",
+                  `Could not release Run ${validated}.`,
+                );
+              }
+              await rm(paths.released, { recursive: true, force: true });
+            },
+          };
+        } catch (error) {
+          if (!contentionError(error)) {
+            throw new HoneyBeeCoreError("run.lease-failed", `Could not acquire Run ${validated}.`);
+          }
         }
-        const pid = await this.#readPid(lockPath);
-        if (pid !== undefined && processExists(pid)) {
+
+        const current = await this.#readLease(paths.active);
+        if (current === undefined) continue;
+        if (current.pid !== undefined && processExists(current.pid)) {
           throw new HoneyBeeCoreError(
             "run.already-running",
-            `Run ${runId} already has an executor.`,
+            `Run ${validated} already has an executor.`,
           );
         }
-        await unlink(lockPath).catch(() => undefined);
+        const stalePath = path.join(paths.stale, `${validated}.${current.identity}`);
+        try {
+          await rename(paths.active, stalePath);
+        } catch (error) {
+          if (!contentionError(error)) {
+            throw new HoneyBeeCoreError(
+              "run.lease-failed",
+              `Could not recover the stale lease for Run ${validated}.`,
+            );
+          }
+        }
       }
+      throw new HoneyBeeCoreError("run.lease-failed", `Could not acquire Run ${validated}.`);
+    } finally {
+      if (!acquired) await rm(paths.candidate, { recursive: true, force: true });
     }
-    throw new HoneyBeeCoreError("run.lease-failed", `Could not acquire Run ${runId}.`);
   }
 
   public async submit(request: ControlRequest): Promise<void> {
@@ -129,8 +183,10 @@ export class FileRunControl implements RunLeaseManager {
   }
 
   public async executorPresent(runId: RunId): Promise<boolean> {
-    const pid = await this.#readPid(path.join(this.#runDirectory(runId), "executor.lock"));
-    return pid !== undefined && processExists(pid);
+    const validated = RunIdSchema.parse(runId);
+    const paths = await this.#leasePaths(validated, randomUUID());
+    const lease = await this.#readLease(paths.active);
+    return lease?.pid !== undefined && processExists(lease.pid);
   }
 
   #runDirectory(runId: RunId): string {
@@ -142,13 +198,57 @@ export class FileRunControl implements RunLeaseManager {
     return target;
   }
 
-  async #readPid(lockPath: string): Promise<number | undefined> {
+  async #leasePaths(runId: RunId, leaseId: string): Promise<LeasePaths> {
+    const leaseRoot = path.join(this.#root, ".leases");
+    const activeRoot = path.join(leaseRoot, "active");
+    const candidateRoot = path.join(leaseRoot, "candidates");
+    const staleRoot = path.join(leaseRoot, "stale");
+    const releasedRoot = path.join(leaseRoot, "released");
+    await Promise.all(
+      [activeRoot, candidateRoot, staleRoot, releasedRoot].map((directory) =>
+        mkdir(directory, { recursive: true }),
+      ),
+    );
+    return {
+      active: path.join(activeRoot, runId),
+      candidate: path.join(candidateRoot, leaseId),
+      stale: staleRoot,
+      released: path.join(releasedRoot, `${runId}.${leaseId}`),
+    };
+  }
+
+  async #readLease(activePath: string): Promise<LeaseObservation | undefined> {
     try {
-      const value = Number.parseInt((await readFile(lockPath, "utf8")).trim(), 10);
-      return Number.isSafeInteger(value) && value > 0 ? value : undefined;
+      const raw = await readFile(path.join(activePath, "owner.json"), "utf8");
+      const parsed = JSON.parse(raw) as unknown;
+      if (typeof parsed === "object" && parsed !== null) {
+        const leaseId =
+          "leaseId" in parsed && typeof parsed.leaseId === "string" ? parsed.leaseId : undefined;
+        const pid =
+          "pid" in parsed && Number.isSafeInteger(parsed.pid) && (parsed.pid as number) > 0
+            ? (parsed.pid as number)
+            : undefined;
+        const validatedLeaseId = EventIdSchema.safeParse(leaseId);
+        if (validatedLeaseId.success) {
+          return {
+            identity: validatedLeaseId.data,
+            leaseId: validatedLeaseId.data,
+            ...(pid === undefined ? {} : { pid }),
+          };
+        }
+      }
+      return { identity: createHash("sha256").update(raw).digest("hex") };
     } catch (error) {
-      if (errorCode(error) === "ENOENT") return undefined;
-      return undefined;
+      if (errorCode(error) !== "ENOENT") {
+        throw new HoneyBeeCoreError("run.lease-failed", "Could not inspect the executor lease.");
+      }
+      try {
+        const entry = await lstat(activePath);
+        return entry.isDirectory() ? { identity: "missing-owner" } : undefined;
+      } catch (entryError) {
+        if (errorCode(entryError) === "ENOENT") return undefined;
+        throw new HoneyBeeCoreError("run.lease-failed", "Could not inspect the executor lease.");
+      }
     }
   }
 }

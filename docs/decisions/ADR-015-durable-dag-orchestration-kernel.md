@@ -12,7 +12,7 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 
 ### Config와 graph
 
-- Canonical config는 strict `WorkflowConfigV3`다. v1/v2 config는 `maxParallelism: 1`인 선형 v3 DAG로 변환한다.
+- Canonical config는 strict `WorkflowConfigV3`다. v1/v2 config는 `maxParallelism: 1`인 선형 v3 DAG로 변환하되, 기존 Agent에는 `stdio-framed-v1` compatibility harness로 `AgentInputEnvelopeV1`/response v1 계약을 유지한다.
 - Agent는 executable profile이고 Harness는 process communication 방식이다. Step은 두 branded ID를 독립적으로 참조한다.
 - `needs` control edge, named Artifact input edge, condition reference를 합친 graph가 acyclic이어야 한다.
 - 여러 root/leaf, fan-out과 fan-in을 허용한다. ready step 선택은 Step ID 순으로 결정하며 동시에 실행하는 Agent attempt는 `maxParallelism`을 넘지 않는다.
@@ -20,7 +20,7 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 
 ### Artifact와 조건
 
-- Agent 입력은 named input port를 가진 `AgentInputEnvelopeV2`다. 모든 source Artifact는 각 attempt 전에 Store에서 다시 읽고 length/digest를 검증한다.
+- v3 Agent 입력은 named input port와 required output port/media type을 함께 가진 `AgentInputEnvelopeV2`다. 모든 source Artifact는 각 attempt 전에 Store에서 다시 읽고 length/digest를 검증한다.
 - Agent는 선언된 output port와 media type을 정확히 반환해야 한다. partial publish된 Artifact는 `step.completed`가 output map을 확정하기 전까지 step 결과가 아니다.
 - v0.3 Agent payload는 UTF-8 text와 JSON만 지원한다.
 - 조건은 step outcome 또는 JSON Artifact의 RFC 6901 pointer를 대상으로 하는 제한식 DSL이다. 임의 코드 실행은 허용하지 않는다.
@@ -35,7 +35,7 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 
 ### Single writer와 control
 
-- 하나의 executor lease만 Run Journal을 기록한다.
+- 하나의 executor lease만 Run Journal을 기록한다. 완성된 ownership directory를 atomic publish하고, stale lease는 관측한 lease ID별 tombstone으로 atomic 이동해 takeover 경쟁자가 새 live lease를 제거하지 못하게 한다. Run 삭제도 같은 lease를 획득한 동안 수행한다.
 - pause, cancel, approval, interrupted resolution 명령은 원자적 control inbox에 UUID request로 저장한다.
 - inbox와 lock은 운영 수단일 뿐 Run 상태의 권위가 아니다. executor가 `control.accepted`를 flush한 뒤에만 요청에 semantic 의미가 생긴다.
 - pause는 새 scheduling을 막고 in-flight attempt가 끝난 checkpoint에서 `workflow.paused`가 된다.

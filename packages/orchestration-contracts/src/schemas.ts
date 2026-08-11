@@ -307,13 +307,26 @@ const uniqueIds = <T extends { id: string }>(
 export const AgentDefinitionSchema = AgentCommandSchema.extend({ id: AgentIdSchema }).strict();
 export type AgentDefinition = z.infer<typeof AgentDefinitionSchema>;
 
-export const HarnessDefinitionSchema = z
+const StdioFramedHarnessV1Schema = z
+  .object({
+    id: HarnessIdSchema,
+    kind: z.literal("stdio-framed-v1"),
+    protocolVersion: z.literal(1),
+  })
+  .strict();
+
+const StdioFramedHarnessV2Schema = z
   .object({
     id: HarnessIdSchema,
     kind: z.literal("stdio-framed-v2"),
     protocolVersion: z.literal(2),
   })
   .strict();
+
+export const HarnessDefinitionSchema = z.discriminatedUnion("protocolVersion", [
+  StdioFramedHarnessV1Schema,
+  StdioFramedHarnessV2Schema,
+]);
 export type HarnessDefinition = z.infer<typeof HarnessDefinitionSchema>;
 
 export const ArtifactBindingSchema = z
@@ -481,7 +494,7 @@ export const WorkflowConfigV3Schema = z
     uniqueIds(config.harnesses, context, "harnesses");
     uniqueIds(config.steps, context, "steps");
     const agents = new Set(config.agents.map((agent) => agent.id));
-    const harnesses = new Set(config.harnesses.map((harness) => harness.id));
+    const harnesses = new Map(config.harnesses.map((harness) => [harness.id, harness]));
     const steps = new Map(config.steps.map((step) => [step.id, step]));
     const dependencies = new Map<StepId, Set<StepId>>();
     for (const [index, step] of config.steps.entries()) {
@@ -492,12 +505,46 @@ export const WorkflowConfigV3Schema = z
           message: "Unknown Agent.",
         });
       }
-      if (step.type === "agent" && !harnesses.has(step.harnessRef)) {
+      const harness = step.type === "agent" ? harnesses.get(step.harnessRef) : undefined;
+      if (step.type === "agent" && harness === undefined) {
         context.addIssue({
           code: "custom",
           path: ["steps", index, "harnessRef"],
           message: "Unknown Harness.",
         });
+      }
+      if (step.type === "agent" && harness?.protocolVersion === 1) {
+        const outputEntries = Object.entries(step.outputs);
+        if (
+          outputEntries.length !== 1 ||
+          outputEntries[0]?.[0] !== "content" ||
+          outputEntries[0]?.[1].mediaType !== "text/plain; charset=utf-8"
+        ) {
+          context.addIssue({
+            code: "custom",
+            path: ["steps", index, "outputs"],
+            message: "Protocol v1 Agents require one text/plain content output.",
+          });
+        }
+        const unsupportedInput = Object.keys(step.inputs ?? {}).find((name) => name !== "previous");
+        if (unsupportedInput !== undefined) {
+          context.addIssue({
+            code: "custom",
+            path: ["steps", index, "inputs", unsupportedInput],
+            message: "Protocol v1 Agents support only the previous input.",
+          });
+        }
+        const previous = step.inputs?.["previous" as PortName];
+        const source = previous === undefined ? undefined : steps.get(previous.from.stepId);
+        const sourceHarness =
+          source?.type === "agent" ? harnesses.get(source.harnessRef) : undefined;
+        if (previous !== undefined && sourceHarness?.protocolVersion !== 1) {
+          context.addIssue({
+            code: "custom",
+            path: ["steps", index, "inputs", "previous"],
+            message: "Protocol v1 previous input must come from a protocol v1 Agent.",
+          });
+        }
       }
       const refs = new Set<StepId>([...(step.needs ?? []), ...conditionReferences(step.when)]);
       if (new Set(step.needs ?? []).size !== (step.needs ?? []).length) {
@@ -627,6 +674,11 @@ export const AgentInputEnvelopeV2Schema = z
         })
         .strict(),
     ),
+    outputs: z
+      .record(PortNameSchema, OutputDeclarationSchema)
+      .refine((value) => Object.keys(value).length > 0, {
+        message: "Agent input must declare at least one output.",
+      }),
   })
   .strict()
   .superRefine((input, context) => {
