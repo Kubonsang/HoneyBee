@@ -5,36 +5,54 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  AgentIdSchema,
   ChildProcessAgentRunner,
+  DagOrchestrationWorkflow,
+  EventIdSchema,
   FileArtifactStore,
   FileOrchestrationJournal,
+  FileRunControl,
   FileRunRepository,
+  HarnessIdSchema,
   HoneyBeeCoreError,
-  OrchestrationWorkflow,
   RunIdSchema,
   StepIdSchema,
-  type OrchestrationEventV1,
-  type OrchestrationJournal,
-  type WorkflowRunRequest,
+  WorkflowConfigV3Schema,
+  type AnyOrchestrationEvent,
+  type ControlAction,
+  type DagWorkflowRunResult,
+  type RunId,
+  type VersionedOrchestrationJournal,
+  type WorkflowConfigV3,
+  type HoneyBeeCoreErrorCode,
 } from "@honeybee/core";
 
 import { loadWorkflowConfig } from "./config.js";
 
-const VERSION = "0.2.0";
+const VERSION = "0.3.0";
 const HELP = `HoneyBee ${VERSION}
 
 Usage:
   honeybee demo --task <text> [--json]
   honeybee run --config <path> --task <text> [--json]
   honeybee run show <run-id> [--json]
+  honeybee run pause <run-id> [--json]
+  honeybee run resume <run-id> [--json]
+  honeybee run cancel <run-id> [--json]
+  honeybee run approve <run-id> <step-id> [--json]
+  honeybee run reject <run-id> <step-id> [--json]
+  honeybee run resolve-attempt <run-id> <step-id> --retry|--fail [--json]
   honeybee run delete <run-id> --yes [--json]
   honeybee version
 
 Commands:
-  demo        Run a deterministic two-process sequential workflow.
-  run         Run a schemaVersion 1 or 2 Agent configuration.
-  run show    Replay the JSONL journal for one Run.
-  run delete  Delete exactly one Run and its Artifacts.
+  demo                 Run a deterministic two-process compatible workflow.
+  run                  Run a strict schemaVersion 1, 2, or 3 configuration.
+  run show             Replay durable Run and Step state.
+  run pause/resume     Pause at a checkpoint or resume from the Journal.
+  run approve/reject   Resolve a durable human approval gate.
+  run cancel           Cancel in-flight work with a bounded grace period.
+  run resolve-attempt  Explicitly resolve an interrupted Agent attempt.
 `;
 
 type ParsedArguments =
@@ -48,7 +66,15 @@ type ParsedArguments =
       json: boolean;
     }>
   | Readonly<{ command: "show"; runId: string; json: boolean }>
-  | Readonly<{ command: "delete"; runId: string; yes: boolean; json: boolean }>;
+  | Readonly<{ command: "resume"; runId: string; json: boolean }>
+  | Readonly<{ command: "delete"; runId: string; yes: boolean; json: boolean }>
+  | Readonly<{
+      command: "control";
+      runId: string;
+      action: ControlAction;
+      stepId?: string;
+      json: boolean;
+    }>;
 
 const optionValue = (args: readonly string[], name: string): string | undefined => {
   const index = args.indexOf(name);
@@ -65,17 +91,46 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
   if (args[0] === "version" || args.includes("--version")) {
     return { command: "version", json: false };
   }
-  if (args[0] === "run" && (args[1] === "show" || args[1] === "delete")) {
-    const runId = args[2];
-    if (runId === undefined || runId.startsWith("--")) throw new Error("run-id is required.");
-    return args[1] === "show"
-      ? { command: "show", runId, json: args.includes("--json") }
-      : {
-          command: "delete",
-          runId,
-          yes: args.includes("--yes"),
-          json: args.includes("--json"),
-        };
+  if (args[0] === "run" && args[1] !== undefined) {
+    const subcommand = args[1];
+    if (
+      [
+        "show",
+        "resume",
+        "delete",
+        "pause",
+        "cancel",
+        "approve",
+        "reject",
+        "resolve-attempt",
+      ].includes(subcommand)
+    ) {
+      const runId = args[2];
+      if (runId === undefined || runId.startsWith("--")) throw new Error("run-id is required.");
+      const json = args.includes("--json");
+      if (subcommand === "show" || subcommand === "resume")
+        return { command: subcommand, runId, json };
+      if (subcommand === "delete")
+        return { command: "delete", runId, yes: args.includes("--yes"), json };
+      if (subcommand === "pause" || subcommand === "cancel") {
+        return { command: "control", runId, action: subcommand, json };
+      }
+      const stepId = args[3];
+      if (stepId === undefined || stepId.startsWith("--")) throw new Error("step-id is required.");
+      if (subcommand === "approve" || subcommand === "reject") {
+        return { command: "control", runId, stepId, action: subcommand, json };
+      }
+      const action = args.includes("--retry")
+        ? "retry"
+        : args.includes("--fail")
+          ? "fail"
+          : undefined;
+      if (action === undefined)
+        throw new Error("resolve-attempt needs exactly one of --retry or --fail.");
+      if (args.includes("--retry") && args.includes("--fail"))
+        throw new Error("Use only one resolution.");
+      return { command: "control", runId, stepId, action, json };
+    }
   }
   if (args[0] !== "demo" && args[0] !== "run") {
     throw new Error(`Unknown command: ${args[0] ?? ""}`);
@@ -91,63 +146,64 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
   };
 };
 
-const eventLine = (event: OrchestrationEventV1): string => {
-  switch (event.type) {
-    case "workflow.started":
-      return `[workflow] started run=${event.runId} steps=${event.payload.stepCount}`;
-    case "artifact.stored":
-      return `[artifact] stored kind=${event.payload.artifact.kind} id=${event.payload.artifact.artifactId}`;
-    case "step.assigned":
-      return `[${event.stepId}] assigned ${event.payload.stepIndex + 1}/${event.payload.totalSteps}`;
-    case "agent.started":
-      return `[${event.stepId}] agent started pid=${event.payload.pid}`;
-    case "agent.exited":
-      return `[${event.stepId}] agent exited pid=${event.payload.pid} code=${String(event.payload.exitCode)} duration=${event.payload.durationMs}ms`;
-    case "handoff.created":
-      return `[handoff] ${event.payload.fromStepId} -> ${event.payload.toStepId}`;
-    case "step.completed":
-    case "step.blocked":
-    case "step.escalated":
-    case "step.failed":
-      return `[${event.stepId}] ${event.type.slice("step.".length)}`;
-    case "workflow.completed":
-    case "workflow.blocked":
-    case "workflow.escalated":
-    case "workflow.failed":
-      return `[workflow] ${event.type.slice("workflow.".length)}`;
+const eventLine = (event: AnyOrchestrationEvent): string => {
+  if (event.type === "workflow.started") {
+    return `[workflow] started run=${event.runId} steps=${event.payload.stepCount}`;
   }
+  if (event.type === "artifact.stored") {
+    return `[artifact] stored kind=${event.payload.artifact.kind} id=${event.payload.artifact.artifactId}`;
+  }
+  if (event.type === "agent.started")
+    return `[${event.stepId}] agent started pid=${event.payload.pid}`;
+  if (event.type === "agent.exited") {
+    return `[${event.stepId}] agent exited pid=${event.payload.pid} code=${String(event.payload.exitCode)} duration=${event.payload.durationMs}ms`;
+  }
+  return `[${event.stepId ?? "workflow"}] ${event.type}`;
 };
 
-const demoRequest = (runId: WorkflowRunRequest["runId"], task: string): WorkflowRunRequest => {
+const demoConfig = (): WorkflowConfigV3 => {
   const demoAgentPath = fileURLToPath(new URL("./demo-agent.js", import.meta.url));
-  return {
-    runId,
-    task,
+  const harnessId = HarnessIdSchema.parse("stdio");
+  return WorkflowConfigV3Schema.parse({
+    schemaVersion: 3,
+    agents: ["producer", "reviewer"].map((id) => ({
+      id: AgentIdSchema.parse(id),
+      command: process.execPath,
+      args: [demoAgentPath, id],
+    })),
+    harnesses: [{ id: harnessId, kind: "stdio-framed-v2", protocolVersion: 2 }],
     steps: [
       {
         id: StepIdSchema.parse("producer"),
-        agent: { command: process.execPath, args: [demoAgentPath, "producer"] },
+        type: "agent",
+        agentRef: AgentIdSchema.parse("producer"),
+        harnessRef: harnessId,
+        outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
       },
       {
         id: StepIdSchema.parse("reviewer"),
-        agent: { command: process.execPath, args: [demoAgentPath, "reviewer"] },
+        type: "agent",
+        agentRef: AgentIdSchema.parse("reviewer"),
+        harnessRef: harnessId,
+        needs: [StepIdSchema.parse("producer")],
+        inputs: { previous: { from: { stepId: "producer", output: "content" } } },
+        outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
       },
     ],
-    timeoutMs: 10_000,
-  };
+    defaultTimeoutMs: 10_000,
+    maxParallelism: 1,
+  });
 };
 
 const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
-
 const output = (value: unknown, json: boolean): void => {
   process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${String(value)}\n`);
 };
 
 class CliRunExecutionError extends Error {
   public override readonly name = "CliRunExecutionError";
-
   public constructor(
-    public readonly runId: ReturnType<typeof RunIdSchema.parse>,
+    public readonly runId: RunId,
     public readonly journalPath: string,
     public override readonly cause: unknown,
   ) {
@@ -155,74 +211,131 @@ class CliRunExecutionError extends Error {
   }
 }
 
+const workflowFor = (
+  root: string,
+  journal: VersionedOrchestrationJournal,
+  controls: FileRunControl,
+): DagOrchestrationWorkflow =>
+  new DagOrchestrationWorkflow(
+    new ChildProcessAgentRunner(),
+    new FileArtifactStore(root),
+    journal,
+    controls,
+  );
+
+const printableResult = (result: DagWorkflowRunResult) => ({
+  ...result,
+  steps: result.steps.map((step) => ({ ...step, status: step.state })),
+});
+
+const finishExecution = (
+  result: DagWorkflowRunResult,
+  journalPath: string,
+  json: boolean,
+): void => {
+  if (json)
+    output({ ok: result.status === "completed", ...printableResult(result), journalPath }, true);
+  else
+    output(
+      `Run ${result.runId}: ${result.status}${result.result === undefined ? "" : `\n${result.result}`}`,
+      false,
+    );
+  if (result.status === "failed") process.exitCode = 1;
+  else if (result.status === "blocked") process.exitCode = 2;
+  else if (result.status === "escalated") process.exitCode = 3;
+  else if (result.status === "paused" || result.status === "interrupted") process.exitCode = 4;
+  else if (result.status === "cancelled") process.exitCode = 130;
+};
+
 const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
   if (args.task === undefined || args.task.trim().length === 0)
     throw new Error("--task is required.");
   const config =
-    args.mode === "run"
-      ? await (async () => {
+    args.mode === "demo"
+      ? demoConfig()
+      : await (async () => {
           if (args.config === undefined) throw new Error("--config is required for run.");
           return loadWorkflowConfig(args.config);
-        })()
-      : undefined;
+        })();
   const runId = RunIdSchema.parse(randomUUID());
   const root = stateRoot();
-  const repository = new FileRunRepository(root);
-  await repository.create(runId);
+  await new FileRunRepository(root).create(runId);
+  const controls = new FileRunControl(root);
+  const lease = await controls.acquire(runId);
   const fileJournal = new FileOrchestrationJournal(root);
   const eventOutput = args.json ? process.stderr : process.stdout;
-  const journal: OrchestrationJournal = {
+  const journal: VersionedOrchestrationJournal = {
     append: async (eventRunId, event) => {
       await fileJournal.append(eventRunId, event);
+      if (
+        event.schemaVersion === 2 &&
+        event.type === "step.attempt.started" &&
+        event.stepId !== undefined
+      ) {
+        const step = config.steps.find((candidate) => candidate.id === event.stepId);
+        const source = Object.values(step?.inputs ?? {})[0]?.from.stepId;
+        if (source !== undefined) eventOutput.write(`[handoff] ${source} -> ${event.stepId}\n`);
+      }
       eventOutput.write(`${eventLine(event)}\n`);
     },
     replay: (eventRunId) => fileJournal.replay(eventRunId),
   };
   const journalPath = path.join(root, runId, "events.jsonl");
-  let request: WorkflowRunRequest;
-  if (args.mode === "demo") {
-    request = demoRequest(runId, args.task);
-  } else {
-    if (config === undefined) throw new Error("--config is required for run.");
-    request = {
+  try {
+    const result = await workflowFor(root, journal, controls).run({
       runId,
       task: args.task,
-      steps: config.steps,
-      ...(config.timeoutMs === undefined ? {} : { timeoutMs: config.timeoutMs }),
-      ...(config.maxOutputBytes === undefined ? {} : { maxOutputBytes: config.maxOutputBytes }),
-    };
-  }
-  const result = await new OrchestrationWorkflow(
-    new ChildProcessAgentRunner(),
-    new FileArtifactStore(root),
-    journal,
-  )
-    .run(request)
-    .catch((error: unknown) => {
-      throw new CliRunExecutionError(runId, journalPath, error);
+      config,
     });
-
-  if (args.json) {
-    output({ ok: result.status === "completed", ...result, journalPath }, true);
-  } else if (result.status === "completed") {
-    output(`\nFinal result\n${result.result}\nRun: ${runId}`, false);
-  } else if (result.status === "blocked") {
-    output(`\nBlocked\n${result.reason}\nRun: ${runId}`, false);
-  } else {
-    output(`\nEscalated\n${result.reason}\n${result.question}\nRun: ${runId}`, false);
+    if (result.status === "failed") {
+      throw new HoneyBeeCoreError(
+        (result.failure?.errorCode ?? "workflow.step-failed") as HoneyBeeCoreErrorCode,
+        "One or more workflow steps failed.",
+      );
+    }
+    finishExecution(result, journalPath, args.json);
+  } catch (error) {
+    throw new CliRunExecutionError(runId, journalPath, error);
+  } finally {
+    await lease.release();
   }
-  if (result.status === "blocked") process.exitCode = 2;
-  if (result.status === "escalated") process.exitCode = 3;
+};
+
+const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>): Promise<void> => {
+  const runId = RunIdSchema.parse(args.runId);
+  const root = stateRoot();
+  await new FileRunRepository(root).open(runId);
+  const controls = new FileRunControl(root);
+  const lease = await controls.acquire(runId);
+  const journalPath = path.join(root, runId, "events.jsonl");
+  try {
+    const result = await workflowFor(root, new FileOrchestrationJournal(root), controls).resume(
+      runId,
+    );
+    if (result.status === "failed") {
+      throw new HoneyBeeCoreError(
+        (result.failure?.errorCode ?? "workflow.step-failed") as HoneyBeeCoreErrorCode,
+        "One or more workflow steps failed.",
+      );
+    }
+    finishExecution(result, journalPath, args.json);
+  } catch (error) {
+    throw new CliRunExecutionError(runId, journalPath, error);
+  } finally {
+    await lease.release();
+  }
 };
 
 const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Promise<void> => {
   const runId = RunIdSchema.parse(args.runId);
   const root = stateRoot();
   await new FileRunRepository(root).open(runId);
-  const replay = await new FileOrchestrationJournal(root).replay(runId);
+  const journal = new FileOrchestrationJournal(root);
+  const replay = await journal.replay(runId);
   if (replay.status === "indeterminate") {
     const payload = {
       ok: false,
+      runId,
       status: "indeterminate",
       code: replay.code,
       message: replay.message,
@@ -232,11 +345,98 @@ const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Pro
     process.exitCode = 1;
     return;
   }
-  const status = replay.terminal.type.slice("workflow.".length);
+  const executorPresent = await new FileRunControl(root).executorPresent(runId);
+  if (replay.events[0]?.schemaVersion === 1) {
+    const terminal = replay.status === "terminal" ? replay.terminal : undefined;
+    const status = terminal?.type.slice("workflow.".length) ?? "indeterminate";
+    output(
+      args.json
+        ? { ok: true, runId, status, terminal, eventCount: replay.events.length, executorPresent }
+        : `Run ${runId}: ${status}`,
+      args.json,
+    );
+    return;
+  }
+  if (replay.status === "terminal") {
+    const status = replay.terminal.type.slice("workflow.".length);
+    const steps = new Map<
+      string,
+      { stepId: string; status: string; attempt?: number; pid?: number }
+    >();
+    for (const event of replay.events) {
+      if (event.schemaVersion !== 2 || event.stepId === undefined) continue;
+      const current = steps.get(event.stepId) ?? { stepId: event.stepId, status: "pending" };
+      if (event.type === "step.attempt.started") {
+        current.status = "running";
+        current.attempt = event.payload.attempt;
+      } else if (event.type === "agent.started") {
+        current.pid = event.payload.pid;
+      } else if (event.type.startsWith("step.")) {
+        const semantic = event.type.slice("step.".length);
+        if (
+          ["completed", "blocked", "escalated", "failed", "skipped", "cancelled"].includes(semantic)
+        ) {
+          current.status = semantic;
+        }
+      }
+      steps.set(event.stepId, current);
+    }
+    output(
+      args.json
+        ? {
+            ok: status !== "failed",
+            runId,
+            status,
+            terminal: replay.terminal,
+            steps: [...steps.values()],
+            eventCount: replay.events.length,
+            executorPresent,
+          }
+        : `Run ${runId}: ${status}`,
+      args.json,
+    );
+    return;
+  }
+  const result = await workflowFor(root, journal, new FileRunControl(root)).inspect(runId);
   output(
     args.json
-      ? { ok: true, runId, status, terminal: replay.terminal, eventCount: replay.events.length }
-      : `Run ${runId}: ${status}`,
+      ? {
+          ok: !["failed", "indeterminate"].includes(result.status),
+          ...printableResult(result),
+          eventCount: replay.events.length,
+          executorPresent,
+        }
+      : `Run ${runId}: ${result.status}`,
+    args.json,
+  );
+};
+
+const submitControl = async (
+  args: Extract<ParsedArguments, { command: "control" }>,
+): Promise<void> => {
+  const runId = RunIdSchema.parse(args.runId);
+  const root = stateRoot();
+  await new FileRunRepository(root).open(runId);
+  const replay = await new FileOrchestrationJournal(root).replay(runId);
+  if (replay.status === "indeterminate") {
+    throw new HoneyBeeCoreError("run.indeterminate", replay.message);
+  }
+  if (replay.status === "terminal") {
+    throw new HoneyBeeCoreError("run.terminal", "A terminal Run cannot accept control requests.");
+  }
+  const stepId = args.stepId === undefined ? undefined : StepIdSchema.parse(args.stepId);
+  const request = {
+    requestId: EventIdSchema.parse(randomUUID()),
+    runId,
+    action: args.action,
+    ...(stepId === undefined ? {} : { stepId }),
+    timestamp: new Date().toISOString(),
+  } as const;
+  await new FileRunControl(root).submit(request);
+  output(
+    args.json
+      ? { ok: true, runId, requestId: request.requestId, action: request.action, pending: true }
+      : `Queued ${request.action} for Run ${runId}.`,
     args.json,
   );
 };
@@ -248,23 +448,26 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     process.exitCode = 1;
     return;
   }
-  await new FileRunRepository(stateRoot()).delete(runId);
+  const root = stateRoot();
+  if (await new FileRunControl(root).executorPresent(runId)) {
+    throw new HoneyBeeCoreError(
+      "run.already-running",
+      "Cannot delete a Run with an active executor.",
+    );
+  }
+  await new FileRunRepository(root).delete(runId);
   output(args.json ? { ok: true, runId, deleted: true } : `Deleted Run ${runId}.`, args.json);
 };
 
 const main = async (): Promise<void> => {
   const args = parseArguments(process.argv.slice(2));
-  if (args.command === "help") {
-    process.stdout.write(HELP);
-    return;
-  }
-  if (args.command === "version") {
-    process.stdout.write(`${VERSION}\n`);
-    return;
-  }
+  if (args.command === "help") return void process.stdout.write(HELP);
+  if (args.command === "version") return void process.stdout.write(`${VERSION}\n`);
   if (args.command === "execute") return execute(args);
   if (args.command === "show") return showRun(args);
-  if (args.command === "delete") return deleteRun(args);
+  if (args.command === "resume") return resumeRun(args);
+  if (args.command === "control") return submitControl(args);
+  return deleteRun(args);
 };
 
 void main().catch((error: unknown) => {

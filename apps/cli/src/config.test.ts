@@ -18,7 +18,7 @@ const withConfig = async (value: unknown, run: (path: string) => Promise<void>):
 };
 
 describe("loadWorkflowConfig", () => {
-  it("maps schemaVersion 1 producer/reviewer config to canonical v2 steps", async () => {
+  it("maps schemaVersion 1 producer/reviewer config to a canonical v3 linear DAG", async () => {
     const previous = process.env.HONEYBEE_TEST_APPDATA;
     process.env.HONEYBEE_TEST_APPDATA = "C:\\Agent Home";
     try {
@@ -33,10 +33,11 @@ describe("loadWorkflowConfig", () => {
         },
         async (configPath) => {
           const config = await loadWorkflowConfig(configPath);
-          expect(config.schemaVersion).toBe(2);
+          expect(config.schemaVersion).toBe(3);
           expect(config.steps.map((step) => step.id)).toEqual(["producer", "reviewer"]);
-          expect(config.steps[1]?.agent.command).toBe("C:\\Agent Home\\npm\\opencode.exe");
-          expect(config.steps[1]?.agent.cwd).toBe(path.dirname(configPath));
+          expect(config.agents[1]?.command).toBe("C:\\Agent Home\\npm\\opencode.exe");
+          expect(config.agents[1]?.cwd).toBe(path.dirname(configPath));
+          expect(config.steps[1]).toMatchObject({ needs: ["producer"] });
         },
       );
     } finally {
@@ -103,6 +104,35 @@ describe("loadWorkflowConfig", () => {
   ] as const)("rejects unknown v2 %s fields before normalization", async (_scope, candidate) => {
     await withConfig(candidate, async (configPath) =>
       expect(loadWorkflowConfig(configPath)).rejects.toThrow("Invalid schemaVersion 2 config"),
+    );
+  });
+
+  it("loads strict v3 Agent/Harness registries and rejects nested unknown fields", async () => {
+    const candidate = {
+      schemaVersion: 3,
+      agents: [{ id: "worker", command: "agent", cwd: "." }],
+      harnesses: [{ id: "stdio", kind: "stdio-framed-v2", protocolVersion: 2 }],
+      steps: [
+        {
+          id: "worker",
+          type: "agent",
+          agentRef: "worker",
+          harnessRef: "stdio",
+          outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+        },
+      ],
+      maxParallelism: 2,
+    };
+    await withConfig(candidate, async (configPath) => {
+      const loaded = await loadWorkflowConfig(configPath);
+      expect(loaded.schemaVersion).toBe(3);
+      expect(loaded.agents[0]?.cwd).toBe(path.dirname(configPath));
+      expect(loaded.maxParallelism).toBe(2);
+    });
+    await withConfig(
+      { ...candidate, steps: [{ ...candidate.steps[0], typo: true }] },
+      async (configPath) =>
+        expect(loadWorkflowConfig(configPath)).rejects.toThrow("Invalid schemaVersion 3 config"),
     );
   });
 });

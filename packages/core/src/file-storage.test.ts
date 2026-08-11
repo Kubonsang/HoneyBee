@@ -5,9 +5,12 @@ import path from "node:path";
 
 import {
   ArtifactIdSchema,
+  EventIdSchema,
+  OrchestrationEventV2Schema,
   OrchestrationEventV1Schema,
   RunIdSchema,
   type OrchestrationEventV1,
+  type OrchestrationEventV2,
 } from "@honeybee/orchestration-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -39,6 +42,24 @@ const event = (
     sequence,
     timestamp: new Date(0).toISOString(),
     type,
+    payload,
+  });
+
+const eventV2 = (
+  runId: ReturnType<typeof RunIdSchema.parse>,
+  sequence: number,
+  type: OrchestrationEventV2["type"],
+  payload: unknown,
+  stepId?: string,
+): OrchestrationEventV2 =>
+  OrchestrationEventV2Schema.parse({
+    schemaVersion: 2,
+    eventId: EventIdSchema.parse(randomUUID()),
+    runId,
+    sequence,
+    timestamp: new Date(0).toISOString(),
+    type,
+    ...(stepId === undefined ? {} : { stepId }),
     payload,
   });
 
@@ -188,5 +209,51 @@ describe("filesystem run persistence", () => {
         stderr: "secret",
       }),
     ).toThrow();
+  });
+
+  it("replays a valid v2 nonterminal Journal and rejects impossible transitions", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const config = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    await journal.append(
+      runId,
+      eventV2(runId, 1, "workflow.started", {
+        stepCount: 1,
+        maxParallelism: 1,
+        config,
+        task,
+      }),
+    );
+    await journal.append(runId, eventV2(runId, 2, "artifact.stored", { artifact: config }));
+    await journal.append(runId, eventV2(runId, 3, "artifact.stored", { artifact: task }));
+    expect((await journal.replay(runId)).status).toBe("active");
+
+    await expect(
+      journal.append(runId, eventV2(runId, 4, "agent.started", { attempt: 1, pid: 42 }, "worker")),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    await journal.append(runId, eventV2(runId, 4, "workflow.completed", { outputs: {} }));
+    expect((await journal.replay(runId)).status).toBe("terminal");
+    await expect(
+      new FileOrchestrationJournal(root).append(
+        runId,
+        eventV2(runId, 5, "workflow.failed", { errorCode: "late" }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
   });
 });

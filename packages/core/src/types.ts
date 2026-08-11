@@ -1,4 +1,5 @@
 import type {
+  AnyOrchestrationEvent,
   ArtifactId,
   ArtifactKind,
   ArtifactMediaType,
@@ -6,9 +7,14 @@ import type {
   ContentDigest,
   FailureMetadata,
   OrchestrationEventV1,
+  OrchestrationEventV2,
+  PortName,
   RunId,
   StepId,
   TerminalWorkflowEvent,
+  TerminalWorkflowEventV2,
+  ControlRequest,
+  WorkflowConfigV3,
   WorkflowStep,
 } from "@honeybee/orchestration-contracts";
 
@@ -19,6 +25,8 @@ export interface AgentProcessRequest {
   readonly command: WorkflowStep["agent"];
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
+  readonly signal?: AbortSignal;
+  readonly cancelGraceMs?: number;
 }
 
 export interface AgentExitObservation {
@@ -40,7 +48,7 @@ export interface AgentProcessLifecycle {
 export interface AgentProcessResult extends AgentExitObservation {
   readonly stepId: StepId;
   readonly command: string;
-  readonly termination: "exited" | "timed-out" | "output-limit";
+  readonly termination: "exited" | "timed-out" | "output-limit" | "cancelled";
   readonly stdout: string;
   readonly stderr: string;
 }
@@ -91,7 +99,98 @@ export type JournalReplay =
 
 export interface OrchestrationJournal {
   append(runId: RunId, event: OrchestrationEventV1): Promise<void>;
-  replay(runId: RunId): Promise<JournalReplay>;
+  replay(runId: RunId): Promise<AnyJournalReplay>;
+}
+
+export type JournalReplayV2 =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV2[];
+      terminal: TerminalWorkflowEventV2;
+    }>
+  | Readonly<{
+      status: "active";
+      events: readonly OrchestrationEventV2[];
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
+export type AnyJournalReplay = JournalReplay | JournalReplayV2;
+
+export interface VersionedOrchestrationJournal {
+  append(runId: RunId, event: AnyOrchestrationEvent): Promise<void>;
+  replay(runId: RunId): Promise<AnyJournalReplay>;
+}
+
+export interface RunControlPort {
+  submit(request: ControlRequest): Promise<void>;
+  pending(runId: RunId): Promise<readonly ControlRequest[]>;
+  acknowledge(request: ControlRequest): Promise<void>;
+  executorPresent(runId: RunId): Promise<boolean>;
+}
+
+export interface RunLease {
+  release(): Promise<void>;
+}
+
+export interface RunLeaseManager extends RunControlPort {
+  acquire(runId: RunId): Promise<RunLease>;
+}
+
+export interface DagWorkflowRunRequest {
+  readonly runId: RunId;
+  readonly task: string;
+  readonly config: WorkflowConfigV3;
+}
+
+export type DagStepState =
+  | "pending"
+  | "ready"
+  | "running"
+  | "retry-wait"
+  | "waiting-approval"
+  | "completed"
+  | "skipped"
+  | "failed"
+  | "blocked"
+  | "escalated"
+  | "interrupted"
+  | "cancelled";
+
+export interface DagStepResult {
+  readonly stepId: StepId;
+  readonly state: DagStepState;
+  readonly attempt: number;
+  readonly outputs: Readonly<Record<PortName, ArtifactRef>>;
+  readonly input?: ArtifactRef;
+  readonly pid?: number;
+}
+
+export type DagRunState =
+  | "running"
+  | "pausing"
+  | "paused"
+  | "waiting-approval"
+  | "interrupted"
+  | "cancelling"
+  | "completed"
+  | "failed"
+  | "blocked"
+  | "escalated"
+  | "cancelled"
+  | "indeterminate";
+
+export interface DagWorkflowRunResult {
+  readonly runId: RunId;
+  readonly status: DagRunState;
+  readonly task: ArtifactRef;
+  readonly steps: readonly DagStepResult[];
+  readonly outputs: Readonly<Record<StepId, Readonly<Record<PortName, ArtifactRef>>>>;
+  readonly result?: string;
+  readonly failure?: FailureMetadata;
 }
 
 export interface WorkflowRunRequest {

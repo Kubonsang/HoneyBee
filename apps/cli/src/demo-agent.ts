@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { AgentInputEnvelopeV1Schema } from "@honeybee/orchestration-contracts";
+import { AgentInputEnvelopeV2Schema, PortNameSchema } from "@honeybee/orchestration-contracts";
 
 const readInput = async (): Promise<string> => {
   process.stdin.setEncoding("utf8");
@@ -19,24 +19,31 @@ const block = (input: string, begin: string, end: string): string => {
 try {
   const label = process.argv[2] ?? "agent";
   const prompt = await readInput();
-  const envelope = AgentInputEnvelopeV1Schema.parse(
+  const envelope = AgentInputEnvelopeV2Schema.parse(
     JSON.parse(block(prompt, "HONEYBEE_INPUT_BEGIN", "HONEYBEE_INPUT_END")),
   );
-  if (label === "fail") {
+  if (label === "fail" || (label === "flaky" && envelope.step.attempt === 1)) {
     process.stderr.write("deterministic Agent failure\n");
     process.exitCode = 7;
   } else {
+    if (label === "slow") await new Promise((resolve) => setTimeout(resolve, 1_000));
+    const previous = envelope.inputs[PortNameSchema.parse("previous")]?.content;
+    const joined = Object.values(envelope.inputs)
+      .map((value) => value.content)
+      .join(" | ");
     const content =
-      envelope.previous === null
+      Object.keys(envelope.inputs).length === 0
         ? `DEMO_HANDOFF pid=${process.pid} step=${label} task=${envelope.task.content}`
-        : `DEMO_RESULT pid=${process.pid} step=${label} previous=${envelope.previous.content} task=${envelope.task.content}`;
+        : `DEMO_RESULT pid=${process.pid} step=${label} previous=${previous ?? joined} task=${envelope.task.content}`;
     process.stdout.write(
       `HONEYBEE_RESPONSE_BEGIN\n${JSON.stringify({
-        schemaVersion: 1,
+        schemaVersion: 2,
         runId: envelope.runId,
         stepId: envelope.step.id,
         status: "completed",
-        content,
+        outputs: {
+          content: { mediaType: "text/plain; charset=utf-8", content },
+        },
       })}\nHONEYBEE_RESPONSE_END`,
     );
   }
