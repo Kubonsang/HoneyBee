@@ -350,7 +350,14 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
         phases.set(stepId, "failed");
         break;
       case "step.skipped":
-        if (stepId === undefined || phase !== undefined) return false;
+        if (
+          stepId === undefined ||
+          (phase !== undefined &&
+            !(
+              event.payload.reason === "workflow-cancelled" && ["approval", "retry"].includes(phase)
+            ))
+        )
+          return false;
         phases.set(stepId, "skipped");
         break;
       case "step.cancelled":

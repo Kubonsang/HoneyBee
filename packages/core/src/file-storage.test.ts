@@ -375,6 +375,33 @@ describe("filesystem run persistence", () => {
         ),
       ),
     ).rejects.toMatchObject({ code: "journal.write-failed" });
+
+    await journal.append(
+      runId,
+      eventV2(
+        runId,
+        10,
+        "retry.scheduled",
+        {
+          attempt: 2,
+          errorCode: "agent.non-zero-exit",
+          notBefore: new Date(0).toISOString(),
+        },
+        "worker",
+      ),
+    );
+    const requestId = EventIdSchema.parse(randomUUID());
+    await journal.append(
+      runId,
+      eventV2(runId, 11, "control.accepted", { requestId, action: "cancel" }),
+    );
+    await journal.append(runId, eventV2(runId, 12, "workflow.cancelling", { requestId }));
+    await journal.append(
+      runId,
+      eventV2(runId, 13, "step.skipped", { reason: "workflow-cancelled" }, "worker"),
+    );
+    await journal.append(runId, eventV2(runId, 14, "workflow.cancelled", {}));
+    expect((await journal.replay(runId)).status).toBe("terminal");
   });
 
   it("accepts interrupted-to-cancelled closure after restoring a cancelling Run", async () => {

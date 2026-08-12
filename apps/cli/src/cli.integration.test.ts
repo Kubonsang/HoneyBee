@@ -309,6 +309,41 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(JSON.parse(completed.stdout)).toMatchObject({ status: "completed" });
   }, 20_000);
 
+  it("cancels a Run waiting at an approval gate", async () => {
+    const cwd = await temporaryDirectory();
+    const configPath = path.join(cwd, "cancel-approval.json");
+    await writeFile(
+      configPath,
+      JSON.stringify({
+        schemaVersion: 3,
+        agents: [{ id: "unused", command: process.execPath, args: [demoAgentPath, "unused"] }],
+        harnesses: [{ id: "stdio", kind: "stdio-framed-v2", protocolVersion: 2 }],
+        steps: [
+          {
+            id: "gate",
+            type: "approval",
+            outputs: { decision: { mediaType: "application/json" } },
+          },
+        ],
+      }),
+      "utf8",
+    );
+    const active = startCli(["run", "--config", configPath, "--task", "cancel", "--json"], cwd);
+    await vi.waitFor(() => expect(active.state.stderr).toContain("workflow.waiting-approval"));
+    const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
+    expect(runId).toBeDefined();
+
+    const cancellation = await runCli(["run", "cancel", runId ?? "", "--json"], cwd);
+    expect(cancellation.exitCode).toBe(0);
+    const completed = await active.completed;
+    expect(completed.exitCode).toBe(130);
+    const result = JSON.parse(completed.stdout) as CliOutput;
+    expect(result.status).toBe("cancelled");
+    expect((await readFile(result.journalPath, "utf8")).trimEnd()).toMatch(
+      /"type":"workflow\.cancelled"[^\n]*$/u,
+    );
+  }, 20_000);
+
   it("pauses after an in-flight process and resumes without repeating it", async () => {
     const cwd = await temporaryDirectory();
     const configPath = path.join(cwd, "pause.json");

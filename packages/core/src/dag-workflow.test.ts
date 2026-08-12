@@ -109,6 +109,15 @@ class MemoryJournal implements VersionedOrchestrationJournal {
   }
 }
 
+class FailingCompletionJournal extends MemoryJournal {
+  public override async append(runId: RunId, event: AnyOrchestrationEvent): Promise<void> {
+    if (event.schemaVersion === 2 && event.type === "step.completed" && event.stepId === "left") {
+      throw new HoneyBeeCoreError("journal.write-failed", "Simulated Journal failure.");
+    }
+    await super.append(runId, event);
+  }
+}
+
 class MemoryControls implements RunControlPort {
   readonly requests: ControlRequest[] = [];
   public async submit(request: ControlRequest): Promise<void> {
@@ -139,6 +148,7 @@ class DagRunner implements AgentProcessRunner {
   readonly inputs = new Map<string, ReturnType<typeof AgentInputEnvelopeV2Schema.parse>>();
   readonly attempts = new Map<string, number>();
   readonly timeouts = new Map<string, number>();
+  readonly cancelled = new Set<string>();
   active = 0;
   maxActive = 0;
 
@@ -220,16 +230,20 @@ class DagRunner implements AgentProcessRunner {
       stdoutDigest: digest(stdout),
       stderrDigest: digest(""),
     };
-    await lifecycle.onExited(observation);
-    this.active -= 1;
-    return {
-      ...observation,
-      stepId: request.stepId,
-      command: request.command.command,
-      termination,
-      stdout,
-      stderr: "",
-    };
+    if (termination === "cancelled") this.cancelled.add(request.stepId);
+    try {
+      await lifecycle.onExited(observation);
+      return {
+        ...observation,
+        stepId: request.stepId,
+        command: request.command.command,
+        termination,
+        stdout,
+        stderr: "",
+      };
+    } finally {
+      this.active -= 1;
+    }
   }
 }
 
@@ -914,6 +928,26 @@ describe("DagOrchestrationWorkflow", () => {
     const eventCount = journal.events.length;
     await new Promise((resolve) => setTimeout(resolve, 25));
     expect(journal.events).toHaveLength(eventCount);
+  });
+
+  it("aborts and drains active siblings before propagating a fatal executor error", async () => {
+    const runner = new DagRunner({
+      delayByStep: new Map([
+        ["left", 5],
+        ["right", 500],
+      ]),
+    });
+    const workflow = new DagOrchestrationWorkflow(
+      runner,
+      new MemoryArtifacts(),
+      new FailingCompletionJournal(),
+    );
+
+    await expect(
+      workflow.run(request(config([agentStep("left"), agentStep("right")], 2))),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    expect(runner.active).toBe(0);
+    expect(runner.cancelled).toContain("right");
   });
 
   it("cancels an in-flight Agent and does not schedule pending work", async () => {

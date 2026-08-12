@@ -429,108 +429,114 @@ export class DagOrchestrationWorkflow {
   async #execute(context: ExecutionContext): Promise<DagWorkflowRunResult> {
     const running = new Map<StepId, Promise<void>>();
     let fatalError: unknown;
-    while (true) {
-      if (fatalError !== undefined) throw fatalError;
-      await this.#consumeControls(context);
-      if (context.cancelRequested) {
-        for (const aborter of context.aborters.values()) aborter.abort();
-        await Promise.allSettled(running.values());
-        for (const runtime of context.state.steps.values()) {
-          if (runtime.state === "interrupted") {
-            await context.writer.emit(
-              "step.cancelled",
-              { attempt: runtime.attempt },
-              runtime.definition.id,
-            );
-            runtime.state = "cancelled";
-            continue;
-          }
-          if (!settled(runtime.state)) {
-            await context.writer.emit(
-              "step.skipped",
-              { reason: "workflow-cancelled" },
-              runtime.definition.id,
-            );
-            runtime.state = "skipped";
-          }
-        }
-        await context.writer.emit("workflow.cancelled", {});
-        context.state.runState = "cancelled";
-        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
-      }
-      if (
-        !context.pauseRequested &&
-        [...context.state.steps.values()].some((runtime) => runtime.state === "interrupted")
-      ) {
-        await Promise.allSettled([...running.values()]);
+    try {
+      while (true) {
         if (fatalError !== undefined) throw fatalError;
-        context.state.runState = "interrupted";
-        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
-      }
-
-      let progressed = false;
-      if (!context.pauseRequested) {
-        progressed = await this.#refreshReady(context);
-        for (const runtime of [...context.state.steps.values()].sort((left, right) =>
-          left.definition.id.localeCompare(right.definition.id),
-        )) {
-          if (runtime.state !== "ready") continue;
-          if (runtime.definition.type === "approval") {
-            try {
-              await this.#requestApproval(context, runtime);
-            } catch (error) {
+        await this.#consumeControls(context);
+        if (context.cancelRequested) {
+          for (const aborter of context.aborters.values()) aborter.abort();
+          await Promise.allSettled(running.values());
+          for (const runtime of context.state.steps.values()) {
+            if (runtime.state === "interrupted") {
               await context.writer.emit(
-                "step.failed",
-                failureMetadata(error),
+                "step.cancelled",
+                { attempt: runtime.attempt },
                 runtime.definition.id,
               );
-              context.state.failure = failureMetadata(error);
-              runtime.state = "failed";
+              runtime.state = "cancelled";
+              continue;
             }
-            progressed = true;
-            continue;
+            if (!settled(runtime.state)) {
+              await context.writer.emit(
+                "step.skipped",
+                { reason: "workflow-cancelled" },
+                runtime.definition.id,
+              );
+              runtime.state = "skipped";
+            }
           }
-          if (running.size >= (context.config.maxParallelism ?? 1)) break;
-          runtime.state = "running";
-          const operation = this.#executeAgent(context, runtime)
-            .catch((error: unknown) => {
-              fatalError = error;
-            })
-            .finally(() => {
-              running.delete(runtime.definition.id);
-              context.aborters.delete(runtime.definition.id);
-            });
-          running.set(runtime.definition.id, operation);
-          progressed = true;
+          await context.writer.emit("workflow.cancelled", {});
+          context.state.runState = "cancelled";
+          return this.#result(context.runId, context.taskArtifact, context.config, context.state);
         }
-      }
+        if (
+          !context.pauseRequested &&
+          [...context.state.steps.values()].some((runtime) => runtime.state === "interrupted")
+        ) {
+          await Promise.allSettled([...running.values()]);
+          if (fatalError !== undefined) throw fatalError;
+          context.state.runState = "interrupted";
+          return this.#result(context.runId, context.taskArtifact, context.config, context.state);
+        }
 
-      if (context.pauseRequested && running.size === 0) {
+        let progressed = false;
+        if (!context.pauseRequested) {
+          progressed = await this.#refreshReady(context);
+          for (const runtime of [...context.state.steps.values()].sort((left, right) =>
+            left.definition.id.localeCompare(right.definition.id),
+          )) {
+            if (runtime.state !== "ready") continue;
+            if (runtime.definition.type === "approval") {
+              try {
+                await this.#requestApproval(context, runtime);
+              } catch (error) {
+                await context.writer.emit(
+                  "step.failed",
+                  failureMetadata(error),
+                  runtime.definition.id,
+                );
+                context.state.failure = failureMetadata(error);
+                runtime.state = "failed";
+              }
+              progressed = true;
+              continue;
+            }
+            if (running.size >= (context.config.maxParallelism ?? 1)) break;
+            runtime.state = "running";
+            const operation = this.#executeAgent(context, runtime)
+              .catch((error: unknown) => {
+                fatalError = error;
+              })
+              .finally(() => {
+                running.delete(runtime.definition.id);
+                context.aborters.delete(runtime.definition.id);
+              });
+            running.set(runtime.definition.id, operation);
+            progressed = true;
+          }
+        }
+
+        if (context.pauseRequested && running.size === 0) {
+          if ([...context.state.steps.values()].every((runtime) => settled(runtime.state))) {
+            return this.#finish(context);
+          }
+          await context.writer.emit("workflow.paused", {});
+          context.state.runState = "paused";
+          return this.#result(context.runId, context.taskArtifact, context.config, context.state);
+        }
+
         if ([...context.state.steps.values()].every((runtime) => settled(runtime.state))) {
+          if (running.size > 0) await Promise.allSettled(running.values());
           return this.#finish(context);
         }
-        await context.writer.emit("workflow.paused", {});
-        context.state.runState = "paused";
-        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
-      }
 
-      if ([...context.state.steps.values()].every((runtime) => settled(runtime.state))) {
-        if (running.size > 0) await Promise.allSettled(running.values());
-        return this.#finish(context);
-      }
+        if ([...context.state.steps.values()].some((runtime) => runtime.state === "interrupted")) {
+          await Promise.allSettled([...running.values()]);
+          if (fatalError !== undefined) throw fatalError;
+          context.state.runState = "interrupted";
+          return this.#result(context.runId, context.taskArtifact, context.config, context.state);
+        }
 
-      if ([...context.state.steps.values()].some((runtime) => runtime.state === "interrupted")) {
-        await Promise.allSettled([...running.values()]);
-        if (fatalError !== undefined) throw fatalError;
-        context.state.runState = "interrupted";
-        return this.#result(context.runId, context.taskArtifact, context.config, context.state);
+        if (!progressed) {
+          const waits = [...running.values()];
+          waits.push(delay(100));
+          await Promise.race(waits);
+        }
       }
-
-      if (!progressed) {
-        const waits = [...running.values()];
-        waits.push(delay(100));
-        await Promise.race(waits);
-      }
+    } catch (error) {
+      for (const aborter of context.aborters.values()) aborter.abort();
+      await Promise.allSettled([...running.values()]);
+      throw error;
     }
   }
 
