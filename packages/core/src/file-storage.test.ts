@@ -257,6 +257,126 @@ describe("filesystem run persistence", () => {
     ).rejects.toMatchObject({ code: "journal.write-failed" });
   });
 
+  it("rejects outcomes and retries that do not match the active Agent attempt", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const config = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const input = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "step-input",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const reason = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "blocked-reason",
+      mediaType: "text/plain; charset=utf-8",
+      content: "reason",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    const events: OrchestrationEventV2[] = [
+      eventV2(runId, 1, "workflow.started", {
+        stepCount: 1,
+        maxParallelism: 1,
+        config,
+        task,
+      }),
+      eventV2(runId, 2, "artifact.stored", { artifact: config }),
+      eventV2(runId, 3, "artifact.stored", { artifact: task }),
+      eventV2(runId, 4, "artifact.stored", { artifact: input }, "worker"),
+      eventV2(
+        runId,
+        5,
+        "step.attempt.started",
+        { attempt: 1, agentId: "worker", harnessId: "stdio", input },
+        "worker",
+      ),
+      eventV2(
+        runId,
+        6,
+        "step.assigned",
+        { attempt: 1, agentId: "worker", harnessId: "stdio" },
+        "worker",
+      ),
+      eventV2(runId, 7, "agent.started", { attempt: 1, pid: 42 }, "worker"),
+      eventV2(
+        runId,
+        8,
+        "agent.exited",
+        {
+          attempt: 1,
+          pid: 42,
+          exitCode: 0,
+          signal: null,
+          durationMs: 1,
+          stdoutBytes: 0,
+          stderrBytes: 0,
+          stdoutDigest: `sha256:${"0".repeat(64)}`,
+          stderrDigest: `sha256:${"0".repeat(64)}`,
+        },
+        "worker",
+      ),
+    ];
+    for (const entry of events) await journal.append(runId, entry);
+
+    const invalidOutcomes = [
+      eventV2(runId, 9, "step.completed", { attempt: 2, outputs: {} }, "worker"),
+      eventV2(runId, 9, "step.blocked", { attempt: 2, reason }, "worker"),
+      eventV2(runId, 9, "step.escalated", { attempt: 2, reason, question: reason }, "worker"),
+      eventV2(runId, 9, "step.attempt.interrupted", { attempt: 2 }, "worker"),
+      eventV2(runId, 9, "step.cancelled", { attempt: 2 }, "worker"),
+    ];
+    for (const invalid of invalidOutcomes) {
+      await expect(journal.append(runId, invalid)).rejects.toMatchObject({
+        code: "journal.write-failed",
+      });
+    }
+
+    await journal.append(
+      runId,
+      eventV2(
+        runId,
+        9,
+        "step.attempt.failed",
+        { attempt: 1, errorCode: "agent.non-zero-exit" },
+        "worker",
+      ),
+    );
+    await expect(
+      journal.append(
+        runId,
+        eventV2(
+          runId,
+          10,
+          "retry.scheduled",
+          {
+            attempt: 3,
+            errorCode: "agent.non-zero-exit",
+            notBefore: new Date(0).toISOString(),
+          },
+          "worker",
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+  });
+
   it("accepts interrupted-to-cancelled closure after restoring a cancelling Run", async () => {
     const root = await temporaryRoot();
     const runId = RunIdSchema.parse(randomUUID());

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -41,6 +41,48 @@ describe("FileRunControl", () => {
     await lease.release();
     expect(await controls.executorPresent(runId)).toBe(false);
     await (await controls.acquire(runId)).release();
+  });
+
+  it("publishes complete control requests atomically and ignores private temporary files", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const controls = new FileRunControl(root);
+    const request = {
+      requestId: EventIdSchema.parse(randomUUID()),
+      runId,
+      action: "pause" as const,
+      timestamp: new Date().toISOString(),
+    };
+
+    await Promise.all(Array.from({ length: 8 }, () => controls.submit(request)));
+    const inbox = path.join(root, runId, "control", "inbox");
+    await writeFile(path.join(inbox, ".partial.tmp"), "{", "utf8");
+
+    expect(await controls.pending(runId)).toEqual([request]);
+    expect((await readdir(inbox)).filter((name) => name.endsWith(".json"))).toEqual([
+      `${request.requestId}.json`,
+    ]);
+  });
+
+  it("does not recreate a Run that was deleted before control publication", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    const repository = new FileRunRepository(root);
+    await repository.create(runId);
+    await repository.delete(runId);
+
+    await expect(
+      new FileRunControl(root).submit({
+        requestId: EventIdSchema.parse(randomUUID()),
+        runId,
+        action: "cancel",
+        timestamp: new Date().toISOString(),
+      }),
+    ).rejects.toMatchObject({ code: "run.not-found" });
+    await expect(lstat(path.join(root, runId))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("allows exactly one atomic takeover of a stale executor lease", async () => {

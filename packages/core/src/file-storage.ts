@@ -96,6 +96,12 @@ export class FileRunRepository extends FileRunScopedStore implements RunReposito
       }
       throw new HoneyBeeCoreError("run.invalid-path", `Could not create run ${runId}.`);
     }
+    try {
+      await mkdir(path.join(directory, "control", "inbox"), { recursive: true });
+    } catch {
+      await rm(directory, { recursive: true, force: true });
+      throw new HoneyBeeCoreError("run.invalid-path", `Could not initialize run ${runId}.`);
+    }
   }
 
   public async open(runId: RunId): Promise<RunRecord> {
@@ -236,10 +242,23 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
     const phase = stepId === undefined ? undefined : phases.get(stepId);
     switch (event.type) {
       case "step.attempt.started":
-        if (stepId === undefined || ![undefined, "retry", "interrupted"].includes(phase))
+        if (
+          stepId === undefined ||
+          ![undefined, "retry"].includes(phase) ||
+          (phase === undefined && event.payload.attempt !== 1) ||
+          (phase === "retry" && attempts.get(stepId) !== event.payload.attempt)
+        )
           return false;
         phases.set(stepId, "attempt");
         attempts.set(stepId, event.payload.attempt);
+        break;
+      case "step.assigned":
+        if (
+          stepId === undefined ||
+          phase !== "attempt" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
         break;
       case "agent.started":
         if (
@@ -260,22 +279,37 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
         phases.set(stepId, "exited");
         break;
       case "agent.input-write-failed":
-        if (stepId === undefined || !["agent", "exited"].includes(phase ?? "")) return false;
+        if (
+          stepId === undefined ||
+          !["agent", "exited"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
         break;
       case "step.attempt.failed":
-        if (stepId === undefined || !["attempt", "agent", "exited"].includes(phase ?? ""))
+        if (
+          stepId === undefined ||
+          !["attempt", "agent", "exited"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
           return false;
         phases.set(stepId, "attempt-failed");
         break;
       case "retry.scheduled":
-        if (stepId === undefined || !["attempt-failed", "interrupted"].includes(phase ?? ""))
+        if (
+          stepId === undefined ||
+          !["attempt-failed", "interrupted"].includes(phase ?? "") ||
+          event.payload.attempt !== (attempts.get(stepId) ?? 0) + 1
+        )
           return false;
         phases.set(stepId, "retry");
+        attempts.set(stepId, event.payload.attempt);
         break;
       case "step.attempt.interrupted":
         if (
           stepId === undefined ||
-          !["attempt", "agent", "exited", "attempt-failed"].includes(phase ?? "")
+          !["attempt", "agent", "exited", "attempt-failed"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
         )
           return false;
         phases.set(stepId, "interrupted");
@@ -285,16 +319,33 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
         phases.set(stepId, "approval");
         break;
       case "step.completed":
-        if (stepId === undefined || !["exited", "approval"].includes(phase ?? "")) return false;
+        if (
+          stepId === undefined ||
+          !["exited", "approval"].includes(phase ?? "") ||
+          (phase === "exited" && attempts.get(stepId) !== event.payload.attempt) ||
+          (phase === "approval" && event.payload.attempt !== 0)
+        )
+          return false;
         phases.set(stepId, "completed");
         break;
       case "step.blocked":
       case "step.escalated":
-        if (stepId === undefined || phase !== "exited") return false;
+        if (
+          stepId === undefined ||
+          phase !== "exited" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
         phases.set(stepId, event.type.slice("step.".length));
         break;
       case "step.failed":
-        if (stepId === undefined || ![undefined, "attempt-failed", "interrupted"].includes(phase))
+        if (
+          stepId === undefined ||
+          ![undefined, "attempt-failed", "interrupted"].includes(phase) ||
+          (event.payload.attempt !== undefined &&
+            attempts.has(stepId) &&
+            attempts.get(stepId) !== event.payload.attempt)
+        )
           return false;
         phases.set(stepId, "failed");
         break;
@@ -305,7 +356,8 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
       case "step.cancelled":
         if (
           stepId === undefined ||
-          !["attempt", "agent", "exited", "interrupted"].includes(phase ?? "")
+          !["attempt", "agent", "exited", "interrupted"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
         )
           return false;
         phases.set(stepId, "cancelled");
@@ -338,7 +390,6 @@ const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean =>
       case "workflow.started":
         return false;
       case "artifact.stored":
-      case "step.assigned":
       case "control.accepted":
         break;
     }

@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { lstat, mkdir, open, readFile, readdir, rename, rm, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rename, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -206,20 +206,25 @@ export class FileRunControl implements RunLeaseManager {
 
   public async submit(request: ControlRequest): Promise<void> {
     const parsed = ControlRequestSchema.parse(request);
-    const inbox = path.join(this.#runDirectory(parsed.runId), "control", "inbox");
-    await mkdir(inbox, { recursive: true });
+    const inbox = await this.#requireInbox(parsed.runId);
     const requestPath = path.join(inbox, `${EventIdSchema.parse(parsed.requestId)}.json`);
+    const temporaryPath = path.join(inbox, `.${parsed.requestId}.${randomUUID()}.tmp`);
+    let temporaryExists = false;
     try {
-      const handle = await open(requestPath, "wx");
+      const handle = await open(temporaryPath, "wx");
+      temporaryExists = true;
       try {
         await handle.writeFile(`${JSON.stringify(parsed)}\n`, "utf8");
         await handle.sync();
       } finally {
         await handle.close();
       }
+      await link(temporaryPath, requestPath);
     } catch (error) {
       if (errorCode(error) === "EEXIST") return;
       throw new HoneyBeeCoreError("control.write-failed", "Control request could not be stored.");
+    } finally {
+      if (temporaryExists) await unlink(temporaryPath).catch(() => undefined);
     }
   }
 
@@ -279,6 +284,17 @@ export class FileRunControl implements RunLeaseManager {
       throw new HoneyBeeCoreError("run.invalid-path", "Run path escaped the run repository.");
     }
     return target;
+  }
+
+  async #requireInbox(runId: RunId): Promise<string> {
+    const inbox = path.join(this.#runDirectory(runId), "control", "inbox");
+    try {
+      const entry = await lstat(inbox);
+      if (!entry.isDirectory() || entry.isSymbolicLink()) throw new Error("not a real directory");
+      return inbox;
+    } catch {
+      throw new HoneyBeeCoreError("run.not-found", `Run ${runId} does not exist.`);
+    }
   }
 
   async #leasePaths(runId: RunId, leaseId: string): Promise<LeasePaths> {

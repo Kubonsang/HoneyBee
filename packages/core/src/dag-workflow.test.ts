@@ -68,6 +68,31 @@ class InterruptingArtifacts extends MemoryArtifacts {
   }
 }
 
+class BlockingTaskArtifacts extends MemoryArtifacts {
+  readonly entered: Promise<void>;
+  #release: () => void = () => undefined;
+  #markEntered: () => void = () => undefined;
+  #blocking = true;
+
+  public constructor() {
+    super();
+    this.entered = new Promise((resolve) => (this.#markEntered = resolve));
+  }
+
+  public release(): void {
+    this.#release();
+  }
+
+  public override async get(request: ArtifactGetRequest): Promise<string> {
+    if (request.artifact.kind === "task" && this.#blocking) {
+      this.#blocking = false;
+      this.#markEntered();
+      await new Promise<void>((resolve) => (this.#release = resolve));
+    }
+    return super.get(request);
+  }
+}
+
 class MemoryJournal implements VersionedOrchestrationJournal {
   readonly events: OrchestrationEventV2[] = [];
   public async append(_runId: RunId, event: AnyOrchestrationEvent): Promise<void> {
@@ -106,6 +131,7 @@ interface RunnerOptions {
   readonly delayByStep?: ReadonlyMap<string, number>;
   readonly failOnce?: ReadonlySet<string>;
   readonly jsonSteps?: ReadonlySet<string>;
+  readonly jsonByStep?: ReadonlyMap<string, unknown>;
   readonly escalateSteps?: ReadonlySet<string>;
 }
 
@@ -150,8 +176,10 @@ class DagRunner implements AgentProcessRunner {
       termination === "exited" &&
       this.options.failOnce?.has(request.stepId) === true &&
       attempt === 1;
-    const output =
-      this.options.jsonSteps?.has(request.stepId) === true
+    const jsonValue = this.options.jsonByStep?.get(request.stepId);
+    const output = this.options.jsonByStep?.has(request.stepId)
+      ? JSON.stringify(jsonValue)
+      : this.options.jsonSteps?.has(request.stepId) === true
         ? JSON.stringify({ accepted: true, step: request.stepId })
         : `${request.stepId}:${Object.values(input.inputs)
             .map((value) => value.content)
@@ -242,6 +270,49 @@ const request = (workflowConfig: WorkflowConfigV3) => ({
   task: "task",
   config: workflowConfig,
 });
+
+const seedActiveRun = async (
+  artifacts: MemoryArtifacts,
+  journal: MemoryJournal,
+  workflowConfig: WorkflowConfigV3,
+) => {
+  const runId = RunIdSchema.parse(randomUUID());
+  const configArtifact = await artifacts.put({
+    runId,
+    artifactId: ArtifactIdSchema.parse(randomUUID()),
+    kind: "workflow-config",
+    mediaType: "application/json",
+    content: JSON.stringify(workflowConfig),
+  });
+  const taskArtifact = await artifacts.put({
+    runId,
+    artifactId: ArtifactIdSchema.parse(randomUUID()),
+    kind: "task",
+    mediaType: "text/plain; charset=utf-8",
+    content: "task",
+  });
+  let sequence = 0;
+  const emit = async (type: OrchestrationEventV2["type"], payload: unknown, stepId?: StepId) =>
+    journal.append(runId, {
+      schemaVersion: 2,
+      eventId: EventIdSchema.parse(randomUUID()),
+      runId,
+      sequence: ++sequence,
+      timestamp: new Date().toISOString(),
+      type,
+      ...(stepId === undefined ? {} : { stepId }),
+      payload,
+    } as OrchestrationEventV2);
+  await emit("workflow.started", {
+    stepCount: workflowConfig.steps.length,
+    maxParallelism: workflowConfig.maxParallelism ?? 1,
+    config: configArtifact,
+    task: taskArtifact,
+  });
+  await emit("artifact.stored", { artifact: configArtifact });
+  await emit("artifact.stored", { artifact: taskArtifact });
+  return { runId, emit };
+};
 
 const seedRunningControlCheckpoint = async (
   artifacts: MemoryArtifacts,
@@ -373,7 +444,11 @@ describe("DagOrchestrationWorkflow", () => {
   });
 
   it("evaluates JSON Artifact conditions and records the unselected branch as skipped", async () => {
-    const runner = new DagRunner({ jsonSteps: new Set(["decision"]) });
+    const runner = new DagRunner({
+      jsonByStep: new Map([
+        ["decision", { accepted: true, choices: ["a", "b"], step: "decision" }],
+      ]),
+    });
     const journal = new MemoryJournal();
     const result = await new DagOrchestrationWorkflow(runner, new MemoryArtifacts(), journal).run(
       request(
@@ -411,6 +486,28 @@ describe("DagOrchestrationWorkflow", () => {
               },
             },
           }),
+          agentStep("array-equal", {
+            when: {
+              artifact: {
+                stepId: "decision",
+                output: "content",
+                pointer: "/choices",
+                op: "eq",
+                value: ["a", "b"],
+              },
+            },
+          }),
+          agentStep("array-not-equal", {
+            when: {
+              artifact: {
+                stepId: "decision",
+                output: "content",
+                pointer: "/choices",
+                op: "ne",
+                value: ["a", "b"],
+              },
+            },
+          }),
         ]),
       ),
     );
@@ -418,6 +515,8 @@ describe("DagOrchestrationWorkflow", () => {
     expect(result.steps.find((step) => step.stepId === "selected")?.state).toBe("completed");
     expect(result.steps.find((step) => step.stepId === "rejected")?.state).toBe("skipped");
     expect(result.steps.find((step) => step.stepId === "prototype")?.state).toBe("skipped");
+    expect(result.steps.find((step) => step.stepId === "array-equal")?.state).toBe("completed");
+    expect(result.steps.find((step) => step.stepId === "array-not-equal")?.state).toBe("skipped");
     expect(journal.events.some((event) => event.type === "step.skipped")).toBe(true);
   });
 
@@ -617,6 +716,134 @@ describe("DagOrchestrationWorkflow", () => {
     expect(cancelRunner.attempts.size).toBe(0);
   });
 
+  it.each(["pause", "cancel"] as const)(
+    "reapplies an accepted %s request when its effect event was not persisted",
+    async (action) => {
+      const artifacts = new MemoryArtifacts();
+      const journal = new MemoryJournal();
+      const runner = new DagRunner();
+      const workflowConfig = config([agentStep("only")], 1);
+      const { runId, emit } = await seedActiveRun(artifacts, journal, workflowConfig);
+      const requestId = EventIdSchema.parse(randomUUID());
+      await emit("control.accepted", { requestId, action });
+
+      const result = await new DagOrchestrationWorkflow(
+        runner,
+        artifacts,
+        journal,
+        new MemoryControls(),
+      ).resume(runId);
+
+      expect(result.status).toBe(action === "pause" ? "paused" : "cancelled");
+      expect(runner.attempts.size).toBe(0);
+      expect(
+        journal.events.filter(
+          (event) =>
+            event.type === (action === "pause" ? "workflow.pausing" : "workflow.cancelling"),
+        ),
+      ).toHaveLength(1);
+    },
+  );
+
+  it.each(["approve", "reject"] as const)(
+    "reapplies an accepted %s decision after a crash before step completion",
+    async (action) => {
+      const artifacts = new MemoryArtifacts();
+      const journal = new MemoryJournal();
+      const gateId = StepIdSchema.parse("gate");
+      const workflowConfig = config([
+        {
+          id: gateId,
+          type: "approval",
+          outputs: { decision: { mediaType: "application/json" } },
+        },
+      ]);
+      const { runId, emit } = await seedActiveRun(artifacts, journal, workflowConfig);
+      await emit("step.approval-requested", { inputs: {} }, gateId);
+      await emit("workflow.waiting-approval", { stepId: gateId });
+      await emit("control.accepted", {
+        requestId: EventIdSchema.parse(randomUUID()),
+        action,
+        stepId: gateId,
+      });
+
+      const result = await new DagOrchestrationWorkflow(
+        new DagRunner(),
+        artifacts,
+        journal,
+        new MemoryControls(),
+      ).resume(runId);
+      const decision = result.steps[0]?.outputs[PortNameSchema.parse("decision")];
+
+      expect(result.status).toBe("completed");
+      expect(decision).toBeDefined();
+      expect(
+        JSON.parse(
+          await artifacts.get({
+            runId,
+            artifact: ArtifactRefSchema.parse(decision),
+          }),
+        ),
+      ).toEqual({ decision: action === "approve" ? "approved" : "rejected" });
+    },
+  );
+
+  it.each(["retry", "fail"] as const)(
+    "reapplies an accepted interrupted-attempt %s and preserves its outcome",
+    async (action) => {
+      const artifacts = new MemoryArtifacts();
+      const journal = new MemoryJournal();
+      const runner = new DagRunner();
+      const step = agentStep("uncertain", {
+        retry: { maxAttempts: 2, retryOn: { errorCodes: ["agent.interrupted"] } },
+      });
+      const workflowConfig = config([step], 1);
+      const { runId, emit } = await seedActiveRun(artifacts, journal, workflowConfig);
+      const input = await artifacts.put({
+        runId,
+        artifactId: ArtifactIdSchema.parse(randomUUID()),
+        kind: "step-input",
+        mediaType: "application/json",
+        content: "{}",
+      });
+      await emit("artifact.stored", { artifact: input }, step.id);
+      await emit(
+        "step.attempt.started",
+        { attempt: 1, agentId: step.agentRef, harnessId: step.harnessRef, input },
+        step.id,
+      );
+      await emit(
+        "step.assigned",
+        { attempt: 1, agentId: step.agentRef, harnessId: step.harnessRef },
+        step.id,
+      );
+      await emit("agent.started", { attempt: 1, pid: 999 }, step.id);
+      await emit("step.attempt.interrupted", { attempt: 1 }, step.id);
+      await emit("control.accepted", {
+        requestId: EventIdSchema.parse(randomUUID()),
+        action,
+        stepId: step.id,
+      });
+
+      const result = await new DagOrchestrationWorkflow(
+        runner,
+        artifacts,
+        journal,
+        new MemoryControls(),
+      ).resume(runId);
+
+      expect(result.status).toBe(action === "retry" ? "completed" : "failed");
+      expect(runner.attempts.size).toBe(action === "retry" ? 1 : 0);
+      if (action === "fail") {
+        expect(result.failure).toEqual({ errorCode: "agent.interrupted" });
+        expect(journal.events.at(-1)).toMatchObject({
+          type: "workflow.failed",
+          payload: { errorCode: "agent.interrupted" },
+        });
+      }
+    },
+  );
+
   it("coalesces repeated pause requests and ignores pause after cancellation", async () => {
     const pauseControls = new MemoryControls();
     const pauseJournal = new MemoryJournal();
@@ -719,6 +946,32 @@ describe("DagOrchestrationWorkflow", () => {
     expect(result.status).toBe("cancelled");
     expect(result.steps.find((step) => step.stepId === "later")?.state).toBe("skipped");
     expect(journal.events.at(-1)?.type).toBe("workflow.cancelled");
+  });
+
+  it("registers cancellation before asynchronous Agent setup and never spawns afterward", async () => {
+    const controls = new MemoryControls();
+    const journal = new MemoryJournal();
+    const runner = new DagRunner();
+    const artifacts = new BlockingTaskArtifacts();
+    const run = request(config([agentStep("setup")], 1));
+    const promise = new DagOrchestrationWorkflow(runner, artifacts, journal, controls).run(run);
+    await artifacts.entered;
+    await controls.submit({
+      requestId: EventIdSchema.parse(randomUUID()),
+      runId: run.runId,
+      action: "cancel",
+      timestamp: new Date().toISOString(),
+    });
+    await vi.waitFor(() =>
+      expect(journal.events.some((event) => event.type === "workflow.cancelling")).toBe(true),
+    );
+    artifacts.release();
+    const result = await promise;
+
+    expect(result.status).toBe("cancelled");
+    expect(runner.attempts.size).toBe(0);
+    expect(journal.events.some((event) => event.type === "agent.started")).toBe(false);
+    expect(result.steps[0]?.state).toBe("skipped");
   });
 
   it("honors a per-step timeout override and restores an uncertain attempt as interrupted", async () => {

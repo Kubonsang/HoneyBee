@@ -37,12 +37,14 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 ### Single writer와 control
 
 - 하나의 executor lease만 Run Journal을 기록한다. owner는 PID와 OS process creation identity를 함께 기록하며 둘이 일치할 때만 같은 live executor로 판단한다. 완성된 ownership directory를 atomic publish하고, stale lease는 관측한 lease ID별 tombstone으로 atomic 이동해 takeover 경쟁자가 새 live lease를 제거하지 못하게 한다. Run 삭제도 같은 lease를 획득한 동안 수행한다.
-- pause, cancel, approval, interrupted resolution 명령은 원자적 control inbox에 UUID request로 저장한다.
+- pause, cancel, approval, interrupted resolution 명령은 완성된 private temporary file을 UUID final path로 no-overwrite atomic publish한다. inbox는 RunRepository가 Run 생성 시 미리 만들며 control submit은 없는 Run 구조를 다시 만들지 않는다.
 - inbox와 lock은 운영 수단일 뿐 Run 상태의 권위가 아니다. executor가 `control.accepted`를 flush한 뒤에만 요청에 semantic 의미가 생긴다.
+- crash가 `control.accepted`와 action effect event 사이에 발생하면 replay는 accepted payload를 복원해 아직 effect가 없는 요청만 재적용한다. inbox acknowledgement 여부는 accepted action을 잃는 근거가 되지 않는다.
 - control CLI는 executor 유무의 관측 snapshot을 응답한다. executor가 없으면 요청은 `queued-awaiting-executor`이며 사용자가 `run resume`을 실행할 때까지 inbox에 대기한다.
 - pause는 새 scheduling을 막고 in-flight attempt가 끝난 checkpoint에서 `workflow.paused`가 된다.
 - approval은 Agent를 실행하지 않는 step이다. approve/reject 모두 JSON decision Artifact를 출력하며 조건 branch가 후속 경로를 선택한다.
 - cancel은 새 scheduling을 막고 in-flight process에 종료 신호를 보낸 뒤 bounded grace 후 강제 종료한다.
+- Agent attempt의 cancellation controller는 asynchronous input/setup 전에 등록하며 spawn 직전에 다시 확인한다. cancel acceptance 이후 새 Agent process를 시작하지 않는다.
 
 ### Replay와 interrupted attempt
 
@@ -50,6 +52,7 @@ ADR-014의 순차 kernel은 Agent 입력·출력을 immutable Artifact로 보존
 - resume은 config/task Artifact와 Journal을 replay하여 completed step을 다시 실행하지 않고 pending graph와 retry deadline을 복원한다.
 - `agent.started` 이후 semantic outcome이 확정되지 않은 attempt는 `interrupted`다. 외부 side effect 중복을 막기 위해 자동 retry하지 않고 사용자가 retry 또는 fail로 해소한다.
 - terminal workflow event는 정확히 하나이며 마지막 유효 event여야 한다. malformed frame, sequence 오류, mixed schema, 불가능한 상태 전이와 terminal 이후 event는 `indeterminate`다.
+- attempt-scoped assigned/lifecycle/failure/outcome event는 active attempt와 일치해야 하며 retry는 정확히 다음 attempt만 예약할 수 있다.
 - orphan blob과 아직 수락되지 않은 control request는 `indeterminate`의 근거가 아니다.
 
 ## Persistence barrier

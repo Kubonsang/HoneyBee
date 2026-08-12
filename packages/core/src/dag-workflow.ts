@@ -5,6 +5,7 @@ import {
   AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV2Schema,
   ArtifactIdSchema,
+  ControlRequestSchema,
   OrchestrationEventV2Schema,
   RunIdSchema,
   WorkflowConfigV3Schema,
@@ -68,7 +69,8 @@ interface RuntimeStep {
 interface RuntimeState {
   runState: DagRunState;
   readonly steps: Map<StepId, RuntimeStep>;
-  readonly acceptedControls: Set<string>;
+  readonly acceptedControls: Map<string, ControlRequest>;
+  readonly appliedControls: Set<string>;
   failure?: FailureMetadata;
 }
 
@@ -190,6 +192,32 @@ const pointerValue = (value: unknown, pointer: string): { found: boolean; value?
     current = (current as Record<string, unknown>)[token];
   }
   return { found: true, value: current };
+};
+
+const jsonEqual = (left: unknown, right: unknown): boolean => {
+  if (left === right) return true;
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => jsonEqual(value, right[index]))
+    );
+  }
+  if (typeof left !== "object" || left === null || typeof right !== "object" || right === null) {
+    return false;
+  }
+  const leftKeys = Object.keys(left).sort();
+  const rightKeys = Object.keys(right).sort();
+  return (
+    leftKeys.length === rightKeys.length &&
+    leftKeys.every(
+      (key, index) =>
+        key === rightKeys[index] &&
+        Object.hasOwn(right, key) &&
+        jsonEqual((left as Record<string, unknown>)[key], (right as Record<string, unknown>)[key]),
+    )
+  );
 };
 
 export const createDagAgentPrompt = (serializedInput: string): string =>
@@ -614,8 +642,8 @@ export class DagOrchestrationWorkflow {
     const selected = pointerValue(parsed, condition.artifact.pointer);
     if (condition.artifact.op === "exists") return selected.found;
     if (!selected.found) return false;
-    if (condition.artifact.op === "eq") return Object.is(selected.value, condition.artifact.value);
-    if (condition.artifact.op === "ne") return !Object.is(selected.value, condition.artifact.value);
+    if (condition.artifact.op === "eq") return jsonEqual(selected.value, condition.artifact.value);
+    if (condition.artifact.op === "ne") return !jsonEqual(selected.value, condition.artifact.value);
     if (!Array.isArray(condition.artifact.value)) {
       throw new HoneyBeeCoreError(
         "condition.evaluation-failed",
@@ -623,7 +651,7 @@ export class DagOrchestrationWorkflow {
         condition.artifact.stepId,
       );
     }
-    return condition.artifact.value.some((candidate) => Object.is(candidate, selected.value));
+    return condition.artifact.value.some((candidate) => jsonEqual(candidate, selected.value));
   }
 
   async #requestApproval(context: ExecutionContext, runtime: RuntimeStep): Promise<void> {
@@ -647,14 +675,24 @@ export class DagOrchestrationWorkflow {
   async #executeAgent(context: ExecutionContext, runtime: RuntimeStep): Promise<void> {
     const step = runtime.definition;
     if (step.type !== "agent") return;
+    const aborter = new AbortController();
+    context.aborters.set(step.id, aborter);
+    const requireNotCancelled = (): void => {
+      if (context.cancelRequested || aborter.signal.aborted) {
+        throw new HoneyBeeCoreError("agent.cancelled", "Agent attempt was cancelled.", step.id);
+      }
+    };
     const attempt = runtime.attempt + 1;
     runtime.attempt = attempt;
     let processStarted = false;
+    let attemptStarted = false;
     try {
+      requireNotCancelled();
       const taskContent = await this.artifacts.get({
         runId: context.runId,
         artifact: context.taskArtifact,
       });
+      requireNotCancelled();
       const harness = context.config.harnesses.find(
         (candidate) => candidate.id === step.harnessRef,
       );
@@ -682,6 +720,7 @@ export class DagOrchestrationWorkflow {
               inputs: await this.#readInputs(context, step),
               outputs: step.outputs,
             });
+      requireNotCancelled();
       const serialized = JSON.stringify(envelope);
       const inputArtifact = await this.#store(
         context,
@@ -695,6 +734,7 @@ export class DagOrchestrationWorkflow {
         { attempt, agentId: step.agentRef, harnessId: step.harnessRef, input: inputArtifact },
         step.id,
       );
+      attemptStarted = true;
       runtime.input = inputArtifact;
       await context.writer.emit(
         "step.assigned",
@@ -704,8 +744,7 @@ export class DagOrchestrationWorkflow {
       const agent = context.config.agents.find((candidate) => candidate.id === step.agentRef);
       if (agent === undefined)
         throw new HoneyBeeCoreError("validation.invalid-workflow", "Agent is missing.", step.id);
-      const aborter = new AbortController();
-      context.aborters.set(step.id, aborter);
+      requireNotCancelled();
       const result = await this.runner.run(
         {
           runId: context.runId,
@@ -748,8 +787,13 @@ export class DagOrchestrationWorkflow {
       );
     } catch (error) {
       if (context.cancelRequested) {
-        if (processStarted) await context.writer.emit("step.cancelled", { attempt }, step.id);
-        runtime.state = "cancelled";
+        if (attemptStarted) {
+          await context.writer.emit("step.cancelled", { attempt }, step.id);
+          runtime.state = "cancelled";
+        } else {
+          runtime.attempt = attempt - 1;
+          runtime.state = "pending";
+        }
         return;
       }
       const metadata = failureMetadata(error, attempt);
@@ -948,15 +992,29 @@ export class DagOrchestrationWorkflow {
   }
 
   async #consumeControls(context: ExecutionContext): Promise<void> {
-    if (this.controls === undefined) return;
-    for (const request of await this.controls.pending(context.runId)) {
-      if (context.state.acceptedControls.has(request.requestId)) {
-        await this.controls.acknowledge(request);
+    const controls = this.controls;
+    const pending = controls === undefined ? [] : await controls.pending(context.runId);
+    const pendingIds = new Set(pending.map((request) => request.requestId));
+    for (const request of pending) {
+      const accepted = context.state.acceptedControls.get(request.requestId);
+      if (accepted !== undefined) {
+        if (
+          accepted.action !== request.action ||
+          accepted.stepId !== request.stepId ||
+          accepted.runId !== request.runId
+        ) {
+          throw new HoneyBeeCoreError(
+            "run.indeterminate",
+            "Accepted control does not match its inbox request.",
+          );
+        }
+        await this.#reapplyAcceptedControl(context, accepted);
+        await controls?.acknowledge(request);
         continue;
       }
       if (!this.#controlApplies(context, request)) {
         if (request.action === "pause" || request.action === "cancel") {
-          await this.controls.acknowledge(request);
+          await controls?.acknowledge(request);
         }
         continue;
       }
@@ -965,22 +1023,43 @@ export class DagOrchestrationWorkflow {
         action: request.action,
         ...(request.stepId === undefined ? {} : { stepId: request.stepId }),
       });
-      context.state.acceptedControls.add(request.requestId);
-      if (request.action === "pause") {
-        context.pauseRequested = true;
-        context.state.runState = "pausing";
-        await context.writer.emit("workflow.pausing", { requestId: request.requestId });
-      } else if (request.action === "cancel") {
-        context.cancelRequested = true;
-        context.state.runState = "cancelling";
-        await context.writer.emit("workflow.cancelling", { requestId: request.requestId });
-      } else if (request.action === "approve" || request.action === "reject") {
-        await this.#completeApproval(context, request);
-      } else {
-        await this.#resolveInterrupted(context, request);
-      }
-      await this.controls.acknowledge(request);
+      context.state.acceptedControls.set(request.requestId, request);
+      await this.#applyControl(context, request);
+      await controls?.acknowledge(request);
     }
+    for (const accepted of context.state.acceptedControls.values()) {
+      if (!pendingIds.has(accepted.requestId)) {
+        await this.#reapplyAcceptedControl(context, accepted);
+      }
+    }
+  }
+
+  async #reapplyAcceptedControl(context: ExecutionContext, request: ControlRequest): Promise<void> {
+    if (context.state.appliedControls.has(request.requestId)) return;
+    if (!this.#controlApplies(context, request)) {
+      throw new HoneyBeeCoreError(
+        "run.indeterminate",
+        "Accepted control has no durable effect and cannot be reapplied.",
+      );
+    }
+    await this.#applyControl(context, request);
+  }
+
+  async #applyControl(context: ExecutionContext, request: ControlRequest): Promise<void> {
+    if (request.action === "pause") {
+      context.pauseRequested = true;
+      context.state.runState = "pausing";
+      await context.writer.emit("workflow.pausing", { requestId: request.requestId });
+    } else if (request.action === "cancel") {
+      context.cancelRequested = true;
+      context.state.runState = "cancelling";
+      await context.writer.emit("workflow.cancelling", { requestId: request.requestId });
+    } else if (request.action === "approve" || request.action === "reject") {
+      await this.#completeApproval(context, request);
+    } else {
+      await this.#resolveInterrupted(context, request);
+    }
+    context.state.appliedControls.add(request.requestId);
   }
 
   #controlApplies(context: ExecutionContext, request: ControlRequest): boolean {
@@ -1062,6 +1141,7 @@ export class DagOrchestrationWorkflow {
       { attempt: runtime.attempt, errorCode: "agent.interrupted" },
       runtime.definition.id,
     );
+    context.state.failure = { errorCode: "agent.interrupted" };
     runtime.state = "failed";
     context.state.runState = "running";
   }
@@ -1133,7 +1213,8 @@ export class DagOrchestrationWorkflow {
   #initialState(config: WorkflowConfigV3): RuntimeState {
     return {
       runState: "running",
-      acceptedControls: new Set(),
+      acceptedControls: new Map(),
+      appliedControls: new Set(),
       steps: new Map(
         config.steps.map((definition) => [
           definition.id,
@@ -1184,6 +1265,11 @@ export class DagOrchestrationWorkflow {
           }
           runtime.retryAt = Date.parse(event.payload.notBefore);
           runtime.state = "retry-wait";
+          for (const request of state.acceptedControls.values()) {
+            if (request.action === "retry" && request.stepId === event.stepId) {
+              state.appliedControls.add(request.requestId);
+            }
+          }
           break;
         case "step.attempt.interrupted":
           if (runtime === undefined || settled(runtime.state)) {
@@ -1210,6 +1296,16 @@ export class DagOrchestrationWorkflow {
           runtime.attempt = event.payload.attempt;
           runtime.outputs = { ...event.payload.outputs };
           runtime.state = "completed";
+          if (runtime.definition.type === "approval") {
+            for (const request of state.acceptedControls.values()) {
+              if (
+                (request.action === "approve" || request.action === "reject") &&
+                request.stepId === event.stepId
+              ) {
+                state.appliedControls.add(request.requestId);
+              }
+            }
+          }
           break;
         case "step.blocked":
         case "step.escalated":
@@ -1222,6 +1318,11 @@ export class DagOrchestrationWorkflow {
           runtime.state = event.type.slice("step.".length) as DagStepState;
           if (event.type === "step.failed") {
             state.failure = workflowFailureMetadata(event.payload);
+            for (const request of state.acceptedControls.values()) {
+              if (request.action === "fail" && request.stepId === event.stepId) {
+                state.appliedControls.add(request.requestId);
+              }
+            }
           }
           break;
         case "step.skipped":
@@ -1231,10 +1332,20 @@ export class DagOrchestrationWorkflow {
           runtime.state = "skipped";
           break;
         case "control.accepted":
-          state.acceptedControls.add(event.payload.requestId);
+          state.acceptedControls.set(
+            event.payload.requestId,
+            ControlRequestSchema.parse({
+              requestId: event.payload.requestId,
+              runId: event.runId,
+              action: event.payload.action,
+              ...(event.payload.stepId === undefined ? {} : { stepId: event.payload.stepId }),
+              timestamp: event.timestamp,
+            }),
+          );
           break;
         case "workflow.pausing":
           state.runState = "pausing";
+          state.appliedControls.add(event.payload.requestId);
           break;
         case "workflow.paused":
           state.runState = "paused";
@@ -1247,6 +1358,7 @@ export class DagOrchestrationWorkflow {
           break;
         case "workflow.cancelling":
           state.runState = "cancelling";
+          state.appliedControls.add(event.payload.requestId);
           break;
         case "workflow.completed":
           state.runState = "completed";
