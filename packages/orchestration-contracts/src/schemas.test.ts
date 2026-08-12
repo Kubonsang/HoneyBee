@@ -4,11 +4,13 @@ import { describe, expect, it } from "vitest";
 
 import {
   AgentInputEnvelopeV1Schema,
+  AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV2Schema,
+  WorkflowConfigV3Schema,
 } from "./schemas.js";
 
 const artifact = (kind: "task" | "step-content") =>
@@ -60,5 +62,159 @@ describe("orchestration contracts", () => {
         reason: "needs input",
       }).success,
     ).toBe(true);
+
+    expect(
+      AgentInputEnvelopeV2Schema.safeParse({
+        schemaVersion: 2,
+        runId,
+        step: { id: "review", attempt: 1 },
+        task: { artifact: artifact("task"), content: "task" },
+        inputs: {},
+        outputs: {
+          summary: { mediaType: "text/plain; charset=utf-8" },
+          report: { mediaType: "application/json" },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      AgentInputEnvelopeV2Schema.safeParse({
+        schemaVersion: 2,
+        runId,
+        step: { id: "review", attempt: 1 },
+        task: { artifact: artifact("task"), content: "task" },
+        inputs: {},
+        outputs: {},
+      }).success,
+    ).toBe(false);
+  });
+
+  it("limits protocol v1 harnesses to the legacy content contract", () => {
+    const legacy = {
+      schemaVersion: 3,
+      agents: [{ id: "worker", command: "worker" }],
+      harnesses: [{ id: "legacy", kind: "stdio-framed-v1", protocolVersion: 1 }],
+      steps: [
+        {
+          id: "worker",
+          type: "agent",
+          agentRef: "worker",
+          harnessRef: "legacy",
+          outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+        },
+      ],
+    } as const;
+    expect(WorkflowConfigV3Schema.safeParse(legacy).success).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...legacy,
+        steps: [
+          {
+            ...legacy.steps[0],
+            outputs: { report: { mediaType: "application/json" } },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...legacy,
+        agents: [
+          { id: "source", command: "source" },
+          { id: "worker", command: "worker" },
+        ],
+        harnesses: [
+          { id: "modern", kind: "stdio-framed-v2", protocolVersion: 2 },
+          ...legacy.harnesses,
+        ],
+        steps: [
+          {
+            id: "source",
+            type: "agent",
+            agentRef: "source",
+            harnessRef: "modern",
+            outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+          },
+          {
+            ...legacy.steps[0],
+            inputs: { previous: { from: { stepId: "source", output: "content" } } },
+          },
+        ],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("strictly validates v3 graph references, cycles, and JSON conditions", () => {
+    const base = {
+      schemaVersion: 3,
+      agents: [
+        { id: "source", command: "source" },
+        { id: "next", command: "next" },
+      ],
+      harnesses: [{ id: "stdio", kind: "stdio-framed-v2", protocolVersion: 2 }],
+      steps: [
+        {
+          id: "source",
+          type: "agent",
+          agentRef: "source",
+          harnessRef: "stdio",
+          outputs: { decision: { mediaType: "application/json" } },
+        },
+        {
+          id: "next",
+          type: "agent",
+          agentRef: "next",
+          harnessRef: "stdio",
+          inputs: { source: { from: { stepId: "source", output: "decision" } } },
+          when: {
+            artifact: {
+              stepId: "source",
+              output: "decision",
+              pointer: "/accepted",
+              op: "eq",
+              value: true,
+            },
+          },
+          outputs: { content: { mediaType: "text/plain; charset=utf-8" } },
+        },
+      ],
+    } as const;
+    expect(WorkflowConfigV3Schema.safeParse(base).success).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "next", output: "content" } } },
+      }).success,
+    ).toBe(true);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "missing", output: "content" } } },
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        outputs: { result: { from: { stepId: "next", output: "missing" } } },
+      }).success,
+    ).toBe(false);
+    expect(WorkflowConfigV3Schema.safeParse({ ...base, unexpected: true }).success).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        steps: [
+          { ...base.steps[0], needs: ["next"] },
+          { ...base.steps[1], needs: ["source"] },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      WorkflowConfigV3Schema.safeParse({
+        ...base,
+        steps: [
+          { ...base.steps[0], outputs: { decision: { mediaType: "text/plain; charset=utf-8" } } },
+          base.steps[1],
+        ],
+      }).success,
+    ).toBe(false);
   });
 });

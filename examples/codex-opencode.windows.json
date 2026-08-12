@@ -1,23 +1,44 @@
 {
-  "schemaVersion": 2,
-  "steps": [
+  "schemaVersion": 3,
+  "agents": [
     {
       "id": "producer",
-      "agent": {
-        "command": "codex",
-        "args": ["exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"],
-        "cwd": ".."
-      }
+      "command": "codex",
+      "args": ["exec", "--sandbox", "read-only", "--ephemeral", "--skip-git-repo-check", "-"],
+      "cwd": ".."
     },
     {
       "id": "reviewer",
-      "agent": {
-        "command": "${APPDATA}\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
-        "args": ["run", "--pure"],
-        "cwd": ".."
-      }
+      "command": "${APPDATA}\\npm\\node_modules\\opencode-ai\\bin\\opencode.exe",
+      "args": ["run", "--pure"],
+      "cwd": ".."
     }
   ],
-  "timeoutMs": 300000,
+  "harnesses": [{ "id": "stdio", "kind": "stdio-framed-v2", "protocolVersion": 2 }],
+  "steps": [
+    {
+      "id": "producer",
+      "type": "agent",
+      "agentRef": "producer",
+      "harnessRef": "stdio",
+      "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } }
+    },
+    {
+      "id": "reviewer",
+      "type": "agent",
+      "agentRef": "reviewer",
+      "harnessRef": "stdio",
+      "needs": ["producer"],
+      "inputs": {
+        "previous": { "from": { "stepId": "producer", "output": "content" } }
+      },
+      "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } }
+    }
+  ],
+  "outputs": {
+    "result": { "from": { "stepId": "reviewer", "output": "content" } }
+  },
+  "maxParallelism": 1,
+  "defaultTimeoutMs": 300000,
   "maxOutputBytes": 1048576
 }

@@ -1,22 +1,16 @@
 # HoneyBee
 
-HoneyBee is a CLI-first sequential orchestrator for handing work between real AI Agent processes.
+HoneyBee is a CLI-first, durable DAG orchestrator for handing work between real AI Agent processes.
 
-Version 0.2 runs a static chain of two or more one-shot CLI Agents. HoneyBee validates and persists each Agent input, starts the process, validates its structured response, and passes the verified result to the next step.
+Version 0.3 adds dependency-aware parallel execution, Artifact fan-in, conditional branches, bounded retry, approval gates, pause/resume, cancellation, and Journal-based recovery while preserving v0.2 sequential configs.
 
-```text
-task Artifact -> step input Artifact -> Agent process -> step result Artifact
-                                                    -> next step through HoneyBee Core
-```
-
-> The former VS Code Extension and Webview packages have been retired. `packages/core`, `packages/orchestration-contracts`, and `apps/cli` are the current product boundary.
+> The former VS Code Extension and Webview packages remain retired. `packages/core`, `packages/orchestration-contracts`, and `apps/cli` are the product boundary.
 
 ## Requirements
 
 - Windows 11
 - Node.js 24 or newer with Corepack
 - Codex and OpenCode only for the optional real-Agent example
-- Git for Windows only for retained PTY regression tests outside the v0.2 execution path
 
 ## Quick start
 
@@ -29,76 +23,120 @@ corepack pnpm honeybee demo --task "count bees" --json
 
 The deterministic demo starts two separate Node processes and requires no network or AI account.
 
-## Workflow config
+## Workflow config v3
 
-The canonical config format is `schemaVersion: 2` with a static ordered `steps` array:
+Agents define executable programs. Harnesses define how HoneyBee communicates with them. Steps reference both by strict IDs and connect named Artifact ports.
 
 ```json
 {
-  "schemaVersion": 2,
-  "steps": [
-    { "id": "producer", "agent": { "command": "agent-a" } },
-    { "id": "reviewer", "agent": { "command": "agent-b" } }
+  "schemaVersion": 3,
+  "agents": [
+    { "id": "draft", "command": "agent-a" },
+    { "id": "review", "command": "agent-b" },
+    { "id": "select", "command": "agent-c" }
   ],
-  "timeoutMs": 120000,
+  "harnesses": [{ "id": "stdio", "kind": "stdio-framed-v2", "protocolVersion": 2 }],
+  "steps": [
+    {
+      "id": "draft",
+      "type": "agent",
+      "agentRef": "draft",
+      "harnessRef": "stdio",
+      "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } }
+    },
+    {
+      "id": "review",
+      "type": "agent",
+      "agentRef": "review",
+      "harnessRef": "stdio",
+      "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } }
+    },
+    {
+      "id": "select",
+      "type": "agent",
+      "agentRef": "select",
+      "harnessRef": "stdio",
+      "needs": ["draft", "review"],
+      "inputs": {
+        "draft": { "from": { "stepId": "draft", "output": "content" } },
+        "review": { "from": { "stepId": "review", "output": "content" } }
+      },
+      "outputs": { "content": { "mediaType": "text/plain; charset=utf-8" } },
+      "timeoutMs": 120000
+    }
+  ],
+  "outputs": {
+    "result": { "from": { "stepId": "select", "output": "content" } }
+  },
+  "maxParallelism": 2,
   "maxOutputBytes": 1048576
 }
 ```
 
-Step IDs must match `^[a-z][a-z0-9_-]{0,63}$` and be unique. Agent commands support optional `args`, `cwd`, and `env`. Relative working directories resolve from the config file. `${VARIABLE}` references in `command` and `cwd` resolve from the environment. Legacy schemaVersion 1 producer/reviewer configs are loaded as equivalent two-step v2 workflows.
+IDs must match `^[a-z][a-z0-9_-]{0,63}$`. Config objects are strict at every level, graph references and output ports must exist, and combined dependency/data/condition edges must be acyclic. Omitting `maxParallelism` defaults to `1`.
 
-SchemaVersion 2 objects are strict at the root, step, and Agent levels. Unknown fields are rejected instead of being silently ignored.
+The CLI convenience `result` is emitted only when `workflow.outputs.result` explicitly binds a step output. With no such binding, DAG execution still returns every completed step Artifact in `outputs`, but omits `result`; config order never chooses an implicit leaf.
 
-## Run Codex -> OpenCode
+SchemaVersion 1 producer/reviewer and schemaVersion 2 ordered-step configs are translated to equivalent v3 linear DAGs with `maxParallelism: 1`. Their commands continue to receive `AgentInputEnvelopeV1` and return the legacy `content` response through the `stdio-framed-v1` compatibility harness; loading an old config never silently switches its Agent protocol.
 
-Install and authenticate both CLIs, then run:
+The optional [Codex → OpenCode example](examples/codex-opencode.windows.json) uses the same v3 Agent/Harness separation.
+
+## Agent protocol
+
+HoneyBee stores the exact validated Agent input envelope as a `step-input` Artifact before starting a process. A v3 `AgentInputEnvelopeV2` includes an authoritative `outputs` map declaring every required port and media type. Named inputs are always re-read from the Artifact Store and integrity-checked. A completed Agent response returns exactly those declared named outputs; `blocked` and `escalated` remain semantic outcomes independent of exit code.
+
+UTF-8 text and JSON output Artifacts are supported. JSON Artifact values can drive the restricted `all`, `any`, `not`, `stepOutcome`, and JSON Pointer comparison condition DSL. Arbitrary JavaScript and shell conditions are not executed.
+
+Retry is per step, bounded by `maxAttempts`, and applies only to explicitly listed error codes, exit codes, or an opted-in timeout. Backoff is deterministic and persisted as `notBefore`; blocked and escalated outcomes are never retried.
+
+## Run control and recovery
 
 ```powershell
-corepack pnpm honeybee run --config examples/codex-opencode.windows.json --task "Summarize this repository and check the summary"
+corepack pnpm honeybee run --config workflow.json --task "Do the work"
+corepack pnpm honeybee run show <run-id> --json
+corepack pnpm honeybee run pause <run-id>
+corepack pnpm honeybee run resume <run-id>
+corepack pnpm honeybee run approve <run-id> <step-id>
+corepack pnpm honeybee run reject <run-id> <step-id>
+corepack pnpm honeybee run cancel <run-id>
+corepack pnpm honeybee run resolve-attempt <run-id> <step-id> --retry
+corepack pnpm honeybee run delete <run-id> --yes
 ```
 
-HoneyBee sends a validated `AgentInputEnvelope` through stdin. The Agent returns one sentinel-delimited JSON response with `completed`, `blocked`, or `escalated` status. HoneyBee remains the only communication path between Agents.
+One executor lease owns Journal writes for a Run. Its owner record binds the PID to the OS process creation identity so PID reuse cannot keep a stale lease alive. Lease publication and stale takeover use atomic ownership-directory transitions, and `run delete` must hold the same exclusive lease while removing the Run. Other CLI processes publish idempotent control requests that become authoritative only after the executor records `control.accepted`.
+
+Control commands remain asynchronous. Their JSON response reports `disposition: "queued"` while an executor is present, or `"queued-awaiting-executor"` with `requiresResume: true` when a paused/interrupted Run has no executor. In the latter case the request stays pending until `run resume` starts an executor.
+
+Pause stops new scheduling and waits for in-flight attempts to finish. Cancel stops scheduling, signals in-flight processes, and force-terminates them after the configured grace period. Approval is a non-Agent step that stores an approved/rejected decision Artifact for subsequent conditional branches.
+
+Resume reconstructs completed, skipped, retry-waiting, approval-waiting, and pending steps from Journal v2 without repeating completed work. If HoneyBee stopped after `agent.started` but before a semantic result, the attempt becomes `interrupted`; it is not rerun until `resolve-attempt --retry|--fail` is supplied.
 
 ## Run state and Artifacts
 
-Each run is stored below `.honeybee/runs/<runId>/`:
+Each Run is stored below `.honeybee/runs/<runId>/`:
 
 ```text
 events.jsonl
+control/inbox/<requestId>.json
 blobs/sha256/<digest-prefix>/<digest-rest>
 tmp/
 ```
 
-The JSONL journal contains only typed lifecycle metadata and Artifact references. Task text, serialized Agent inputs, completed content, blocked reasons, and escalation questions are separate immutable Artifacts. Every Artifact read rechecks its byte length and SHA-256 digest.
+Executor ownership is stored separately at `.honeybee/runs/.leases/active/<runId>/owner.json` so deleting one Run cannot erase the lease that serializes deletion.
 
-Inspect or delete one exact run:
+The JSONL Journal contains typed lifecycle metadata and Artifact references only. Prompts, tasks, Agent output, reasons, questions, stdout, and stderr remain outside the Journal. Every Artifact read recalculates byte length and SHA-256 digest.
 
-```powershell
-corepack pnpm honeybee run show <run-id> --json
-corepack pnpm honeybee run delete <run-id> --yes
-```
+Journal v2 permits valid nonterminal states such as paused, waiting approval, retry wait, and interrupted. A terminal workflow event must still be the final valid event. Malformed JSON, sequence gaps, mixed event versions, impossible transitions, or events after terminal make the Run `indeterminate`. Orphan blobs do not affect Run state.
 
-A run is conclusive only when its final valid journal event is `workflow.completed`, `workflow.blocked`, `workflow.escalated`, or `workflow.failed`. Otherwise HoneyBee reports the run as indeterminate and does not infer, retry, or resume work.
-
-If an Agent or workflow fails after Run creation, the CLI error includes `runId` and `journalPath` so the same Run can be investigated with `run show`.
-
-## Quality and tests
+## Quality, security, and scope
 
 ```powershell
 corepack pnpm verify
 ```
 
-`verify` runs the public-source secret scan, production license allowlist, formatting, ESLint, strict package typechecks, TypeScript builds, Vitest, and dependency-cruiser architecture rules.
+`.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-## Security
-
-`.honeybee/` contains local plaintext task and Agent output Artifacts and is excluded from Git. JSONL error events use strict metadata allowlists and never serialize generic Error details, stdout, stderr, prompts, task text, results, reasons, or questions.
-
-Before committing, run `corepack pnpm security:install-hooks` once per clone. See [SECURITY.md](SECURITY.md) for private vulnerability reporting.
-
-## Scope
-
-v0.2 is deliberately a small sequential orchestration kernel. DAGs, fan-out, parallel Agent execution, retries, restart resume, PTY/TUI orchestration, and Unity/testplay integration are out of scope. See [ADR-013](docs/decisions/ADR-013-core-cli-first-handoff-proof.md) and [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md).
+v0.3 remains a local CLI kernel. Distributed workers, a daemon, arbitrary condition code, binary Agent payloads, automatic replay of uncertain side effects, full power-loss durability, PTY/TUI orchestration, and Unity/testplay integration are out of scope. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md) and [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md).
 
 ## License
 

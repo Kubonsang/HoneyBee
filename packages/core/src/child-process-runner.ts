@@ -57,6 +57,7 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       let startedPersisted = false;
       let startBarrier: Promise<void> = Promise.resolve();
       let inputFailure: HoneyBeeCoreError | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
 
       const rememberInputFailure = (error?: Error): HoneyBeeCoreError => {
         inputFailure ??= new HoneyBeeCoreError(
@@ -68,10 +69,21 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         return inputFailure;
       };
 
-      const terminate = (reason: "timed-out" | "output-limit"): void => {
+      let forcedTermination: ReturnType<typeof setTimeout> | undefined;
+      const terminate = (reason: "timed-out" | "output-limit" | "cancelled"): void => {
         if (termination === "exited") termination = reason;
-        if (child.exitCode === null && child.signalCode === null) child.kill();
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill();
+          const graceMs = request.cancelGraceMs ?? 5_000;
+          forcedTermination ??= setTimeout(() => {
+            if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+          }, graceMs);
+        }
       };
+
+      const onAbort = (): void => terminate("cancelled");
+      if (request.signal?.aborted === true) onAbort();
+      else request.signal?.addEventListener("abort", onAbort, { once: true });
 
       const collect = (target: Buffer[], stream: "stdout" | "stderr", chunk: Buffer | string) => {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
@@ -124,6 +136,7 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         if (child.pid === undefined) return;
         startBarrier = lifecycle.onStarted(child.pid).then(async () => {
           startedPersisted = true;
+          timeout = setTimeout(() => terminate("timed-out"), request.timeoutMs);
           if (child.exitCode === null && child.signalCode === null) {
             try {
               await writeInput();
@@ -143,7 +156,9 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       child.once("error", (error) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        if (timeout !== undefined) clearTimeout(timeout);
+        if (forcedTermination !== undefined) clearTimeout(forcedTermination);
+        request.signal?.removeEventListener("abort", onAbort);
         reject(
           new HoneyBeeCoreError(
             "agent.spawn-failed",
@@ -157,7 +172,9 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       child.once("close", (exitCode, signal) => {
         if (settled) return;
         settled = true;
-        clearTimeout(timeout);
+        if (timeout !== undefined) clearTimeout(timeout);
+        if (forcedTermination !== undefined) clearTimeout(forcedTermination);
+        request.signal?.removeEventListener("abort", onAbort);
         void (async () => {
           try {
             await startBarrier;
@@ -186,8 +203,6 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
           }
         })();
       });
-
-      const timeout = setTimeout(() => terminate("timed-out"), request.timeoutMs);
     });
   }
 }

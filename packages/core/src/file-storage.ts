@@ -8,13 +8,18 @@ import {
   ArtifactMediaTypeSchema,
   ArtifactRefSchema,
   ContentDigestSchema,
+  OrchestrationEventV2Schema,
   OrchestrationEventV1Schema,
   RunIdSchema,
   TERMINAL_WORKFLOW_EVENT_TYPES,
+  TERMINAL_WORKFLOW_EVENT_V2_TYPES,
+  type AnyOrchestrationEvent,
   type ArtifactRef,
   type OrchestrationEventV1,
+  type OrchestrationEventV2,
   type RunId,
   type TerminalWorkflowEvent,
+  type TerminalWorkflowEventV2,
 } from "@honeybee/orchestration-contracts";
 
 import { HoneyBeeCoreError } from "./errors.js";
@@ -23,7 +28,9 @@ import type {
   ArtifactPutRequest,
   ArtifactStore,
   JournalReplay,
+  AnyJournalReplay,
   OrchestrationJournal,
+  VersionedOrchestrationJournal,
   RunRecord,
   RunRepository,
 } from "./types.js";
@@ -88,6 +95,12 @@ export class FileRunRepository extends FileRunScopedStore implements RunReposito
         throw new HoneyBeeCoreError("run.already-exists", `Run ${runId} already exists.`);
       }
       throw new HoneyBeeCoreError("run.invalid-path", `Could not create run ${runId}.`);
+    }
+    try {
+      await mkdir(path.join(directory, "control", "inbox"), { recursive: true });
+    } catch {
+      await rm(directory, { recursive: true, force: true });
+      throw new HoneyBeeCoreError("run.invalid-path", `Could not initialize run ${runId}.`);
     }
   }
 
@@ -201,19 +214,210 @@ export class FileArtifactStore extends FileRunScopedStore implements ArtifactSto
   }
 }
 
-export class FileOrchestrationJournal extends FileRunScopedStore implements OrchestrationJournal {
+const parseEvent = (value: unknown): AnyOrchestrationEvent | undefined => {
+  const version =
+    typeof value === "object" && value !== null && "schemaVersion" in value
+      ? value.schemaVersion
+      : undefined;
+  const parsed =
+    version === 1
+      ? OrchestrationEventV1Schema.safeParse(value)
+      : version === 2
+        ? OrchestrationEventV2Schema.safeParse(value)
+        : undefined;
+  return parsed?.success === true ? parsed.data : undefined;
+};
+
+const isTerminal = (event: AnyOrchestrationEvent): boolean =>
+  event.schemaVersion === 1
+    ? TERMINAL_WORKFLOW_EVENT_TYPES.has(event.type as TerminalWorkflowEvent["type"])
+    : TERMINAL_WORKFLOW_EVENT_V2_TYPES.has(event.type as TerminalWorkflowEventV2["type"]);
+
+const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean => {
+  const phases = new Map<string, string>();
+  const attempts = new Map<string, number>();
+  let workflowPhase = "running";
+  for (const event of events.slice(1)) {
+    const stepId = event.stepId;
+    const phase = stepId === undefined ? undefined : phases.get(stepId);
+    switch (event.type) {
+      case "step.attempt.started":
+        if (
+          stepId === undefined ||
+          ![undefined, "retry"].includes(phase) ||
+          (phase === undefined && event.payload.attempt !== 1) ||
+          (phase === "retry" && attempts.get(stepId) !== event.payload.attempt)
+        )
+          return false;
+        phases.set(stepId, "attempt");
+        attempts.set(stepId, event.payload.attempt);
+        break;
+      case "step.assigned":
+        if (
+          stepId === undefined ||
+          phase !== "attempt" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        break;
+      case "agent.started":
+        if (
+          stepId === undefined ||
+          phase !== "attempt" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, "agent");
+        break;
+      case "agent.exited":
+        if (
+          stepId === undefined ||
+          phase !== "agent" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, "exited");
+        break;
+      case "agent.input-write-failed":
+        if (
+          stepId === undefined ||
+          !["agent", "exited"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        break;
+      case "step.attempt.failed":
+        if (
+          stepId === undefined ||
+          !["attempt", "agent", "exited"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, "attempt-failed");
+        break;
+      case "retry.scheduled":
+        if (
+          stepId === undefined ||
+          !["attempt-failed", "interrupted"].includes(phase ?? "") ||
+          event.payload.attempt !== (attempts.get(stepId) ?? 0) + 1
+        )
+          return false;
+        phases.set(stepId, "retry");
+        attempts.set(stepId, event.payload.attempt);
+        break;
+      case "step.attempt.interrupted":
+        if (
+          stepId === undefined ||
+          !["attempt", "agent", "exited", "attempt-failed"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, "interrupted");
+        break;
+      case "step.approval-requested":
+        if (stepId === undefined || phase !== undefined) return false;
+        phases.set(stepId, "approval");
+        break;
+      case "step.completed":
+        if (
+          stepId === undefined ||
+          !["exited", "approval"].includes(phase ?? "") ||
+          (phase === "exited" && attempts.get(stepId) !== event.payload.attempt) ||
+          (phase === "approval" && event.payload.attempt !== 0)
+        )
+          return false;
+        phases.set(stepId, "completed");
+        break;
+      case "step.blocked":
+      case "step.escalated":
+        if (
+          stepId === undefined ||
+          phase !== "exited" ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, event.type.slice("step.".length));
+        break;
+      case "step.failed":
+        if (
+          stepId === undefined ||
+          ![undefined, "attempt-failed", "interrupted"].includes(phase) ||
+          (event.payload.attempt !== undefined &&
+            attempts.has(stepId) &&
+            attempts.get(stepId) !== event.payload.attempt)
+        )
+          return false;
+        phases.set(stepId, "failed");
+        break;
+      case "step.skipped":
+        if (
+          stepId === undefined ||
+          (phase !== undefined &&
+            !(
+              event.payload.reason === "workflow-cancelled" && ["approval", "retry"].includes(phase)
+            ))
+        )
+          return false;
+        phases.set(stepId, "skipped");
+        break;
+      case "step.cancelled":
+        if (
+          stepId === undefined ||
+          !["attempt", "agent", "exited", "interrupted"].includes(phase ?? "") ||
+          attempts.get(stepId) !== event.payload.attempt
+        )
+          return false;
+        phases.set(stepId, "cancelled");
+        break;
+      case "workflow.pausing":
+        if (!["running", "waiting"].includes(workflowPhase)) return false;
+        workflowPhase = "pausing";
+        break;
+      case "workflow.paused":
+        if (workflowPhase !== "pausing") return false;
+        workflowPhase = "paused";
+        break;
+      case "workflow.resumed":
+        if (!["paused", "waiting"].includes(workflowPhase)) return false;
+        workflowPhase = "running";
+        break;
+      case "workflow.waiting-approval":
+        workflowPhase = "waiting";
+        break;
+      case "workflow.cancelling":
+        workflowPhase = "cancelling";
+        break;
+      case "workflow.completed":
+      case "workflow.blocked":
+      case "workflow.escalated":
+      case "workflow.failed":
+      case "workflow.cancelled":
+        workflowPhase = "terminal";
+        break;
+      case "workflow.started":
+        return false;
+      case "artifact.stored":
+      case "control.accepted":
+        break;
+    }
+  }
+  return true;
+};
+
+export class FileOrchestrationJournal
+  extends FileRunScopedStore
+  implements OrchestrationJournal, VersionedOrchestrationJournal
+{
   readonly #terminalRuns = new Set<RunId>();
 
   public constructor(rootDirectory: string) {
     super(rootDirectory);
   }
 
-  public async append(runId: RunId, event: OrchestrationEventV1): Promise<void> {
+  public async append(runId: RunId, event: AnyOrchestrationEvent): Promise<void> {
     const validatedRunId = RunIdSchema.parse(runId);
-    let validatedEvent: OrchestrationEventV1;
-    try {
-      validatedEvent = OrchestrationEventV1Schema.parse(event);
-    } catch {
+    const validatedEvent = parseEvent(event);
+    if (validatedEvent === undefined) {
       throw new HoneyBeeCoreError("journal.write-failed", "Journal event validation failed.");
     }
     if (validatedEvent.runId !== validatedRunId || this.#terminalRuns.has(validatedRunId)) {
@@ -227,9 +431,19 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
       if (
         validatedEvent.sequence !== existing.length + 1 ||
         (existing.length === 0 && validatedEvent.type !== "workflow.started") ||
-        (existing.length > 0 && validatedEvent.type === "workflow.started")
+        (existing.length > 0 && validatedEvent.type === "workflow.started") ||
+        (existing[0] !== undefined && existing[0].schemaVersion !== validatedEvent.schemaVersion)
       ) {
         throw new HoneyBeeCoreError("journal.write-failed", "Journal sequence invariants failed.");
+      }
+      if (
+        validatedEvent.schemaVersion === 2 &&
+        !validV2Transitions([...(existing as OrchestrationEventV2[]), validatedEvent])
+      ) {
+        throw new HoneyBeeCoreError(
+          "journal.write-failed",
+          "Journal transition invariants failed.",
+        );
       }
       const handle = await open(journalPath, "a");
       try {
@@ -238,7 +452,7 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
       } finally {
         await handle.close();
       }
-      if (TERMINAL_WORKFLOW_EVENT_TYPES.has(validatedEvent.type as TerminalWorkflowEvent["type"])) {
+      if (isTerminal(validatedEvent)) {
         this.#terminalRuns.add(validatedRunId);
       }
     } catch (error) {
@@ -247,7 +461,7 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
     }
   }
 
-  public async replay(runId: RunId): Promise<JournalReplay> {
+  public async replay(runId: RunId): Promise<AnyJournalReplay> {
     const validatedRunId = RunIdSchema.parse(runId);
     let serialized: string;
     try {
@@ -260,7 +474,7 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
     const lines = serialized.slice(0, -1).split("\n");
     if (lines.some((line) => line.length === 0)) return indeterminate();
 
-    const events: OrchestrationEventV1[] = [];
+    const events: AnyOrchestrationEvent[] = [];
     for (const [index, line] of lines.entries()) {
       let value: unknown;
       try {
@@ -268,31 +482,46 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
       } catch {
         return indeterminate();
       }
-      const parsed = OrchestrationEventV1Schema.safeParse(value);
+      const parsed = parseEvent(value);
       if (
-        !parsed.success ||
-        parsed.data.runId !== validatedRunId ||
-        parsed.data.sequence !== index + 1
+        parsed === undefined ||
+        parsed.runId !== validatedRunId ||
+        parsed.sequence !== index + 1 ||
+        (events[0] !== undefined && events[0].schemaVersion !== parsed.schemaVersion)
       ) {
         return indeterminate();
       }
-      events.push(parsed.data);
+      events.push(parsed);
     }
     if (events[0]?.type !== "workflow.started") return indeterminate();
-    const terminals = events.filter((event): event is TerminalWorkflowEvent =>
-      TERMINAL_WORKFLOW_EVENT_TYPES.has(event.type as TerminalWorkflowEvent["type"]),
-    );
+    const terminals = events.filter(isTerminal);
     const terminal = terminals[0];
-    if (terminal === undefined || terminals.length !== 1 || events.at(-1) !== terminal) {
+    if (terminals.length > 1 || (terminal !== undefined && events.at(-1) !== terminal)) {
       return indeterminate();
     }
-    return { status: "terminal", events, terminal };
+    if (events[0].schemaVersion === 1) {
+      if (terminal === undefined || terminal.schemaVersion !== 1) return indeterminate();
+      return {
+        status: "terminal",
+        events: events as OrchestrationEventV1[],
+        terminal: terminal as TerminalWorkflowEvent,
+      };
+    }
+    if (!validV2Transitions(events as OrchestrationEventV2[])) return indeterminate();
+    if (terminal === undefined) {
+      return { status: "active", events: events as OrchestrationEventV2[] };
+    }
+    return {
+      status: "terminal",
+      events: events as OrchestrationEventV2[],
+      terminal: terminal as TerminalWorkflowEventV2,
+    };
   }
 
   async #readAppendableEvents(
     runId: RunId,
     journalPath: string,
-  ): Promise<readonly OrchestrationEventV1[]> {
+  ): Promise<readonly AnyOrchestrationEvent[]> {
     let serialized: string;
     try {
       serialized = await readFile(journalPath, "utf8");
@@ -308,7 +537,7 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
     if (lines.some((line) => line.length === 0)) {
       throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is malformed.");
     }
-    const events: OrchestrationEventV1[] = [];
+    const events: AnyOrchestrationEvent[] = [];
     for (const [index, line] of lines.entries()) {
       let value: unknown;
       try {
@@ -316,15 +545,20 @@ export class FileOrchestrationJournal extends FileRunScopedStore implements Orch
       } catch {
         throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is malformed.");
       }
-      const parsed = OrchestrationEventV1Schema.safeParse(value);
-      if (!parsed.success || parsed.data.runId !== runId || parsed.data.sequence !== index + 1) {
+      const parsed = parseEvent(value);
+      if (
+        parsed === undefined ||
+        parsed.runId !== runId ||
+        parsed.sequence !== index + 1 ||
+        (events[0] !== undefined && events[0].schemaVersion !== parsed.schemaVersion)
+      ) {
         throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal is invalid.");
       }
-      if (TERMINAL_WORKFLOW_EVENT_TYPES.has(parsed.data.type as TerminalWorkflowEvent["type"])) {
+      if (isTerminal(parsed)) {
         this.#terminalRuns.add(runId);
         throw new HoneyBeeCoreError("journal.write-failed", "Journal is already terminal.");
       }
-      events.push(parsed.data);
+      events.push(parsed);
     }
     if (events[0]?.type !== "workflow.started") {
       throw new HoneyBeeCoreError("journal.write-failed", "Existing Journal has no start event.");
