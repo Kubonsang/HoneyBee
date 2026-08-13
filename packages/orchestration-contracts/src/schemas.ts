@@ -80,11 +80,22 @@ export const ArtifactKindSchema = z.enum([
   "blocked-reason",
   "escalation-reason",
   "escalation-question",
+  "unity-source-manifest",
+  "workspace-acquire-request",
+  "workspace-acquire-receipt",
+  "testplay-evidence",
+  "workspace-release-receipt",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
-export const ArtifactMediaTypeSchema = z.enum(["text/plain; charset=utf-8", "application/json"]);
+export const ArtifactMediaTypeSchema = z.enum([
+  "text/plain; charset=utf-8",
+  "application/json",
+  "application/xml",
+  "application/x-ndjson",
+]);
 export type ArtifactMediaType = z.infer<typeof ArtifactMediaTypeSchema>;
+const AgentArtifactMediaTypeSchema = z.enum(["text/plain; charset=utf-8", "application/json"]);
 
 export const ArtifactRefSchema = z
   .object({
@@ -342,7 +353,9 @@ export const WorkflowOutputBindingSchema = z
   .strict();
 export type WorkflowOutputBinding = z.infer<typeof WorkflowOutputBindingSchema>;
 
-export const OutputDeclarationSchema = z.object({ mediaType: ArtifactMediaTypeSchema }).strict();
+export const OutputDeclarationSchema = z
+  .object({ mediaType: AgentArtifactMediaTypeSchema })
+  .strict();
 export type OutputDeclaration = z.infer<typeof OutputDeclarationSchema>;
 
 const JsonScalarSchema = z.union([z.string(), z.number(), z.boolean(), z.null()]);
@@ -682,6 +695,84 @@ export const WorkflowConfigV3Schema = z
   });
 export type WorkflowConfigV3 = z.infer<typeof WorkflowConfigV3Schema>;
 
+const Sha256HexSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+
+export const UnityLibraryKeySchema = z
+  .object({
+    schemaVersion: z.literal("1"),
+    digest: Sha256HexSchema,
+    unityVersion: z.string().min(1),
+    unityExecutableSha256: Sha256HexSchema,
+    manifestSha256: Sha256HexSchema,
+    packagesLockSha256: z.union([Sha256HexSchema, z.literal("missing")]),
+    projectSettingsSha256: Sha256HexSchema,
+    buildTarget: z.string().min(1),
+    scriptingBackend: z.string().min(1),
+    projectIdentitySha256: Sha256HexSchema,
+  })
+  .strict();
+export type UnityLibraryKey = z.infer<typeof UnityLibraryKeySchema>;
+
+export const UnityWorkspaceParentKeySchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    digest: Sha256HexSchema,
+    libraryKey: UnityLibraryKeySchema,
+    provider: z.literal("vhdx-differencing"),
+    filesystem: z.literal("NTFS"),
+    virtualBytes: z.number().int().positive(),
+    blockBytes: z.number().int().positive(),
+    sectorBytes: z.number().int().positive(),
+    localPackagesDigest: Sha256HexSchema.optional(),
+  })
+  .strict();
+export type UnityWorkspaceParentKey = z.infer<typeof UnityWorkspaceParentKeySchema>;
+
+export const UnityWorkConfigV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sourceProjectPath: z.string().min(1),
+    workspaceStorage: z
+      .object({
+        command: AgentCommandSchema,
+        contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
+        binarySha256: Sha256HexSchema,
+        workspaceRoot: z.string().min(1),
+        parentKey: UnityWorkspaceParentKeySchema,
+        storeMaxAllocatedBytes: z.number().int().positive().optional(),
+        minimumHostFreeBytes: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
+    agent: z
+      .object({
+        command: AgentCommandSchema,
+        harness: z.literal("stdio-framed-v2"),
+        timeoutMs: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().optional(),
+      })
+      .strict(),
+    testplay: z
+      .object({
+        command: AgentCommandSchema,
+        unityPath: z.string().min(1),
+        platform: z.enum(["edit_mode", "play_mode"]),
+        timeoutMs: z.number().int().positive(),
+        filter: z.string().min(1).optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.workspaceStorage.parentKey.localPackagesDigest !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceStorage", "parentKey", "localPackagesDigest"],
+        message: "Unity work v0.4 does not stage external local packages.",
+      });
+    }
+  });
+export type UnityWorkConfigV1 = z.infer<typeof UnityWorkConfigV1Schema>;
+
 export const AgentInputEnvelopeV2Schema = z
   .object({
     schemaVersion: z.literal(2),
@@ -737,7 +828,7 @@ export const AgentResponseEnvelopeV2Schema = z.discriminatedUnion("status", [
     status: z.literal("completed"),
     outputs: z.record(
       PortNameSchema,
-      z.object({ mediaType: ArtifactMediaTypeSchema, content: z.string() }).strict(),
+      z.object({ mediaType: AgentArtifactMediaTypeSchema, content: z.string() }).strict(),
     ),
   }).strict(),
   AgentResponseV2BaseSchema.extend({
@@ -928,7 +1019,6 @@ export const OrchestrationEventV2Schema = z
     }
   });
 export type OrchestrationEventV2 = z.infer<typeof OrchestrationEventV2Schema>;
-export type AnyOrchestrationEvent = OrchestrationEventV1 | OrchestrationEventV2;
 
 export type TerminalWorkflowEventV2 = Extract<
   OrchestrationEventV2,
@@ -948,3 +1038,211 @@ export const TERMINAL_WORKFLOW_EVENT_V2_TYPES = new Set<TerminalWorkflowEventV2[
   "workflow.failed",
   "workflow.cancelled",
 ]);
+
+const EventV3BaseSchema = z.object({
+  schemaVersion: z.literal(3),
+  eventId: EventIdSchema,
+  runId: RunIdSchema,
+  sequence: z.number().int().positive(),
+  timestamp: z.string().datetime(),
+  stepId: StepIdSchema.optional(),
+});
+const eventV3 = <Type extends string, Payload extends z.ZodType>(type: Type, payload: Payload) =>
+  EventV3BaseSchema.extend({ type: z.literal(type), payload }).strict();
+
+const UnityTransactionDecisionSchema = z.discriminatedUnion("outcome", [
+  z.object({ outcome: z.literal("completed") }).strict(),
+  z.object({ outcome: z.literal("failed"), failure: FailureMetadataSchema }).strict(),
+  z.object({ outcome: z.literal("cancelled") }).strict(),
+]);
+
+export const OrchestrationEventV3Schema = z
+  .discriminatedUnion("type", [
+    eventV3(
+      "workflow.started",
+      z
+        .object({
+          mode: z.literal("unity-work-v1"),
+          config: ArtifactRefSchema,
+          task: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV3("artifact.stored", z.object({ artifact: ArtifactRefSchema }).strict()),
+    eventV3("source.baselined", z.object({ manifest: ArtifactRefSchema }).strict()),
+    eventV3(
+      "workspace.prepared",
+      z.object({ workspaceId: z.string().min(1), sourceManifest: ArtifactRefSchema }).strict(),
+    ),
+    eventV3(
+      "workspace.acquire-started",
+      z.object({ request: ArtifactRefSchema, requestId: z.string().min(1) }).strict(),
+    ),
+    eventV3("workspace.acquire-failed", z.object({ failure: FailureMetadataSchema }).strict()),
+    eventV3(
+      "workspace.acquired",
+      z
+        .object({
+          workspaceId: z.string().min(1),
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV3("agent.started", z.object({ pid: z.number().int().positive() }).strict()),
+    eventV3("agent.exited", ProcessMetadataSchema),
+    eventV3("agent.input-write-failed", FailureMetadataSchema),
+    eventV3("testplay.started", z.object({ pid: z.number().int().positive() }).strict()),
+    eventV3("testplay.exited", ProcessMetadataSchema),
+    eventV3("testplay.evidence-stored", z.object({ evidence: ArtifactRefSchema }).strict()),
+    eventV3("testplay.verified", z.object({ evidence: ArtifactRefSchema }).strict()),
+    eventV3(
+      "source.checked",
+      z
+        .object({
+          before: ArtifactRefSchema,
+          after: ArtifactRefSchema,
+          unchanged: z.boolean(),
+        })
+        .strict(),
+    ),
+    eventV3("transaction.outcome-decided", UnityTransactionDecisionSchema),
+    eventV3(
+      "control.accepted",
+      z.object({ requestId: EventIdSchema, action: z.literal("cancel") }).strict(),
+    ),
+    eventV3(
+      "workspace.release-started",
+      z.object({ leaseId: z.string().min(1), requestId: z.string().min(1) }).strict(),
+    ),
+    eventV3(
+      "workspace.release-failed",
+      z.object({ leaseId: z.string().min(1), failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV3(
+      "workspace.released",
+      z
+        .object({
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+          cleanupState: z.literal("released"),
+        })
+        .strict(),
+    ),
+    eventV3(
+      "workflow.completed",
+      z
+        .object({
+          evidence: ArtifactRefSchema,
+          release: ArtifactRefSchema,
+          sourceAfter: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV3(
+      "workflow.failed",
+      z
+        .object({
+          failure: FailureMetadataSchema,
+          release: ArtifactRefSchema.optional(),
+          sourceAfter: ArtifactRefSchema.optional(),
+        })
+        .strict(),
+    ),
+    eventV3(
+      "workflow.cancelled",
+      z
+        .object({
+          release: ArtifactRefSchema.optional(),
+          sourceAfter: ArtifactRefSchema.optional(),
+        })
+        .strict(),
+    ),
+  ])
+  .superRefine((event, context) => {
+    const requireKind = (artifact: ArtifactRef, kind: ArtifactKind, path: string[]): void => {
+      if (artifact.kind !== kind) {
+        context.addIssue({
+          code: "custom",
+          path,
+          message: "Unity transaction event references the wrong Artifact kind.",
+        });
+      }
+    };
+    if (event.type === "workflow.started") {
+      requireKind(event.payload.config, "workflow-config", ["payload", "config", "kind"]);
+      requireKind(event.payload.task, "task", ["payload", "task", "kind"]);
+    } else if (event.type === "source.baselined") {
+      requireKind(event.payload.manifest, "unity-source-manifest", ["payload", "manifest", "kind"]);
+    } else if (event.type === "workspace.acquire-started") {
+      requireKind(event.payload.request, "workspace-acquire-request", [
+        "payload",
+        "request",
+        "kind",
+      ]);
+    } else if (event.type === "workspace.acquired") {
+      requireKind(event.payload.receipt, "workspace-acquire-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "testplay.evidence-stored" || event.type === "testplay.verified") {
+      requireKind(event.payload.evidence, "testplay-evidence", ["payload", "evidence", "kind"]);
+    } else if (event.type === "source.checked") {
+      requireKind(event.payload.before, "unity-source-manifest", ["payload", "before", "kind"]);
+      requireKind(event.payload.after, "unity-source-manifest", ["payload", "after", "kind"]);
+    } else if (event.type === "workspace.released") {
+      requireKind(event.payload.receipt, "workspace-release-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "workflow.completed") {
+      requireKind(event.payload.evidence, "testplay-evidence", ["payload", "evidence", "kind"]);
+      requireKind(event.payload.release, "workspace-release-receipt", [
+        "payload",
+        "release",
+        "kind",
+      ]);
+      requireKind(event.payload.sourceAfter, "unity-source-manifest", [
+        "payload",
+        "sourceAfter",
+        "kind",
+      ]);
+    }
+    const agentScoped =
+      event.type === "agent.started" ||
+      event.type === "agent.exited" ||
+      event.type === "agent.input-write-failed";
+    const stepArtifact =
+      event.type === "artifact.stored" &&
+      ["step-input", "step-output"].includes(event.payload.artifact.kind);
+    if ((agentScoped || stepArtifact) && event.stepId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Agent-scoped Unity transaction event needs stepId.",
+      });
+    }
+    if (event.type.startsWith("workflow.") && event.stepId !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Workflow event cannot have stepId.",
+      });
+    }
+  });
+export type OrchestrationEventV3 = z.infer<typeof OrchestrationEventV3Schema>;
+
+export type TerminalWorkflowEventV3 = Extract<
+  OrchestrationEventV3,
+  { type: "workflow.completed" | "workflow.failed" | "workflow.cancelled" }
+>;
+export const TERMINAL_WORKFLOW_EVENT_V3_TYPES = new Set<TerminalWorkflowEventV3["type"]>([
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+]);
+
+export type AnyOrchestrationEvent =
+  OrchestrationEventV1 | OrchestrationEventV2 | OrchestrationEventV3;

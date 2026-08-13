@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadWorkflowConfig } from "./config.js";
+import { loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
 
 const withConfig = async (value: unknown, run: (path: string) => Promise<void>): Promise<void> => {
   const directory = await mkdtemp(path.join(tmpdir(), "honeybee-config-"));
@@ -140,5 +140,118 @@ describe("loadWorkflowConfig", () => {
       async (configPath) =>
         expect(loadWorkflowConfig(configPath)).rejects.toThrow("Invalid schemaVersion 3 config"),
     );
+  });
+});
+
+describe("loadUnityWorkConfig", () => {
+  const candidate = (directory: string) => ({
+    schemaVersion: 1,
+    sourceProjectPath: path.join(directory, "source"),
+    workspaceStorage: {
+      command: { command: process.execPath },
+      contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+      binarySha256: "0".repeat(64),
+      workspaceRoot: path.join(directory, "workspaces"),
+      parentKey: {
+        schemaVersion: 2,
+        digest: "a".repeat(64),
+        libraryKey: {
+          schemaVersion: "1",
+          digest: "b".repeat(64),
+          unityVersion: "6000.0.0f1",
+          unityExecutableSha256: "c".repeat(64),
+          manifestSha256: "d".repeat(64),
+          packagesLockSha256: "missing",
+          projectSettingsSha256: "e".repeat(64),
+          buildTarget: "windows/amd64",
+          scriptingBackend: "Mono",
+          projectIdentitySha256: "f".repeat(64),
+        },
+        provider: "vhdx-differencing",
+        filesystem: "NTFS",
+        virtualBytes: 1073741824,
+        blockBytes: 2097152,
+        sectorBytes: 4096,
+      },
+    },
+    agent: {
+      command: { command: "opencode" },
+      harness: "stdio-framed-v2",
+    },
+    testplay: {
+      command: { command: "testplay" },
+      unityPath: path.join(directory, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 300000,
+    },
+  });
+
+  it("loads exactly one strict Unity Agent transaction config", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "honeybee-unity-config-"));
+    try {
+      await withConfig(candidate(directory), async (configPath) => {
+        const config = await loadUnityWorkConfig(configPath);
+        expect(config.agent.harness).toBe("stdio-framed-v2");
+        expect(config.workspaceStorage.parentKey.provider).toBe("vhdx-differencing");
+        expect(config.sourceProjectPath).toBe(path.join(directory, "source"));
+      });
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects unknown fields and relative transaction paths", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "honeybee-unity-config-"));
+    try {
+      await withConfig(
+        { ...candidate(directory), scheduler: { maxParallelism: 2 } },
+        async (configPath) =>
+          expect(loadUnityWorkConfig(configPath)).rejects.toThrow("Invalid Unity work"),
+      );
+      await withConfig(
+        { ...candidate(directory), sourceProjectPath: "relative-project" },
+        async (configPath) =>
+          expect(loadUnityWorkConfig(configPath)).rejects.toThrow("absolute path"),
+      );
+      const withLocalPackages = candidate(directory);
+      await withConfig(
+        {
+          ...withLocalPackages,
+          workspaceStorage: {
+            ...withLocalPackages.workspaceStorage,
+            parentKey: {
+              ...withLocalPackages.workspaceStorage.parentKey,
+              localPackagesDigest: "1".repeat(64),
+            },
+          },
+        },
+        async (configPath) =>
+          expect(loadUnityWorkConfig(configPath)).rejects.toThrow(
+            "does not stage external local packages",
+          ),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects overlapping source and broker workspace roots", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "honeybee-unity-config-"));
+    try {
+      const config = candidate(directory);
+      await withConfig(
+        {
+          ...config,
+          workspaceStorage: {
+            ...config.workspaceStorage,
+            workspaceRoot: path.join(config.sourceProjectPath, ".workspaces"),
+          },
+        },
+        async (configPath) =>
+          expect(loadUnityWorkConfig(configPath)).rejects.toThrow("must be disjoint"),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });

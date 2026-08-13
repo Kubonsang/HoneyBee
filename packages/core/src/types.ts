@@ -8,11 +8,13 @@ import type {
   FailureMetadata,
   OrchestrationEventV1,
   OrchestrationEventV2,
+  OrchestrationEventV3,
   PortName,
   RunId,
   StepId,
   TerminalWorkflowEvent,
   TerminalWorkflowEventV2,
+  TerminalWorkflowEventV3,
   ControlRequest,
   WorkflowConfigV3,
   WorkflowStep,
@@ -99,7 +101,7 @@ export type JournalReplay =
 
 export interface OrchestrationJournal {
   append(runId: RunId, event: OrchestrationEventV1): Promise<void>;
-  replay(runId: RunId): Promise<AnyJournalReplay>;
+  replay(runId: RunId): Promise<AnyVersionedJournalReplay>;
 }
 
 export type JournalReplayV2 =
@@ -120,9 +122,27 @@ export type JournalReplayV2 =
 
 export type AnyJournalReplay = JournalReplay | JournalReplayV2;
 
+export type JournalReplayV3 =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV3[];
+      terminal: TerminalWorkflowEventV3;
+    }>
+  | Readonly<{
+      status: "active";
+      events: readonly OrchestrationEventV3[];
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
+export type AnyVersionedJournalReplay = AnyJournalReplay | JournalReplayV3;
+
 export interface VersionedOrchestrationJournal {
   append(runId: RunId, event: AnyOrchestrationEvent): Promise<void>;
-  replay(runId: RunId): Promise<AnyJournalReplay>;
+  replay(runId: RunId): Promise<AnyVersionedJournalReplay>;
 }
 
 export interface RunControlPort {

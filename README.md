@@ -1,8 +1,12 @@
 # HoneyBee
 
-HoneyBee is a CLI-first, durable DAG orchestrator for handing work between real AI Agent processes.
+HoneyBee is a CLI-first orchestration kernel for durable Agent work and isolated Unity validation.
 
-Version 0.3 adds dependency-aware parallel execution, Artifact fan-in, conditional branches, bounded retry, approval gates, pause/resume, cancellation, and Journal-based recovery while preserving v0.2 sequential configs.
+Version 0.4 adds one deliberately sequential Unity work transaction while preserving the v0.3 DAG kernel:
+
+```text
+prepare → acquire → one Agent → TestPlay → Evidence → release → residual 0
+```
 
 > The former VS Code Extension and Webview packages remain retired. `packages/core`, `packages/orchestration-contracts`, and `apps/cli` are the product boundary.
 
@@ -10,7 +14,9 @@ Version 0.3 adds dependency-aware parallel execution, Artifact fan-in, condition
 
 - Windows 11
 - Node.js 24 or newer with Corepack
-- Codex and OpenCode only for the optional real-Agent example
+- A running `unity-workspace-storage` broker and a provisioned immutable parent for Unity work
+- TestPlay and Unity for Unity work
+- Codex and OpenCode only for optional real-Agent examples
 
 ## Quick start
 
@@ -22,6 +28,42 @@ corepack pnpm honeybee demo --task "count bees" --json
 ```
 
 The deterministic demo starts two separate Node processes and requires no network or AI account.
+
+## Unity work transaction v0.4
+
+```powershell
+corepack pnpm honeybee unity run --config unity-work.json --task "Implement and verify the Unity change" --json
+corepack pnpm honeybee run show <run-id> --json
+corepack pnpm honeybee run cancel <run-id>
+corepack pnpm honeybee run resume <run-id>
+```
+
+The strict Unity config contains one `stdio-framed-v2` Agent, an absolute source project path, the broker-owned workspace root, the complete provisioned `parentKey`, the absolute `unity-workspace-storage` command with `contractCommit` and `binarySha256` pins, and the TestPlay/Unity commands. Parent construction and broker administration remain operator responsibilities.
+
+The source project, broker workspace root, and HoneyBee Run-state root must be mutually disjoint. The CLI rejects overlapping roots before it creates a Run or prepares a shell.
+
+Start from [the Unity work config example](examples/unity-work.v1.example.json) and replace every placeholder digest/path with the values from the provisioned parent and installed binaries.
+
+The CLI bootstrap physically copies only `Assets`, `Packages`, and `ProjectSettings` into a transaction shell and verifies that `Library` is absent. This is an adapter detail, not a HoneyBee Core workspace abstraction. The storage provider mounts the writable `Library`; both the Agent and TestPlay run with the shell as their working project.
+
+The v0.4 bootstrap rejects parent keys with `localPackagesDigest`; staging external `file:` Unity packages is intentionally deferred rather than allowing the isolated shell to reach back into the source tree.
+
+TestPlay runs with `--no-bridge` and the same project path. HoneyBee imports `results.xml`, `summary.json`, `manifest.json`, `stdout.log`, `stderr.log`, and `events.ndjson` into its content-addressed Artifact Store before release. Raw paths, task text, process output, and Evidence bodies do not enter the Journal.
+
+Failure and cancellation drain the active process and use an independent cleanup context for release. A failed or lost release response leaves the Run nonterminal as `cleanup-pending`; `run resume` reuses the durable request ID and performs release only. It never repeats the Agent or TestPlay. `workflow.completed`, `workflow.failed`, or `workflow.cancelled` is appended only after `workspace.released`.
+
+The adapter currently targets `Kubonsang/unity-workspace-storage` public contract schema 1 at commit `575c3b37896cd3dfa37a4705477837cc52ec6132`. Acquire validates the provider, parent digest, ready lease, and exact `<workspace>/Library` mount. Release accepts only `cleanupState: "released"`.
+
+The deterministic CI suite uses real child processes with storage, Agent, and TestPlay contract fixtures. Run the environment-gated Unity E2E against an isolated broker/store and a disposable fixture project with:
+
+```powershell
+$env:HONEYBEE_UNITY_E2E_CONFIG = "C:\absolute\unity-work.json"
+$env:HONEYBEE_UNITY_E2E_TASK = "Apply the fixture change and make its Unity test pass."
+corepack pnpm build
+corepack pnpm exec vitest run apps/cli/src/unity-real.e2e.test.ts
+```
+
+The gated test requires the transaction source configured for the fixture to be disposable and the broker store to be isolated; it asserts the terminal event order and all four child/pending/quarantine residual counters are zero.
 
 ## Workflow config v3
 
@@ -136,7 +178,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-v0.3 remains a local CLI kernel. Distributed workers, a daemon, arbitrary condition code, binary Agent payloads, automatic replay of uncertain side effects, full power-loss durability, PTY/TUI orchestration, and Unity/testplay integration are out of scope. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md) and [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md).
+v0.4 remains a local CLI kernel. Its Unity path is exactly one transaction and one Agent. Multiple Unity Agents, parallel Unity execution, a scheduler, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, warm-editor bridge integration, and TestPlay shadow/scenario orchestration are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), and [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md).
 
 ## License
 

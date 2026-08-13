@@ -18,6 +18,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV3Schema,
+  UnityWorkConfigV1Schema,
   type AnyOrchestrationEvent,
   type ControlAction,
   type DagWorkflowRunResult,
@@ -27,14 +28,21 @@ import {
   type HoneyBeeCoreErrorCode,
 } from "@honeybee/core";
 
-import { loadWorkflowConfig } from "./config.js";
+import { loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
+import {
+  TestPlayCliAdapter,
+  UnityProjectBootstrap,
+  UnityWorkspaceStorageCliAdapter,
+} from "./unity-adapters.js";
+import { UnityWorkTransaction, type UnityWorkRunResult } from "./unity-transaction.js";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const HELP = `HoneyBee ${VERSION}
 
 Usage:
   honeybee demo --task <text> [--json]
   honeybee run --config <path> --task <text> [--json]
+  honeybee unity run --config <path> --task <text> [--json]
   honeybee run show <run-id> [--json]
   honeybee run pause <run-id> [--json]
   honeybee run resume <run-id> [--json]
@@ -48,6 +56,7 @@ Usage:
 Commands:
   demo                 Run a deterministic two-process compatible workflow.
   run                  Run a strict schemaVersion 1, 2, or 3 configuration.
+  unity run            Run one isolated Unity work transaction.
   run show             Replay durable Run and Step state.
   run pause/resume     Pause at a checkpoint or resume from the Journal.
   run approve/reject   Resolve a durable human approval gate.
@@ -61,6 +70,12 @@ type ParsedArguments =
   | Readonly<{
       command: "execute";
       mode: "demo" | "run";
+      task?: string;
+      config?: string;
+      json: boolean;
+    }>
+  | Readonly<{
+      command: "unity-execute";
       task?: string;
       config?: string;
       json: boolean;
@@ -90,6 +105,16 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
   }
   if (args[0] === "version" || args.includes("--version")) {
     return { command: "version", json: false };
+  }
+  if (args[0] === "unity" && args[1] === "run") {
+    const task = optionValue(args, "--task");
+    const config = optionValue(args, "--config");
+    return {
+      command: "unity-execute",
+      ...(task === undefined ? {} : { task }),
+      ...(config === undefined ? {} : { config }),
+      json: args.includes("--json"),
+    };
   }
   if (args[0] === "run" && args[1] !== undefined) {
     const subcommand = args[1];
@@ -148,7 +173,9 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
 
 const eventLine = (event: AnyOrchestrationEvent): string => {
   if (event.type === "workflow.started") {
-    return `[workflow] started run=${event.runId} steps=${event.payload.stepCount}`;
+    return event.schemaVersion === 3
+      ? "[workflow] started run=" + event.runId + " mode=unity-work-v1"
+      : "[workflow] started run=" + event.runId + " steps=" + event.payload.stepCount;
   }
   if (event.type === "artifact.stored") {
     return `[artifact] stored kind=${event.payload.artifact.kind} id=${event.payload.artifact.artifactId}`;
@@ -197,6 +224,36 @@ const demoConfig = (): WorkflowConfigV3 => {
 };
 
 const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
+
+const pathsOverlap = (left: string, right: string): boolean => {
+  const relativeLeft = path.relative(left, right);
+  const relativeRight = path.relative(right, left);
+  return (
+    relativeLeft === "" ||
+    (!relativeLeft.startsWith(".." + path.sep) &&
+      relativeLeft !== ".." &&
+      !path.isAbsolute(relativeLeft)) ||
+    (!relativeRight.startsWith(".." + path.sep) &&
+      relativeRight !== ".." &&
+      !path.isAbsolute(relativeRight))
+  );
+};
+
+const assertUnityPathsDisjoint = (
+  root: string,
+  config: ReturnType<typeof UnityWorkConfigV1Schema.parse>,
+): void => {
+  if (
+    pathsOverlap(root, config.sourceProjectPath) ||
+    pathsOverlap(root, config.workspaceStorage.workspaceRoot) ||
+    pathsOverlap(config.sourceProjectPath, config.workspaceStorage.workspaceRoot)
+  ) {
+    throw new Error(
+      "HoneyBee Run state, sourceProjectPath, and workspaceStorage.workspaceRoot must be disjoint.",
+    );
+  }
+};
+
 const output = (value: unknown, json: boolean): void => {
   process.stdout.write(json ? `${JSON.stringify(value)}\n` : `${String(value)}\n`);
 };
@@ -247,6 +304,38 @@ const finishExecution = (
   else if (result.status === "paused" || result.status === "interrupted") process.exitCode = 4;
   else if (result.status === "cancelled") process.exitCode = 130;
 };
+
+const finishUnityExecution = (
+  result: UnityWorkRunResult,
+  journalPath: string,
+  json: boolean,
+): void => {
+  if (json) output({ ok: result.status === "completed", ...result, journalPath }, true);
+  else output("Unity Run " + result.runId + ": " + result.status, false);
+  if (result.status === "failed") process.exitCode = 1;
+  else if (result.status === "cleanup-pending") process.exitCode = 4;
+  else if (result.status === "cancelled") process.exitCode = 130;
+};
+
+const unityTransactionFor = (
+  root: string,
+  config: ReturnType<typeof UnityWorkConfigV1Schema.parse>,
+  journal: VersionedOrchestrationJournal,
+  controls: FileRunControl,
+): UnityWorkTransaction =>
+  new UnityWorkTransaction(
+    new ChildProcessAgentRunner(),
+    new FileArtifactStore(root),
+    journal,
+    controls,
+    new UnityProjectBootstrap(),
+    new UnityWorkspaceStorageCliAdapter(
+      config.workspaceStorage.command,
+      config.workspaceStorage.parentKey.provider,
+      config.workspaceStorage.binarySha256,
+    ),
+    new TestPlayCliAdapter(config.testplay),
+  );
 
 const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
   if (args.task === undefined || args.task.trim().length === 0)
@@ -302,6 +391,36 @@ const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): 
   }
 };
 
+const executeUnity = async (
+  args: Extract<ParsedArguments, { command: "unity-execute" }>,
+): Promise<void> => {
+  if (args.task === undefined || args.task.trim().length === 0) {
+    throw new Error("--task is required.");
+  }
+  if (args.config === undefined) throw new Error("--config is required for unity run.");
+  const config = await loadUnityWorkConfig(args.config);
+  const runId = RunIdSchema.parse(randomUUID());
+  const root = stateRoot();
+  assertUnityPathsDisjoint(root, config);
+  await new FileRunRepository(root).create(runId);
+  const controls = new FileRunControl(root);
+  const executorLease = await controls.acquire(runId);
+  const journal = new FileOrchestrationJournal(root);
+  const journalPath = path.join(root, runId, "events.jsonl");
+  try {
+    const result = await unityTransactionFor(root, config, journal, controls).run(
+      runId,
+      args.task,
+      config,
+    );
+    finishUnityExecution(result, journalPath, args.json);
+  } catch (error) {
+    throw new CliRunExecutionError(runId, journalPath, error);
+  } finally {
+    await executorLease.release();
+  }
+};
+
 const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>): Promise<void> => {
   const runId = RunIdSchema.parse(args.runId);
   const root = stateRoot();
@@ -310,6 +429,25 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
   const lease = await controls.acquire(runId);
   const journalPath = path.join(root, runId, "events.jsonl");
   try {
+    const journal = new FileOrchestrationJournal(root);
+    const replay = await journal.replay(runId);
+    if (replay.status !== "indeterminate" && replay.events[0]?.schemaVersion === 3) {
+      const start = replay.events[0];
+      if (start.type !== "workflow.started") {
+        throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
+      }
+      const artifacts = new FileArtifactStore(root);
+      const config = UnityWorkConfigV1Schema.parse(
+        JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+      );
+      assertUnityPathsDisjoint(root, config);
+      const result = await unityTransactionFor(root, config, journal, controls).resume(
+        runId,
+        config,
+      );
+      finishUnityExecution(result, journalPath, args.json);
+      return;
+    }
     const result = await workflowFor(root, new FileOrchestrationJournal(root), controls).resume(
       runId,
     );
@@ -347,6 +485,26 @@ const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Pro
     return;
   }
   const executorPresent = await new FileRunControl(root).executorPresent(runId);
+  if (replay.events[0]?.schemaVersion === 3) {
+    const terminalStatus =
+      replay.status === "terminal" ? replay.terminal.type.slice("workflow.".length) : undefined;
+    const cleanupPending = replay.status === "active" && !executorPresent;
+    const status = terminalStatus ?? (cleanupPending ? "cleanup-pending" : "running");
+    output(
+      args.json
+        ? {
+            ok: status === "completed",
+            runId,
+            status,
+            eventCount: replay.events.length,
+            executorPresent,
+            requiresResume: cleanupPending && !executorPresent,
+          }
+        : "Unity Run " + runId + ": " + status,
+      args.json,
+    );
+    return;
+  }
   if (replay.events[0]?.schemaVersion === 1) {
     const terminal = replay.status === "terminal" ? replay.terminal : undefined;
     const status = terminal?.type.slice("workflow.".length) ?? "indeterminate";
@@ -425,6 +583,21 @@ const submitControl = async (
   if (replay.status === "terminal") {
     throw new HoneyBeeCoreError("run.terminal", "A terminal Run cannot accept control requests.");
   }
+  if (replay.events[0]?.schemaVersion === 3 && args.action !== "cancel") {
+    throw new HoneyBeeCoreError(
+      "validation.invalid-workflow",
+      "Unity work transactions accept only run cancel.",
+    );
+  }
+  if (
+    replay.events[0]?.schemaVersion === 3 &&
+    replay.events.some((event) => event.type === "transaction.outcome-decided")
+  ) {
+    throw new HoneyBeeCoreError(
+      "run.not-resumable",
+      "The Unity outcome is already decided; run resume is required only for cleanup.",
+    );
+  }
   const stepId = args.stepId === undefined ? undefined : StepIdSchema.parse(args.stepId);
   const request = {
     requestId: EventIdSchema.parse(randomUUID()),
@@ -479,6 +652,7 @@ const main = async (): Promise<void> => {
   if (args.command === "help") return void process.stdout.write(HELP);
   if (args.command === "version") return void process.stdout.write(`${VERSION}\n`);
   if (args.command === "execute") return execute(args);
+  if (args.command === "unity-execute") return executeUnity(args);
   if (args.command === "show") return showRun(args);
   if (args.command === "resume") return resumeRun(args);
   if (args.command === "control") return submitControl(args);

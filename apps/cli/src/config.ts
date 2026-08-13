@@ -8,9 +8,11 @@ import {
   StepIdSchema,
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
+  UnityWorkConfigV1Schema,
   type AgentCommand,
   type AgentDefinition,
   type WorkflowConfigV3,
+  type UnityWorkConfigV1,
 } from "@honeybee/orchestration-contracts";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -205,4 +207,67 @@ export const loadWorkflowConfig = async (configPath: string): Promise<WorkflowCo
   if (parsed.schemaVersion === 2) return loadV2(parsed, directory);
   if (parsed.schemaVersion === 3) return loadV3(parsed, directory);
   throw new Error("The config must use schemaVersion 1, 2, or 3.");
+};
+
+const absoluteExpandedPath = (value: string, name: string): string => {
+  const expanded = expandEnvironment(value, name);
+  if (!path.isAbsolute(expanded)) throw new Error(name + " must be an absolute path.");
+  return path.normalize(expanded);
+};
+
+const pathsOverlap = (left: string, right: string): boolean => {
+  const relativeLeft = path.relative(left, right);
+  const relativeRight = path.relative(right, left);
+  return (
+    relativeLeft === "" ||
+    (!relativeLeft.startsWith(".." + path.sep) &&
+      relativeLeft !== ".." &&
+      !path.isAbsolute(relativeLeft)) ||
+    (!relativeRight.startsWith(".." + path.sep) &&
+      relativeRight !== ".." &&
+      !path.isAbsolute(relativeRight))
+  );
+};
+
+export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfigV1> => {
+  const absolutePath = path.resolve(configPath);
+  const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
+  const original = UnityWorkConfigV1Schema.safeParse(parsed);
+  if (!original.success) {
+    throw new Error("Invalid Unity work schemaVersion 1 config: " + original.error.message);
+  }
+  const directory = path.dirname(absolutePath);
+  const workspaceCommand = readAgentCommand(
+    original.data.workspaceStorage.command,
+    "workspaceStorage.command",
+    directory,
+  );
+  if (!path.isAbsolute(workspaceCommand.command)) {
+    throw new Error("workspaceStorage.command.command must be an absolute path.");
+  }
+  const normalized = UnityWorkConfigV1Schema.parse({
+    ...original.data,
+    sourceProjectPath: absoluteExpandedPath(original.data.sourceProjectPath, "sourceProjectPath"),
+    workspaceStorage: {
+      ...original.data.workspaceStorage,
+      command: { ...workspaceCommand, command: path.normalize(workspaceCommand.command) },
+      workspaceRoot: absoluteExpandedPath(
+        original.data.workspaceStorage.workspaceRoot,
+        "workspaceStorage.workspaceRoot",
+      ),
+    },
+    agent: {
+      ...original.data.agent,
+      command: readAgentCommand(original.data.agent.command, "agent.command", directory),
+    },
+    testplay: {
+      ...original.data.testplay,
+      command: readAgentCommand(original.data.testplay.command, "testplay.command", directory),
+      unityPath: absoluteExpandedPath(original.data.testplay.unityPath, "testplay.unityPath"),
+    },
+  });
+  if (pathsOverlap(normalized.sourceProjectPath, normalized.workspaceStorage.workspaceRoot)) {
+    throw new Error("sourceProjectPath and workspaceStorage.workspaceRoot must be disjoint.");
+  }
+  return normalized;
 };
