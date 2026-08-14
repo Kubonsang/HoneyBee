@@ -219,6 +219,17 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toContain(
       '"type":"workflow.started"',
     );
+
+    await writeFile(path.join(root, runId, "events.jsonl"), '{"unidentifiable":', "utf8");
+    const unidentifiedDeletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+    expect(unidentifiedDeletion.exitCode).toBe(1);
+    expect(JSON.parse(unidentifiedDeletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toBe(
+      '{"unidentifiable":',
+    );
   }, 20_000);
 
   it("returns runId and journalPath when an Agent fails", async () => {

@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFile, lstat, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, lstat, mkdir, open, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -19,6 +19,8 @@ import { physicalPathsOverlap, samePath } from "./path-safety.js";
 import { terminateProcessTree } from "./process-control.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
+const MAX_EVIDENCE_FILE_BYTES = 16 * 1024 * 1024;
+const MAX_EVIDENCE_TOTAL_BYTES = 32 * 1024 * 1024;
 const SOURCE_DIRECTORIES = ["Assets", "Packages", "ProjectSettings"] as const;
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -37,6 +39,82 @@ const parseOneJson = (serialized: string, name: string): unknown => {
     return JSON.parse(trimmed) as unknown;
   } catch {
     throw new Error(name + " stdout was not one JSON value.");
+  }
+};
+
+const createExclusiveFile = async (target: string, content: string): Promise<void> => {
+  try {
+    const handle = await open(target, "wx", 0o600);
+    try {
+      await handle.writeFile(content, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof HoneyBeeCoreError) throw error;
+    if (errorCode(error) === "EEXIST") {
+      throw new HoneyBeeCoreError(
+        "workspace.cleanup-unsafe",
+        "The reserved TestPlay config path already exists.",
+      );
+    }
+    throw new HoneyBeeCoreError("testplay.failed", "The TestPlay config could not be created.");
+  }
+};
+
+const readBoundedEvidenceFile = async (
+  target: string,
+  maxBytes: number,
+): Promise<Buffer | undefined> => {
+  let entry: Awaited<ReturnType<typeof lstat>>;
+  try {
+    entry = await lstat(target);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return undefined;
+    throw new HoneyBeeCoreError("testplay.failed", "TestPlay Evidence could not be inspected.");
+  }
+  if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+    throw new HoneyBeeCoreError(
+      "testplay.failed",
+      "TestPlay Evidence must be a private regular file.",
+    );
+  }
+  try {
+    const handle = await open(target, "r");
+    try {
+      const opened = await handle.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        opened.dev !== entry.dev ||
+        opened.ino !== entry.ino
+      ) {
+        throw new HoneyBeeCoreError(
+          "testplay.failed",
+          "TestPlay Evidence changed while it was being opened.",
+        );
+      }
+      const buffer = Buffer.allocUnsafe(maxBytes + 1);
+      let offset = 0;
+      while (offset < buffer.byteLength) {
+        const { bytesRead } = await handle.read(buffer, offset, buffer.byteLength - offset, null);
+        if (bytesRead === 0) break;
+        offset += bytesRead;
+      }
+      if (offset > maxBytes) {
+        throw new HoneyBeeCoreError(
+          "testplay.failed",
+          "TestPlay Evidence exceeded its byte budget.",
+        );
+      }
+      return buffer.subarray(0, offset);
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof HoneyBeeCoreError) throw error;
+    throw new HoneyBeeCoreError("testplay.failed", "TestPlay Evidence could not be read.");
   }
 };
 
@@ -732,7 +810,7 @@ export class TestPlayCliAdapter {
     lifecycle: Required<CommandLifecycle>,
   ): Promise<TestPlayRunResult> {
     const configPath = path.join(workspacePath, ".honeybee-testplay-" + runId + ".json");
-    await writeFile(
+    await createExclusiveFile(
       configPath,
       JSON.stringify({
         schema_version: "1",
@@ -744,7 +822,6 @@ export class TestPlayCliAdapter {
         retention: { max_runs: 0 },
         bridge: { enabled: false },
       }),
-      "utf8",
     );
     const before = await this.runDirectories(workspacePath);
     const args = ["run", "--config", configPath, "--no-bridge"];
@@ -824,18 +901,21 @@ export class TestPlayCliAdapter {
       "events.ndjson",
     ];
     const files: TestPlayEvidenceFile[] = [];
+    let totalBytes = 0;
     for (const name of names) {
-      try {
-        const bytes = await readFile(path.join(root, name));
-        files.push({
-          name,
-          mediaType: evidenceMediaType(name),
-          content: bytes.toString("utf8"),
-          digest: digestOf(bytes),
-        });
-      } catch {
-        continue;
-      }
+      const remaining = MAX_EVIDENCE_TOTAL_BYTES - totalBytes;
+      const bytes = await readBoundedEvidenceFile(
+        path.join(root, name),
+        Math.min(MAX_EVIDENCE_FILE_BYTES, remaining),
+      );
+      if (bytes === undefined) continue;
+      totalBytes += bytes.byteLength;
+      files.push({
+        name,
+        mediaType: evidenceMediaType(name),
+        content: bytes.toString("utf8"),
+        digest: digestOf(bytes),
+      });
     }
     return files;
   }

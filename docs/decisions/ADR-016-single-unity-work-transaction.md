@@ -43,6 +43,7 @@ prepare
 Unity transaction은 Journal schemaVersion 3을 사용한다. schemaVersion 1과 2 Run은 기존 의미를 유지한다.
 
 - `workspace.acquired`가 fsync되기 전에는 Agent를 실행하지 않는다.
+- storage가 lease를 반환한 뒤 receipt Artifact 또는 `workspace.acquired` 기록이 실패하면 acquire failure로 확정하지 않는다. 동일 acquire request로 lease identity를 복구할 수 있도록 Run을 `cleanup-pending`으로 유지한다.
 - TestPlay Evidence는 Artifact Store에 publish된 뒤에만 `testplay.verified`가 기록된다.
 - semantic outcome은 release보다 먼저 `transaction.outcome-decided`로 확정한다.
 - terminal workflow event는 `workspace.released` 이후 Journal의 마지막 event로만 기록한다.
@@ -50,7 +51,7 @@ Unity transaction은 Journal schemaVersion 3을 사용한다. schemaVersion 1과
 - `agent.started`와 `testplay.started`는 가능한 경우 PID와 process incarnation을 함께 기록한다. Resume은 대응하는 exit가 없는 동일 incarnation의 Windows process tree를 먼저 drain하며, 성공하면 해당 started event를 가리키는 `process.drain-completed`를 기록한다. 이후 resume은 이 durable marker를 재사용한다. 안전하게 식별하거나 종료할 수 없으면 release하지 않고 `cleanup-pending`을 유지한다.
 - release 실패 또는 응답 유실은 terminal failure가 아니다. Run은 `cleanup-pending`으로 남는다.
 - `run resume`는 같은 release request ID로 cleanup만 복구하며 Agent와 TestPlay를 재실행하지 않는다.
-- nonterminal Unity Run은 `workspace.released`가 기록되기 전까지 `run delete`로 제거할 수 없다.
+- nonterminal Unity Run과 Journal이 손상된 모든 `indeterminate` Run은 `run delete`로 제거할 수 없다.
 - acquire 응답이 불확실하면 같은 acquire request ID로 lease 응답만 복구한 후 interrupted/cancel outcome으로 release한다. 일반 workflow retry로 취급하지 않는다.
 
 HoneyBee/Agent/adapter process crash와 강제 종료 이후 Journal consistency와 cleanup recovery를 대상으로 한다. 전원 차단, OS crash 및 storage controller cache를 포함한 완전한 power-loss durability는 보장하지 않는다.
@@ -70,7 +71,7 @@ release 전에 다음 TestPlay 파일을 HoneyBee Artifact Store로 가져온다
 - `stderr.log`
 - `events.ndjson`
 
-Evidence body와 source/workspace path는 Journal에 기록하지 않는다. Journal은 typed process metadata와 Artifact reference만 보유한다.
+TestPlay config는 Run별 reserved path에 exclusive create하며 기존 file, hard link 또는 reparse entry를 덮어쓰지 않는다. Evidence는 private regular file만 허용하고 파일당 16 MiB, transaction당 총 32 MiB까지만 bounded read한다. Evidence body와 source/workspace path는 Journal에 기록하지 않는다. Journal은 typed process metadata와 Artifact reference만 보유한다.
 
 ### residual 0
 

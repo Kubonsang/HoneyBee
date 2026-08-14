@@ -1,5 +1,15 @@
 import { createHash, randomUUID } from "node:crypto";
-import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  appendFile,
+  copyFile,
+  link,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rm,
+  truncate,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -173,6 +183,69 @@ describe("UnityProjectBootstrap source manifests", () => {
     expect(firstManifest.logicalBytes).toBe(secondManifest.logicalBytes);
     expect(firstManifest.assetsDigest).not.toBe(secondManifest.assetsDigest);
     expect(firstManifest.digest).not.toBe(secondManifest.digest);
+  });
+});
+
+describe("TestPlayCliAdapter filesystem safety", () => {
+  const adapter = (root: string) =>
+    new TestPlayCliAdapter({
+      command: { command: "unused" },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 10_000,
+    });
+
+  it("refuses to replace a hard link at the reserved TestPlay config path", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-config-link-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const victim = path.join(root, "victim.json");
+    const runId = RunIdSchema.parse(randomUUID());
+    await mkdir(workspace);
+    await writeFile(victim, "do not overwrite", "utf8");
+    await link(victim, path.join(workspace, ".honeybee-testplay-" + runId + ".json"));
+
+    await expect(
+      adapter(root).run(runId, workspace, new AbortController().signal, {
+        onStarted: async () => undefined,
+        onExited: async () => undefined,
+      }),
+    ).rejects.toMatchObject({ code: "workspace.cleanup-unsafe" });
+    expect(await readFile(victim, "utf8")).toBe("do not overwrite");
+  });
+
+  it("rejects an Evidence file larger than the per-file byte budget", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-evidence-file-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const evidenceRoot = path.join(workspace, ".testplay", "runs", "run");
+    await mkdir(evidenceRoot, { recursive: true });
+    const evidencePath = path.join(evidenceRoot, "stdout.log");
+    await writeFile(evidencePath, "");
+    await truncate(evidencePath, 16 * 1024 * 1024 + 1);
+
+    await expect(adapter(root).recoverEvidence(workspace)).rejects.toMatchObject({
+      code: "testplay.failed",
+    });
+  });
+
+  it("rejects aggregate Evidence larger than the transaction byte budget", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-evidence-total-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const evidenceRoot = path.join(workspace, ".testplay", "runs", "run");
+    await mkdir(evidenceRoot, { recursive: true });
+    await Promise.all(
+      ["results.xml", "stdout.log", "stderr.log"].map(async (name) => {
+        const target = path.join(evidenceRoot, name);
+        await writeFile(target, "");
+        await truncate(target, 12 * 1024 * 1024);
+      }),
+    );
+
+    await expect(adapter(root).recoverEvidence(workspace)).rejects.toMatchObject({
+      code: "testplay.failed",
+    });
   });
 });
 

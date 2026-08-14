@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -16,6 +16,7 @@ import {
   UnityWorkConfigV1Schema,
   type AgentProcessResult,
   type AgentProcessRunner,
+  type ArtifactStore,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -24,6 +25,8 @@ import {
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
   type SourceManifest,
+  type WorkspaceAcquireRequest,
+  type WorkspaceAcquireReceipt,
   type WorkspaceReleaseReceipt,
 } from "./unity-adapters.js";
 import type { UnityProcessControl } from "./process-control.js";
@@ -159,6 +162,68 @@ class FailFirstResumeStorage extends ResumeStorage {
   }
 }
 
+class AcquireRecoveryStorage extends ResumeStorage {
+  public acquireCalls = 0;
+
+  public override async preflight(): Promise<void> {}
+
+  public override async acquire(
+    request: WorkspaceAcquireRequest,
+    workspacePath: string,
+  ): Promise<WorkspaceAcquireReceipt> {
+    this.acquireCalls += 1;
+    return {
+      schemaVersion: 1,
+      requestId: request.requestId,
+      provider: "vhdx-differencing",
+      lease: {
+        leaseId: "lease-recovered",
+        runId: request.consumerId,
+        parentKey: request.parentKey.digest,
+        mountPath: path.join(workspacePath, "Library"),
+        state: "ready",
+        retained: false,
+      },
+    };
+  }
+}
+
+class AcquireRecoveryBootstrap extends ResumeBootstrap {
+  public cleanupCalls = 0;
+
+  public override async prepare(
+    _sourceProjectPath: string,
+    workspaceRoot: string,
+    workspaceId: string,
+  ): Promise<string> {
+    return path.join(workspaceRoot, workspaceId);
+  }
+
+  public override async cleanupUnacquired(): Promise<void> {
+    this.cleanupCalls += 1;
+  }
+}
+
+class FailOnceAcquireReceiptStore implements ArtifactStore {
+  #failed = false;
+
+  public constructor(private readonly delegate: ArtifactStore) {}
+
+  public put(request: Parameters<ArtifactStore["put"]>[0]): ReturnType<ArtifactStore["put"]> {
+    if (!this.#failed && request.kind === "workspace-acquire-receipt") {
+      this.#failed = true;
+      return Promise.reject(
+        new HoneyBeeCoreError("artifact.write-failed", "Injected receipt persistence failure."),
+      );
+    }
+    return this.delegate.put(request);
+  }
+
+  public get(request: Parameters<ArtifactStore["get"]>[0]): ReturnType<ArtifactStore["get"]> {
+    return this.delegate.get(request);
+  }
+}
+
 const resumeConfig = (root: string) => {
   const hex = (value: string) => value.repeat(64);
   return UnityWorkConfigV1Schema.parse({
@@ -281,6 +346,56 @@ const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | und
 };
 
 describe("UnityWorkTransaction cleanup resume", () => {
+  it("recovers a returned lease when receipt persistence fails after acquire", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-acquire-persistence-"));
+    directories.push(root);
+    const runRoot = path.join(root, "runs");
+    const config = resumeConfig(root);
+    const runId = RunIdSchema.parse(randomUUID());
+    await Promise.all([
+      new FileRunRepository(runRoot).create(runId),
+      mkdir(config.workspaceStorage.workspaceRoot, { recursive: true }),
+    ]);
+    const journal = new FileOrchestrationJournal(runRoot);
+    const artifacts = new FailOnceAcquireReceiptStore(new FileArtifactStore(runRoot));
+    const storage = new AcquireRecoveryStorage();
+    const bootstrap = new AcquireRecoveryBootstrap();
+    const runner = new CompletedRunner();
+    const transaction = new UnityWorkTransaction(
+      runner,
+      artifacts,
+      journal,
+      new FileRunControl(runRoot),
+      bootstrap,
+      storage,
+      new TestPlayCliAdapter(config.testplay),
+    );
+
+    const first = await transaction.run(runId, "persist acquire safely", config);
+
+    expect(first.status).toBe("cleanup-pending");
+    expect(first.failure?.errorCode).toBe("artifact.write-failed");
+    expect(storage.acquireCalls).toBe(1);
+    expect(storage.released).toBe(false);
+    expect(bootstrap.cleanupCalls).toBe(0);
+    const active = await journal.replay(runId);
+    expect(active.status).toBe("active");
+    if (active.status === "active") {
+      expect(active.events.some((event) => event.type === "workspace.acquire-failed")).toBe(false);
+      expect(active.events.some((event) => event.type === "workspace.acquired")).toBe(false);
+    }
+
+    const resumed = await transaction.resume(runId, config);
+
+    expect(resumed.status).toBe("failed");
+    expect(resumed.failure?.errorCode).toBe("transaction.interrupted");
+    expect(storage.acquireCalls).toBe(2);
+    expect(storage.released).toBe(true);
+    expect(bootstrap.cleanupCalls).toBe(0);
+    expect(runner.calls).toBe(0);
+    expect((await journal.replay(runId)).status).toBe("terminal");
+  });
+
   it.each(["agent", "testplay"] as const)(
     "drains an unmatched %s process before workspace release",
     async (started) => {
@@ -454,6 +569,53 @@ describe("UnityWorkTransaction cleanup resume", () => {
     if (replay.status === "terminal") {
       expect(replay.events.filter((event) => event.type === "source.checked")).toHaveLength(1);
       expect(replay.terminal.type).toBe("workflow.failed");
+    }
+  });
+
+  it("records oversized recovered Evidence as failed and still releases", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-evidence-limit-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "testplay");
+    await seeded.append("testplay.exited", {
+      pid: 4343,
+      exitCode: 0,
+      signal: null,
+      durationMs: 1,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+    });
+    const evidenceRoot = path.join(
+      seeded.config.workspaceStorage.workspaceRoot,
+      "hb-" + seeded.runId,
+      ".testplay",
+      "runs",
+      "run",
+    );
+    await mkdir(evidenceRoot, { recursive: true });
+    const evidencePath = path.join(evidenceRoot, "stdout.log");
+    await writeFile(evidencePath, "");
+    await truncate(evidencePath, 16 * 1024 * 1024 + 1);
+    const storage = new ResumeStorage();
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+    );
+
+    const result = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("failed");
+    expect(result.failure?.errorCode).toBe("testplay.failed");
+    expect(storage.released).toBe(true);
+    const replay = await seeded.journal.replay(seeded.runId);
+    expect(replay.status).toBe("terminal");
+    if (replay.status === "terminal") {
+      expect(replay.terminal.type).toBe("workflow.failed");
+      expect(replay.events.some((event) => event.type === "workspace.released")).toBe(true);
     }
   });
 

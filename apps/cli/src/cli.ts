@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,7 +15,6 @@ import {
   FileRunRepository,
   HarnessIdSchema,
   HoneyBeeCoreError,
-  OrchestrationEventV3Schema,
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV3Schema,
@@ -228,37 +226,6 @@ const demoConfig = (): WorkflowConfigV3 => {
 };
 
 const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
-
-const inspectUnityCleanupState = async (
-  root: string,
-  runId: RunId,
-): Promise<Readonly<{ unity: boolean; released: boolean }>> => {
-  let serialized: string;
-  try {
-    serialized = await readFile(path.join(root, runId, "events.jsonl"), "utf8");
-  } catch {
-    return { unity: false, released: false };
-  }
-  let unity = false;
-  let released = false;
-  for (const line of serialized.split(/\r?\n/u)) {
-    if (line.length === 0) continue;
-    try {
-      const event = OrchestrationEventV3Schema.parse(JSON.parse(line));
-      if (
-        event.type === "workflow.started" &&
-        event.payload.mode === "unity-work-v1" &&
-        event.runId === runId
-      ) {
-        unity = true;
-      }
-      if (event.type === "workspace.released" && event.runId === runId) released = true;
-    } catch {
-      break;
-    }
-  }
-  return { unity, released };
-};
 
 const assertUnityPathsDisjoint = async (
   root: string,
@@ -665,20 +632,13 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     const repository = new FileRunRepository(root);
     await repository.open(runId);
     const replay = await new FileOrchestrationJournal(root).replay(runId);
-    const cleanup =
-      replay.status === "indeterminate"
-        ? await inspectUnityCleanupState(root, runId)
-        : {
-            unity: replay.events[0]?.schemaVersion === 3,
-            released: replay.events.some((event) => event.type === "workspace.released"),
-          };
     if (
-      cleanup.unity &&
-      (replay.status === "active" || (replay.status === "indeterminate" && !cleanup.released))
+      replay.status === "indeterminate" ||
+      (replay.status === "active" && replay.events[0]?.schemaVersion === 3)
     ) {
       throw new HoneyBeeCoreError(
         "run.cleanup-pending",
-        "A Unity Run cannot be deleted until workspace release is durably confirmed.",
+        "A Run with unconfirmed cleanup cannot be deleted.",
       );
     }
     await repository.delete(runId);

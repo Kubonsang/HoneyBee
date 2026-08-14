@@ -306,6 +306,14 @@ export class UnityWorkTransaction {
       });
     } catch (error) {
       const metadata = failureMetadata(error);
+      if (acquired !== undefined) {
+        return {
+          runId,
+          status: "cleanup-pending",
+          ...(sourceBefore === undefined ? {} : { sourceBefore }),
+          failure: metadata,
+        };
+      }
       if (
         acquireStarted &&
         (metadata.errorCode === "workspace.command-ambiguous" ||
@@ -534,17 +542,21 @@ export class UnityWorkTransaction {
       const exited = lastEvent(events, "testplay.exited");
       const storedEvidence = lastEvent(events, "testplay.evidence-stored");
       if (exited !== undefined && storedEvidence === undefined) {
-        const recovered = await this.testplay.recoverEvidence(workspacePath);
-        if (recovered.length > 0) {
-          recoveredEvidence = await this.#storeRecoveredTestPlayEvidence(
-            runId,
-            writer,
-            recovered,
-            exited.payload,
-          );
-          await writer.emit("testplay.evidence-stored", {
-            evidence: recoveredEvidence,
-          });
+        try {
+          const recovered = await this.testplay.recoverEvidence(workspacePath);
+          if (recovered.length > 0) {
+            recoveredEvidence = await this.#storeRecoveredTestPlayEvidence(
+              runId,
+              writer,
+              recovered,
+              exited.payload,
+            );
+            await writer.emit("testplay.evidence-stored", {
+              evidence: recoveredEvidence,
+            });
+          }
+        } catch (error) {
+          decision = { outcome: "failed", failure: failureMetadata(error) };
         }
       }
       if (sourceBefore !== undefined && sourceAfter === undefined) {
