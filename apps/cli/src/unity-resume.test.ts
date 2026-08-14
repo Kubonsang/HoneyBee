@@ -22,7 +22,10 @@ import {
   TestPlayCliAdapter,
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
+  type SourceManifest,
+  type WorkspaceReleaseReceipt,
 } from "./unity-adapters.js";
+import type { UnityProcessControl } from "./process-control.js";
 import { UnityWorkTransaction } from "./unity-transaction.js";
 
 const directories: string[] = [];
@@ -41,7 +44,7 @@ class CompletedRunner implements AgentProcessRunner {
     lifecycle: Parameters<AgentProcessRunner["run"]>[1],
   ): Promise<AgentProcessResult> {
     this.calls += 1;
-    await lifecycle.onStarted(9001);
+    await lifecycle.onStarted(process.pid);
     const match = request.prompt.match(
       /HONEYBEE_INPUT_BEGIN\r?\n([\s\S]*?)\r?\nHONEYBEE_INPUT_END/u,
     );
@@ -53,7 +56,7 @@ class CompletedRunner implements AgentProcessRunner {
       "utf8",
     );
     const observation = {
-      pid: 9001,
+      pid: process.pid,
       exitCode: 0,
       signal: null,
       durationMs: 1,
@@ -86,7 +89,248 @@ class CompletedRunner implements AgentProcessRunner {
   }
 }
 
+const resumeManifest: SourceManifest = {
+  schemaVersion: 1,
+  digest: "1".repeat(64),
+  assetsDigest: "2".repeat(64),
+  packagesDigest: "3".repeat(64),
+  projectSettingsDigest: "4".repeat(64),
+  fileCount: 3,
+  logicalBytes: 3,
+};
+
+class ResumeBootstrap extends UnityProjectBootstrap {
+  public constructor(private readonly sourceFailure = false) {
+    super();
+  }
+
+  public override async manifest(): Promise<SourceManifest> {
+    if (this.sourceFailure) throw new Error("source unavailable");
+    return resumeManifest;
+  }
+
+  public override async verifyReleased(): Promise<void> {}
+}
+
+class ResumeStorage extends UnityWorkspaceStorageCliAdapter {
+  public released = false;
+  public readonly order: string[] = [];
+
+  public constructor() {
+    super({ command: process.execPath }, "vhdx-differencing", "0".repeat(64));
+  }
+
+  public override async release(
+    leaseId: string,
+    requestId: string,
+  ): Promise<WorkspaceReleaseReceipt> {
+    this.order.push("release");
+    this.released = true;
+    return {
+      schemaVersion: 1,
+      requestId,
+      provider: "vhdx-differencing",
+      lease: {
+        leaseId,
+        runId: "released",
+        parentKey: "released",
+        mountPath: "released",
+        state: "released",
+        retained: false,
+      },
+      metrics: { cleanupState: "released" },
+    };
+  }
+}
+
+const resumeConfig = (root: string) => {
+  const hex = (value: string) => value.repeat(64);
+  return UnityWorkConfigV1Schema.parse({
+    schemaVersion: 1,
+    sourceProjectPath: path.join(root, "source"),
+    workspaceStorage: {
+      command: { command: process.execPath },
+      contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+      binarySha256: hex("0"),
+      workspaceRoot: path.join(root, "workspaces"),
+      parentKey: {
+        schemaVersion: 2,
+        digest: hex("a"),
+        libraryKey: {
+          schemaVersion: "1",
+          digest: hex("b"),
+          unityVersion: "6000",
+          unityExecutableSha256: hex("c"),
+          manifestSha256: hex("d"),
+          packagesLockSha256: "missing",
+          projectSettingsSha256: hex("e"),
+          buildTarget: "windows/amd64",
+          scriptingBackend: "Mono",
+          projectIdentitySha256: hex("f"),
+        },
+        provider: "vhdx-differencing",
+        filesystem: "NTFS",
+        virtualBytes: 1,
+        blockBytes: 1,
+        sectorBytes: 1,
+      },
+    },
+    agent: { command: { command: "must-not-run" }, harness: "stdio-framed-v2" },
+    testplay: {
+      command: { command: "must-not-run" },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 1,
+    },
+  });
+};
+
+const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | undefined) => {
+  const runRoot = path.join(root, "runs");
+  const runId = RunIdSchema.parse(randomUUID());
+  const config = resumeConfig(root);
+  await Promise.all([
+    new FileRunRepository(runRoot).create(runId),
+    mkdir(config.workspaceStorage.workspaceRoot, { recursive: true }),
+  ]);
+  const artifacts = new FileArtifactStore(runRoot);
+  const put = (kind: Parameters<FileArtifactStore["put"]>[0]["kind"], content: string) =>
+    artifacts.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind,
+      mediaType: "application/json",
+      content,
+    });
+  const [configArtifact, taskArtifact, sourceArtifact, requestArtifact, receiptArtifact] =
+    await Promise.all([
+      put("workflow-config", JSON.stringify(config)),
+      put("task", "task"),
+      put("unity-source-manifest", JSON.stringify(resumeManifest)),
+      put("workspace-acquire-request", "{}"),
+      put("workspace-acquire-receipt", "{}"),
+    ]);
+  const journal = new FileOrchestrationJournal(runRoot);
+  let sequence = 0;
+  const append = async (type: string, payload: unknown, stepId?: string): Promise<void> => {
+    await journal.append(
+      runId,
+      OrchestrationEventV3Schema.parse({
+        schemaVersion: 3,
+        eventId: EventIdSchema.parse(randomUUID()),
+        runId,
+        sequence: ++sequence,
+        timestamp: new Date(0).toISOString(),
+        type,
+        ...(stepId === undefined ? {} : { stepId }),
+        payload,
+      }),
+    );
+  };
+  await append("workflow.started", {
+    mode: "unity-work-v1",
+    config: configArtifact,
+    task: taskArtifact,
+  });
+  await append("source.baselined", { manifest: sourceArtifact });
+  await append("workspace.prepared", {
+    workspaceId: "hb-" + runId,
+    sourceManifest: sourceArtifact,
+  });
+  await append("workspace.acquire-started", { request: requestArtifact, requestId: "acquire" });
+  await append("workspace.acquired", {
+    workspaceId: "hb-" + runId,
+    leaseId: "lease-1",
+    receipt: receiptArtifact,
+  });
+  if (started !== undefined) {
+    await append("agent.started", { pid: 4242, processIdentity: "test:agent" }, "unity-agent");
+  }
+  if (started === "testplay") {
+    await append(
+      "agent.exited",
+      {
+        pid: 4242,
+        exitCode: 0,
+        signal: null,
+        durationMs: 1,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      },
+      "unity-agent",
+    );
+    await append("testplay.started", { pid: 4343, processIdentity: "test:testplay" });
+  }
+  return { runRoot, runId, config, artifacts, journal };
+};
+
 describe("UnityWorkTransaction cleanup resume", () => {
+  it.each(["agent", "testplay"] as const)(
+    "drains an unmatched %s process before workspace release",
+    async (started) => {
+      const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-child-drain-"));
+      directories.push(root);
+      const seeded = await seedAcquiredRun(root, started);
+      const storage = new ResumeStorage();
+      const drained: Array<{ pid: number; identity?: string }> = [];
+      const processControl: UnityProcessControl = {
+        captureIdentity: async () => "unused",
+        drain: async (pid, identity) => {
+          storage.order.push("drain");
+          drained.push({ pid, ...(identity === undefined ? {} : { identity }) });
+        },
+      };
+      const transaction = new UnityWorkTransaction(
+        new CompletedRunner(),
+        seeded.artifacts,
+        seeded.journal,
+        new FileRunControl(seeded.runRoot),
+        new ResumeBootstrap(),
+        storage,
+        new TestPlayCliAdapter(seeded.config.testplay),
+        { processControl },
+      );
+
+      const result = await transaction.resume(seeded.runId, seeded.config);
+
+      expect(result.status).toBe("failed");
+      expect(storage.order).toEqual(["drain", "release"]);
+      expect(drained).toEqual([
+        started === "agent"
+          ? { pid: 4242, identity: "test:agent" }
+          : { pid: 4343, identity: "test:testplay" },
+      ]);
+    },
+  );
+
+  it("continues release when the original source cannot be checked during resume", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-source-missing-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, undefined);
+    const storage = new ResumeStorage();
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(true),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+    );
+
+    const result = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("failed");
+    expect(result.failure?.errorCode).toBe("source.check-failed");
+    expect(storage.released).toBe(true);
+    const replay = await seeded.journal.replay(seeded.runId);
+    expect(replay.status).toBe("terminal");
+    if (replay.status === "terminal") {
+      expect(replay.events.some((event) => event.type === "workspace.released")).toBe(true);
+      expect(replay.terminal.type).toBe("workflow.failed");
+    }
+  });
+
   it("removes a partial shell left by a crash before workspace.prepared", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-prepare-crash-"));
     directories.push(root);
@@ -346,7 +590,8 @@ describe("UnityWorkTransaction cleanup resume", () => {
     expect((await journal.replay(runId)).status).toBe("active");
 
     const resumed = await transaction.resume(runId, config);
-    expect(resumed.status).toBe("completed");
+    expect(resumed.failure).toBeUndefined();
+    expect(resumed).toMatchObject({ status: "completed" });
     expect(resumed.evidence?.kind).toBe("testplay-evidence");
     expect(runner.calls).toBe(1);
     expect(await readFile(path.join(workspaceRoot, "testplay-count"), "utf8")).toBe("1");

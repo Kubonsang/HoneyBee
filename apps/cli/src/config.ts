@@ -15,6 +15,8 @@ import {
   type UnityWorkConfigV1,
 } from "@honeybee/orchestration-contracts";
 
+import { physicalPathsOverlap } from "./path-safety.js";
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
 
@@ -215,20 +217,6 @@ const absoluteExpandedPath = (value: string, name: string): string => {
   return path.normalize(expanded);
 };
 
-const pathsOverlap = (left: string, right: string): boolean => {
-  const relativeLeft = path.relative(left, right);
-  const relativeRight = path.relative(right, left);
-  return (
-    relativeLeft === "" ||
-    (!relativeLeft.startsWith(".." + path.sep) &&
-      relativeLeft !== ".." &&
-      !path.isAbsolute(relativeLeft)) ||
-    (!relativeRight.startsWith(".." + path.sep) &&
-      relativeRight !== ".." &&
-      !path.isAbsolute(relativeRight))
-  );
-};
-
 export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfigV1> => {
   const absolutePath = path.resolve(configPath);
   const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
@@ -266,7 +254,12 @@ export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWork
       unityPath: absoluteExpandedPath(original.data.testplay.unityPath, "testplay.unityPath"),
     },
   });
-  if (pathsOverlap(normalized.sourceProjectPath, normalized.workspaceStorage.workspaceRoot)) {
+  if (
+    await physicalPathsOverlap(
+      normalized.sourceProjectPath,
+      normalized.workspaceStorage.workspaceRoot,
+    )
+  ) {
     throw new Error("sourceProjectPath and workspaceStorage.workspaceRoot must be disjoint.");
   }
   return normalized;

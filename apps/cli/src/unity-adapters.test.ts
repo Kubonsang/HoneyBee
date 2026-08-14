@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -19,20 +19,20 @@ afterEach(async () => {
   );
 });
 
-const command = async (mode: "malformed" | "rejected" | "wrong-provider") => {
+const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-provider") => {
   const root = await mkdtemp(path.join(tmpdir(), "honeybee-storage-contract-"));
   directories.push(root);
   const script = path.join(root, "storage.mjs");
   await writeFile(
     script,
     [
-      "import path from 'node:path';",
+      "import fs from 'node:fs'; import path from 'node:path';",
       "const mode = process.argv[2];",
       "let input = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', c => input += c);",
       "process.stdin.on('end', () => {",
       " if (mode === 'malformed') { process.stdout.write('not-json\\n'); return; }",
       " if (mode === 'rejected') { process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: false, operation: 'acquire', error: { code: 'workspace-command-failed', message: 'rejected' } }) + '\\n'); process.exitCode = 1; return; }",
-      " const request = JSON.parse(input); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: path.join(process.cwd(), 'Library'), state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
+      " const request = JSON.parse(input); const library = path.join(process.cwd(), 'Library'); if (mode === 'case-mount') fs.mkdirSync(library); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: mode === 'case-mount' ? request.parentKey.provider : 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: mode === 'case-mount' ? library.toUpperCase() : library, state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
       "});",
     ].join("\n"),
     "utf8",
@@ -100,5 +100,75 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
     await expect(
       new UnityProjectBootstrap().cleanupUnacquired(root, "workspace"),
     ).rejects.toMatchObject({ code: "workspace.cleanup-unsafe" });
+  });
+
+  it.skipIf(process.platform !== "win32")(
+    "accepts a broker mount path whose Windows casing differs",
+    async () => {
+      const fixture = await command("case-mount");
+      const workspace = path.join(fixture.root, "workspace");
+      await mkdir(workspace);
+      await expect(fixture.adapter.acquire(request(), workspace)).resolves.toMatchObject({
+        lease: { leaseId: "lease" },
+      });
+    },
+  );
+
+  it("revalidates the pinned storage executable before every invocation", async () => {
+    const fixture = await command("wrong-provider");
+    const pinnedBinary = path.join(fixture.root, "node-copy.exe");
+    await copyFile(process.execPath, pinnedBinary);
+    const sha256 = createHash("sha256")
+      .update(await readFile(pinnedBinary))
+      .digest("hex");
+    const adapter = new UnityWorkspaceStorageCliAdapter(
+      {
+        command: pinnedBinary,
+        args: [path.join(fixture.root, "storage.mjs"), "wrong-provider"],
+      },
+      "vhdx-differencing",
+      sha256,
+    );
+    await adapter.preflight();
+    await appendFile(pinnedBinary, "replaced-after-preflight", "utf8");
+    await expect(
+      adapter.acquire(request(), path.join(fixture.root, "workspace")),
+    ).rejects.toMatchObject({ code: "workspace.protocol-invalid" });
+  });
+});
+
+describe("UnityProjectBootstrap source manifests", () => {
+  const project = async (
+    root: string,
+    files: Readonly<Record<string, string>>,
+  ): Promise<string> => {
+    await Promise.all(
+      ["Assets", "Packages", "ProjectSettings"].map((name) =>
+        mkdir(path.join(root, name), { recursive: true }),
+      ),
+    );
+    await Promise.all(
+      Object.entries(files).map(([name, content]) =>
+        writeFile(path.join(root, "Assets", name), content, "utf8"),
+      ),
+    );
+    return root;
+  };
+
+  it("frames each path and content so ambiguous trees cannot share a digest", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-manifest-framing-"));
+    directories.push(root);
+    const first = await project(path.join(root, "first"), { a: "Xb", b: "Y", cc: "Z" });
+    const second = await project(path.join(root, "second"), { a: "X", bb: "Yc", c: "Z" });
+
+    const [firstManifest, secondManifest] = await Promise.all([
+      new UnityProjectBootstrap().manifest(first),
+      new UnityProjectBootstrap().manifest(second),
+    ]);
+
+    expect(firstManifest.fileCount).toBe(secondManifest.fileCount);
+    expect(firstManifest.logicalBytes).toBe(secondManifest.logicalBytes);
+    expect(firstManifest.assetsDigest).not.toBe(secondManifest.assetsDigest);
+    expect(firstManifest.digest).not.toBe(secondManifest.digest);
   });
 });

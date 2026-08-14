@@ -263,6 +263,9 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
     | "terminal" = "started";
   let acquired = false;
   let decided = false;
+  let testplayVerified = false;
+  let sourceUnchanged: boolean | undefined;
+  let decisionOutcome: "completed" | "failed" | "cancelled" | undefined;
 
   for (const event of events.slice(1)) {
     switch (event.type) {
@@ -332,6 +335,7 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         break;
       case "testplay.verified":
         if (phase !== "evidence") return false;
+        testplayVerified = true;
         phase = "verified";
         break;
       case "source.checked":
@@ -348,6 +352,7 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         ) {
           return false;
         }
+        sourceUnchanged = event.payload.unchanged;
         phase = "source-verified";
         break;
       case "transaction.outcome-decided":
@@ -366,7 +371,14 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         ) {
           return false;
         }
+        if (
+          event.payload.outcome === "completed" &&
+          (phase !== "source-verified" || !testplayVerified || sourceUnchanged !== true)
+        ) {
+          return false;
+        }
         decided = true;
+        decisionOutcome = event.payload.outcome;
         phase = "decided";
         break;
       case "workspace.release-started":
@@ -382,18 +394,21 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         phase = "released";
         break;
       case "workflow.completed":
-        if (!acquired || phase !== "released") return false;
+        if (!acquired || phase !== "released" || decisionOutcome !== "completed") return false;
         phase = "terminal";
         break;
       case "workflow.failed":
-      case "workflow.cancelled":
         if (
           acquired
-            ? phase !== "released"
+            ? phase !== "released" || decisionOutcome !== "failed"
             : !["started", "baselined", "prepared", "acquire-failed"].includes(phase)
         ) {
           return false;
         }
+        phase = "terminal";
+        break;
+      case "workflow.cancelled":
+        if (!acquired || phase !== "released" || decisionOutcome !== "cancelled") return false;
         phase = "terminal";
         break;
       case "workflow.started":

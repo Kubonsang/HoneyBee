@@ -35,6 +35,7 @@ import {
   UnityWorkspaceStorageCliAdapter,
 } from "./unity-adapters.js";
 import { UnityWorkTransaction, type UnityWorkRunResult } from "./unity-transaction.js";
+import { physicalPathsOverlap } from "./path-safety.js";
 
 const VERSION = "0.4.0";
 const HELP = `HoneyBee ${VERSION}
@@ -225,29 +226,16 @@ const demoConfig = (): WorkflowConfigV3 => {
 
 const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
 
-const pathsOverlap = (left: string, right: string): boolean => {
-  const relativeLeft = path.relative(left, right);
-  const relativeRight = path.relative(right, left);
-  return (
-    relativeLeft === "" ||
-    (!relativeLeft.startsWith(".." + path.sep) &&
-      relativeLeft !== ".." &&
-      !path.isAbsolute(relativeLeft)) ||
-    (!relativeRight.startsWith(".." + path.sep) &&
-      relativeRight !== ".." &&
-      !path.isAbsolute(relativeRight))
-  );
-};
-
-const assertUnityPathsDisjoint = (
+const assertUnityPathsDisjoint = async (
   root: string,
   config: ReturnType<typeof UnityWorkConfigV1Schema.parse>,
-): void => {
-  if (
-    pathsOverlap(root, config.sourceProjectPath) ||
-    pathsOverlap(root, config.workspaceStorage.workspaceRoot) ||
-    pathsOverlap(config.sourceProjectPath, config.workspaceStorage.workspaceRoot)
-  ) {
+): Promise<void> => {
+  const [stateAndSource, stateAndWorkspace, sourceAndWorkspace] = await Promise.all([
+    physicalPathsOverlap(root, config.sourceProjectPath),
+    physicalPathsOverlap(root, config.workspaceStorage.workspaceRoot),
+    physicalPathsOverlap(config.sourceProjectPath, config.workspaceStorage.workspaceRoot),
+  ]);
+  if (stateAndSource || stateAndWorkspace || sourceAndWorkspace) {
     throw new Error(
       "HoneyBee Run state, sourceProjectPath, and workspaceStorage.workspaceRoot must be disjoint.",
     );
@@ -401,7 +389,7 @@ const executeUnity = async (
   const config = await loadUnityWorkConfig(args.config);
   const runId = RunIdSchema.parse(randomUUID());
   const root = stateRoot();
-  assertUnityPathsDisjoint(root, config);
+  await assertUnityPathsDisjoint(root, config);
   await new FileRunRepository(root).create(runId);
   const controls = new FileRunControl(root);
   const executorLease = await controls.acquire(runId);
@@ -440,7 +428,7 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
       const config = UnityWorkConfigV1Schema.parse(
         JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
       );
-      assertUnityPathsDisjoint(root, config);
+      await assertUnityPathsDisjoint(root, config);
       const result = await unityTransactionFor(root, config, journal, controls).resume(
         runId,
         config,
@@ -640,7 +628,16 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
   const controls = new FileRunControl(root);
   const lease = await controls.acquire(runId);
   try {
-    await new FileRunRepository(root).delete(runId);
+    const repository = new FileRunRepository(root);
+    await repository.open(runId);
+    const replay = await new FileOrchestrationJournal(root).replay(runId);
+    if (replay.status === "active" && replay.events[0]?.schemaVersion === 3) {
+      throw new HoneyBeeCoreError(
+        "run.cleanup-pending",
+        "A Unity Run cannot be deleted until workspace release is durably confirmed.",
+      );
+    }
+    await repository.delete(runId);
   } finally {
     await lease.release();
   }

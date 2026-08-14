@@ -40,6 +40,7 @@ import type {
   WorkspaceAcquireRequest,
   WorkspaceAcquireReceipt,
 } from "./unity-adapters.js";
+import { SystemUnityProcessControl, type UnityProcessControl } from "./process-control.js";
 
 const UNITY_STEP_ID = StepIdSchema.parse("unity-agent");
 const UNITY_AGENT_ID = AgentIdSchema.parse("unity-agent");
@@ -168,6 +169,7 @@ const lastEvent = <Type extends OrchestrationEventV3["type"]>(
 export class UnityWorkTransaction {
   readonly #now: () => Date;
   readonly #randomId: () => string;
+  readonly #processControl: UnityProcessControl;
 
   public constructor(
     private readonly runner: AgentProcessRunner,
@@ -177,10 +179,15 @@ export class UnityWorkTransaction {
     private readonly bootstrap: UnityProjectBootstrap,
     private readonly storage: UnityWorkspaceStorageCliAdapter,
     private readonly testplay: TestPlayCliAdapter,
-    options: Readonly<{ now?: () => Date; randomId?: () => string }> = {},
+    options: Readonly<{
+      now?: () => Date;
+      randomId?: () => string;
+      processControl?: UnityProcessControl;
+    }> = {},
   ) {
     this.#now = options.now ?? (() => new Date());
     this.#randomId = options.randomId ?? randomUUID;
+    this.#processControl = options.processControl ?? new SystemUnityProcessControl();
   }
 
   public async run(
@@ -486,6 +493,17 @@ export class UnityWorkTransaction {
       leaseId = receipt.lease.leaseId;
     }
 
+    try {
+      await this.#drainInterruptedChildren(events);
+    } catch (error) {
+      return {
+        runId,
+        status: "cleanup-pending",
+        ...(sourceBefore === undefined ? {} : { sourceBefore }),
+        failure: failureMetadata(error),
+      };
+    }
+
     const released = lastEvent(events, "workspace.released");
     const decisionEvent = lastEvent(events, "transaction.outcome-decided");
     let decision = decisionEvent?.payload as TransactionDecision | undefined;
@@ -511,26 +529,32 @@ export class UnityWorkTransaction {
         }
       }
       if (sourceBefore !== undefined) {
-        const beforeValue = JSON.parse(
-          await this.artifacts.get({ runId, artifact: sourceBefore }),
-        ) as SourceManifest;
-        const checked = await this.#checkSource(runId, config, beforeValue, sourceBefore, writer);
-        after = checked.after;
-        sourceUnchanged = checked.unchanged;
+        try {
+          const beforeValue = JSON.parse(
+            await this.artifacts.get({ runId, artifact: sourceBefore }),
+          ) as SourceManifest;
+          const checked = await this.#checkSource(runId, config, beforeValue, sourceBefore, writer);
+          after = checked.after;
+          sourceUnchanged = checked.unchanged;
+        } catch (error) {
+          decision = { outcome: "failed", failure: failureMetadata(error) };
+        }
       }
-      const acceptedCancel = lastEvent(events, "control.accepted");
-      if (sourceUnchanged === false) {
-        decision = { outcome: "failed", failure: { errorCode: "source.modified" } };
-      } else if (
-        acceptedCancel === undefined &&
-        !(await this.#acceptPendingCancel(runId, writer))
-      ) {
-        decision = {
-          outcome: "failed",
-          failure: { errorCode: "transaction.interrupted" },
-        };
-      } else {
-        decision = { outcome: "cancelled" };
+      if (decision === undefined) {
+        const acceptedCancel = lastEvent(events, "control.accepted");
+        if (sourceUnchanged === false) {
+          decision = { outcome: "failed", failure: { errorCode: "source.modified" } };
+        } else if (
+          acceptedCancel === undefined &&
+          !(await this.#acceptPendingCancel(runId, writer))
+        ) {
+          decision = {
+            outcome: "failed",
+            failure: { errorCode: "transaction.interrupted" },
+          };
+        } else {
+          decision = { outcome: "cancelled" };
+        }
       }
       await writer.emit("transaction.outcome-decided", decision);
     }
@@ -628,7 +652,7 @@ export class UnityWorkTransaction {
           signal,
         },
         {
-          onStarted: (pid) => writer.emit("agent.started", { pid }, UNITY_STEP_ID),
+          onStarted: (pid) => this.#emitProcessStarted(writer, "agent.started", pid, UNITY_STEP_ID),
           onExited: (observation) => writer.emit("agent.exited", observation, UNITY_STEP_ID),
         },
       );
@@ -693,7 +717,7 @@ export class UnityWorkTransaction {
     signal: AbortSignal,
   ): Promise<{ evidence: ArtifactRef; failure?: HoneyBeeCoreError }> {
     const result = await this.testplay.run(runId, workspacePath, signal, {
-      onStarted: (pid) => writer.emit("testplay.started", { pid }),
+      onStarted: (pid) => this.#emitProcessStarted(writer, "testplay.started", pid),
       onExited: (observation) => writer.emit("testplay.exited", observation),
     });
     const evidence = await this.#storeTestPlayEvidence(runId, writer, result);
@@ -795,7 +819,17 @@ export class UnityWorkTransaction {
     beforeRef: ArtifactRef,
     writer: UnityEventWriter,
   ): Promise<{ after: ArtifactRef; unchanged: boolean }> {
-    const afterValue = await this.bootstrap.manifest(config.sourceProjectPath);
+    let afterValue: SourceManifest;
+    try {
+      afterValue = await this.bootstrap.manifest(config.sourceProjectPath);
+    } catch (error) {
+      throw new HoneyBeeCoreError(
+        "source.check-failed",
+        "The original Unity project could not be revalidated.",
+        undefined,
+        { cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
     const after = await this.#storeJson(writer, runId, "unity-source-manifest", afterValue);
     const unchanged = sameManifest(before, afterValue);
     await writer.emit("source.checked", { before: beforeRef, after, unchanged });
@@ -870,6 +904,33 @@ export class UnityWorkTransaction {
         ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
         failure,
       };
+    }
+  }
+
+  async #emitProcessStarted(
+    writer: UnityEventWriter,
+    type: "agent.started" | "testplay.started",
+    pid: number,
+    stepId?: StepId,
+  ): Promise<void> {
+    const processIdentity = await this.#processControl.captureIdentity(pid);
+    await writer.emit(
+      type,
+      { pid, ...(processIdentity === undefined ? {} : { processIdentity }) },
+      stepId,
+    );
+  }
+
+  async #drainInterruptedChildren(events: readonly OrchestrationEventV3[]): Promise<void> {
+    for (const [startedType, exitedType] of [
+      ["agent.started", "agent.exited"],
+      ["testplay.started", "testplay.exited"],
+    ] as const) {
+      const started = lastEvent(events, startedType);
+      if (started === undefined) continue;
+      const exited = lastEvent(events, exitedType);
+      if (exited !== undefined && exited.sequence > started.sequence) continue;
+      await this.#processControl.drain(started.payload.pid, started.payload.processIdentity);
     }
   }
 

@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -245,6 +245,34 @@ describe("loadUnityWorkConfig", () => {
           workspaceStorage: {
             ...config.workspaceStorage,
             workspaceRoot: path.join(config.sourceProjectPath, ".workspaces"),
+          },
+        },
+        async (configPath) =>
+          expect(loadUnityWorkConfig(configPath)).rejects.toThrow("must be disjoint"),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects physical overlap hidden behind a directory link", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "honeybee-unity-config-link-"));
+    try {
+      const config = candidate(directory);
+      const physicalWorkspace = path.join(config.sourceProjectPath, ".workspaces");
+      const workspaceAlias = path.join(directory, "workspace-alias");
+      await mkdir(physicalWorkspace, { recursive: true });
+      await symlink(
+        physicalWorkspace,
+        workspaceAlias,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+      await withConfig(
+        {
+          ...config,
+          workspaceStorage: {
+            ...config.workspaceStorage,
+            workspaceRoot: workspaceAlias,
           },
         },
         async (configPath) =>

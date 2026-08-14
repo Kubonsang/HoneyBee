@@ -116,14 +116,14 @@ class CancellableRunner implements AgentProcessRunner {
     request: Parameters<AgentProcessRunner["run"]>[0],
     lifecycle: Parameters<AgentProcessRunner["run"]>[1],
   ): ReturnType<AgentProcessRunner["run"]> {
-    await lifecycle.onStarted(7001);
+    await lifecycle.onStarted(process.pid);
     this.started();
     await new Promise<void>((resolve) => {
       if (request.signal?.aborted === true) resolve();
       else request.signal?.addEventListener("abort", () => resolve(), { once: true });
     });
     const observation = {
-      pid: 7001,
+      pid: process.pid,
       exitCode: null,
       signal: "SIGTERM",
       durationMs: 1,

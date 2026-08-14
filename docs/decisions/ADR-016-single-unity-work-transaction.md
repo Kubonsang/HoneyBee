@@ -31,6 +31,7 @@ prepare
 - `apps/cli`의 Unity bootstrap이 `Assets`, `Packages`, `ProjectSettings`를 broker-owned shell에 물리 복사한다.
 - shell 준비는 Core public workspace abstraction으로 일반화하지 않는다.
 - bootstrap은 symlink/reparse entry를 거부하고 acquire 전에 `Library`가 없음을 확인한다.
+- source, broker workspace root, HoneyBee Run root는 기존 ancestor의 real path를 포함한 physical path 기준으로 서로 겹치지 않아야 한다.
 - external `file:` package staging은 구현하지 않으며 `localPackagesDigest` parent는 fail-closed한다.
 - `unity-workspace-storage` adapter는 public schema 1의 `acquire/status/release`만 사용한다. 내부 broker protocol, heartbeat, retain, GC와 parent build를 사용하지 않는다.
 - Agent와 TestPlay는 획득한 같은 project shell을 cwd/project path로 사용한다.
@@ -46,15 +47,19 @@ Unity transaction은 Journal schemaVersion 3을 사용한다. schemaVersion 1과
 - semantic outcome은 release보다 먼저 `transaction.outcome-decided`로 확정한다.
 - terminal workflow event는 `workspace.released` 이후 Journal의 마지막 event로만 기록한다.
 - 실패와 cancel은 active process를 drain한 뒤 원래 AbortSignal과 분리된 cleanup path에서 release한다.
+- `agent.started`와 `testplay.started`는 가능한 경우 PID와 process incarnation을 함께 기록한다. Resume은 대응하는 exit가 없는 동일 incarnation의 Windows process tree를 먼저 drain하며, 안전하게 식별하거나 종료할 수 없으면 release하지 않고 `cleanup-pending`을 유지한다.
 - release 실패 또는 응답 유실은 terminal failure가 아니다. Run은 `cleanup-pending`으로 남는다.
 - `run resume`는 같은 release request ID로 cleanup만 복구하며 Agent와 TestPlay를 재실행하지 않는다.
+- nonterminal Unity Run은 `workspace.released`가 기록되기 전까지 `run delete`로 제거할 수 없다.
 - acquire 응답이 불확실하면 같은 acquire request ID로 lease 응답만 복구한 후 interrupted/cancel outcome으로 release한다. 일반 workflow retry로 취급하지 않는다.
 
 HoneyBee/Agent/adapter process crash와 강제 종료 이후 Journal consistency와 cleanup recovery를 대상으로 한다. 전원 차단, OS crash 및 storage controller cache를 포함한 완전한 power-loss durability는 보장하지 않는다.
 
 ### Evidence와 원본 보호
 
-source의 세 project directory에 대한 SHA-256 manifest를 transaction 전후로 계산한다. 두 manifest가 다르면 `source.modified`로 fail-closed한다.
+source의 세 project directory에 대한 SHA-256 manifest를 transaction 전후로 계산한다. 각 path와 content는 byte length로 frame하여 tree serialization의 경계를 모호하지 않게 한다. 두 manifest가 다르면 `source.modified`로 fail-closed한다. Resume 시 source를 읽을 수 없어도 failed outcome을 확정한 뒤 release를 계속 시도한다.
+
+`completed` outcome은 TestPlay Evidence가 검증되고 source manifest가 unchanged로 확인된 뒤에만 유효하다. Journal replay는 durable decision과 다른 terminal event를 corruption으로 거부한다.
 
 release 전에 다음 TestPlay 파일을 HoneyBee Artifact Store로 가져온다.
 

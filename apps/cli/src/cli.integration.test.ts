@@ -1,11 +1,20 @@
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { FileRunControl } from "@honeybee/core";
-import { RunIdSchema } from "@honeybee/orchestration-contracts";
+import {
+  ArtifactIdSchema,
+  EventIdSchema,
+  FileArtifactStore,
+  FileOrchestrationJournal,
+  FileRunControl,
+  FileRunRepository,
+  OrchestrationEventV3Schema,
+  RunIdSchema,
+} from "@honeybee/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -154,6 +163,50 @@ describe("HoneyBee CLI sequential orchestration", () => {
     const deleted = await runCli(["run", "delete", output.runId, "--yes", "--json"], cwd);
     expect(deleted.exitCode).toBe(0);
     await expect(readFile(output.journalPath, "utf8")).rejects.toBeDefined();
+  }, 20_000);
+
+  it("refuses to delete an active Unity Run before durable workspace release", async () => {
+    const cwd = await temporaryDirectory();
+    const root = path.join(cwd, ".honeybee", "runs");
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const artifacts = new FileArtifactStore(root);
+    const config = await artifacts.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await artifacts.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    await journal.append(
+      runId,
+      OrchestrationEventV3Schema.parse({
+        schemaVersion: 3,
+        eventId: EventIdSchema.parse(randomUUID()),
+        runId,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: "workflow.started",
+        payload: { mode: "unity-work-v1", config, task },
+      }),
+    );
+
+    const deletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+
+    expect(deletion.exitCode).toBe(1);
+    expect(JSON.parse(deletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect((await journal.replay(runId)).status).toBe("active");
   }, 20_000);
 
   it("returns runId and journalPath when an Agent fails", async () => {

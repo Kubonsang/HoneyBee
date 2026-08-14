@@ -14,6 +14,8 @@ import {
   type UnityWorkspaceParentKey,
 } from "@honeybee/core";
 
+import { physicalPathsOverlap, samePath } from "./path-safety.js";
+
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
 const SOURCE_DIRECTORIES = ["Assets", "Packages", "ProjectSettings"] as const;
 
@@ -117,6 +119,10 @@ const runCommand = (
       startBarrier = (options.lifecycle?.onStarted?.(pid) ?? Promise.resolve()).then(
         () =>
           new Promise<void>((writeResolve, writeReject) => {
+            if (child.exitCode !== null || child.signalCode !== null) {
+              writeResolve();
+              return;
+            }
             if (options.input === undefined) {
               child.stdin.end(writeResolve);
               return;
@@ -223,12 +229,19 @@ const treeFiles = async (root: string): Promise<readonly string[]> => {
 
 const treeManifest = async (root: string): Promise<TreeManifest> => {
   const hash = createHash("sha256");
+  hash.update("honeybee-tree-manifest-v1\0", "utf8");
   let fileCount = 0;
   let logicalBytes = 0;
   for (const relative of await treeFiles(root)) {
     const content = await readFile(path.join(root, ...relative.split("/")));
-    hash.update(relative);
-    hash.update(Buffer.from([0]));
+    const relativeBytes = Buffer.from(relative, "utf8");
+    const relativeLength = Buffer.allocUnsafe(8);
+    relativeLength.writeBigUInt64BE(BigInt(relativeBytes.byteLength));
+    const contentLength = Buffer.allocUnsafe(8);
+    contentLength.writeBigUInt64BE(BigInt(content.byteLength));
+    hash.update(relativeLength);
+    hash.update(relativeBytes);
+    hash.update(contentLength);
     hash.update(content);
     fileCount += 1;
     logicalBytes += content.byteLength;
@@ -277,6 +290,12 @@ export class UnityProjectBootstrap {
     workspaceId: string,
   ): Promise<string> {
     await realDirectory(workspaceRoot, "workspaceStorage.workspaceRoot");
+    if (await physicalPathsOverlap(sourceProjectPath, workspaceRoot)) {
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "Unity source and workspace roots must be physically disjoint.",
+      );
+    }
     const workspacePath = safeWorkspacePath(workspaceRoot, workspaceId);
     try {
       await lstat(workspacePath);
@@ -407,8 +426,6 @@ const leaseFrom = (value: unknown): WorkspaceLease => {
 };
 
 export class UnityWorkspaceStorageCliAdapter {
-  #binaryVerification: Promise<void> | undefined;
-
   public constructor(
     private readonly command: AgentCommand,
     private readonly expectedProvider: string,
@@ -508,7 +525,7 @@ export class UnityWorkspaceStorageCliAdapter {
       lease.parentKey !== request.parentKey.digest ||
       lease.state !== "ready" ||
       lease.retained ||
-      path.resolve(lease.mountPath) !== expectedMount
+      !samePath(lease.mountPath, expectedMount)
     ) {
       throw new HoneyBeeCoreError(
         "workspace.protocol-invalid",
@@ -630,7 +647,7 @@ export class UnityWorkspaceStorageCliAdapter {
   }
 
   private verifyBinary(): Promise<void> {
-    this.#binaryVerification ??= (async () => {
+    return (async () => {
       if (!path.isAbsolute(this.command.command)) {
         throw new HoneyBeeCoreError(
           "workspace.protocol-invalid",
@@ -646,7 +663,6 @@ export class UnityWorkspaceStorageCliAdapter {
         );
       }
     })();
-    return this.#binaryVerification;
   }
 }
 

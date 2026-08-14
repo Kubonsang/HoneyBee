@@ -1089,10 +1089,26 @@ export const OrchestrationEventV3Schema = z
         })
         .strict(),
     ),
-    eventV3("agent.started", z.object({ pid: z.number().int().positive() }).strict()),
+    eventV3(
+      "agent.started",
+      z
+        .object({
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512).optional(),
+        })
+        .strict(),
+    ),
     eventV3("agent.exited", ProcessMetadataSchema),
     eventV3("agent.input-write-failed", FailureMetadataSchema),
-    eventV3("testplay.started", z.object({ pid: z.number().int().positive() }).strict()),
+    eventV3(
+      "testplay.started",
+      z
+        .object({
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512).optional(),
+        })
+        .strict(),
+    ),
     eventV3("testplay.exited", ProcessMetadataSchema),
     eventV3("testplay.evidence-stored", z.object({ evidence: ArtifactRefSchema }).strict()),
     eventV3("testplay.verified", z.object({ evidence: ArtifactRefSchema }).strict()),

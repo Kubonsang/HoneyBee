@@ -8,9 +8,11 @@ import {
   EventIdSchema,
   OrchestrationEventV2Schema,
   OrchestrationEventV1Schema,
+  OrchestrationEventV3Schema,
   RunIdSchema,
   type OrchestrationEventV1,
   type OrchestrationEventV2,
+  type OrchestrationEventV3,
 } from "@honeybee/orchestration-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -54,6 +56,24 @@ const eventV2 = (
 ): OrchestrationEventV2 =>
   OrchestrationEventV2Schema.parse({
     schemaVersion: 2,
+    eventId: EventIdSchema.parse(randomUUID()),
+    runId,
+    sequence,
+    timestamp: new Date(0).toISOString(),
+    type,
+    ...(stepId === undefined ? {} : { stepId }),
+    payload,
+  });
+
+const eventV3 = (
+  runId: ReturnType<typeof RunIdSchema.parse>,
+  sequence: number,
+  type: OrchestrationEventV3["type"],
+  payload: unknown,
+  stepId?: string,
+): OrchestrationEventV3 =>
+  OrchestrationEventV3Schema.parse({
+    schemaVersion: 3,
     eventId: EventIdSchema.parse(randomUUID()),
     runId,
     sequence,
@@ -255,6 +275,116 @@ describe("filesystem run persistence", () => {
         eventV2(runId, 5, "workflow.failed", { errorCode: "late" }),
       ),
     ).rejects.toMatchObject({ code: "journal.write-failed" });
+  });
+
+  it("requires Unity validation before completion and correlates the terminal outcome", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const put = (kind: Parameters<FileArtifactStore["put"]>[0]["kind"]) =>
+      store.put({
+        runId,
+        artifactId: ArtifactIdSchema.parse(randomUUID()),
+        kind,
+        mediaType: "application/json",
+        content: "{}",
+      });
+    const [config, task, source, request, receipt, evidence, release] = await Promise.all([
+      put("workflow-config"),
+      put("task"),
+      put("unity-source-manifest"),
+      put("workspace-acquire-request"),
+      put("workspace-acquire-receipt"),
+      put("testplay-evidence"),
+      put("workspace-release-receipt"),
+    ]);
+    const journal = new FileOrchestrationJournal(root);
+    const events: OrchestrationEventV3[] = [
+      eventV3(runId, 1, "workflow.started", {
+        mode: "unity-work-v1",
+        config,
+        task,
+      }),
+      eventV3(runId, 2, "source.baselined", { manifest: source }),
+      eventV3(runId, 3, "workspace.prepared", {
+        workspaceId: "workspace",
+        sourceManifest: source,
+      }),
+      eventV3(runId, 4, "workspace.acquire-started", {
+        request,
+        requestId: "acquire",
+      }),
+      eventV3(runId, 5, "workspace.acquired", {
+        workspaceId: "workspace",
+        leaseId: "lease",
+        receipt,
+      }),
+    ];
+    for (const entry of events) await journal.append(runId, entry);
+
+    await expect(
+      journal.append(
+        runId,
+        eventV3(runId, 6, "transaction.outcome-decided", { outcome: "completed" }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+
+    const observation = {
+      pid: 42,
+      exitCode: 0,
+      signal: null,
+      durationMs: 1,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+    };
+    const validated: OrchestrationEventV3[] = [
+      eventV3(runId, 6, "agent.started", { pid: 42 }, "unity-agent"),
+      eventV3(runId, 7, "agent.exited", observation, "unity-agent"),
+      eventV3(runId, 8, "testplay.started", { pid: 43 }),
+      eventV3(runId, 9, "testplay.exited", { ...observation, pid: 43 }),
+      eventV3(runId, 10, "testplay.evidence-stored", { evidence }),
+      eventV3(runId, 11, "testplay.verified", { evidence }),
+      eventV3(runId, 12, "source.checked", {
+        before: source,
+        after: source,
+        unchanged: true,
+      }),
+      eventV3(runId, 13, "transaction.outcome-decided", {
+        outcome: "failed",
+        failure: { errorCode: "test.failure" },
+      }),
+      eventV3(runId, 14, "workspace.release-started", {
+        leaseId: "lease",
+        requestId: "release",
+      }),
+      eventV3(runId, 15, "workspace.released", {
+        leaseId: "lease",
+        receipt: release,
+        cleanupState: "released",
+      }),
+    ];
+    for (const entry of validated) await journal.append(runId, entry);
+
+    await expect(
+      journal.append(
+        runId,
+        eventV3(runId, 16, "workflow.completed", {
+          evidence,
+          release,
+          sourceAfter: source,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    await journal.append(
+      runId,
+      eventV3(runId, 16, "workflow.failed", {
+        failure: { errorCode: "test.failure" },
+        release,
+        sourceAfter: source,
+      }),
+    );
+    expect((await journal.replay(runId)).status).toBe("terminal");
   });
 
   it("rejects outcomes and retries that do not match the active Agent attempt", async () => {

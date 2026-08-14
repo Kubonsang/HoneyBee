@@ -50,7 +50,7 @@ The v0.4 bootstrap rejects parent keys with `localPackagesDigest`; staging exter
 
 TestPlay runs with `--no-bridge` and the same project path. HoneyBee imports `results.xml`, `summary.json`, `manifest.json`, `stdout.log`, `stderr.log`, and `events.ndjson` into its content-addressed Artifact Store before release. Raw paths, task text, process output, and Evidence bodies do not enter the Journal.
 
-Failure and cancellation drain the active process and use an independent cleanup context for release. A failed or lost release response leaves the Run nonterminal as `cleanup-pending`; `run resume` reuses the durable request ID and performs release only. It never repeats the Agent or TestPlay. `workflow.completed`, `workflow.failed`, or `workflow.cancelled` is appended only after `workspace.released`.
+Failure and cancellation drain the active process and use an independent cleanup context for release. A failed or lost release response leaves the Run nonterminal as `cleanup-pending`; `run resume` reuses the durable request ID and performs cleanup only. It first drains any unmatched recorded child process incarnation and never repeats the Agent or TestPlay. A nonterminal Unity Run cannot be deleted before release is confirmed. `workflow.completed`, `workflow.failed`, or `workflow.cancelled` is appended only after `workspace.released`.
 
 The adapter currently targets `Kubonsang/unity-workspace-storage` public contract schema 1 at commit `575c3b37896cd3dfa37a4705477837cc52ec6132`. Acquire validates the provider, parent digest, ready lease, and exact `<workspace>/Library` mount. Release accepts only `cleanupState: "released"`.
 
