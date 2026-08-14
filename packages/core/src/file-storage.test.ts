@@ -367,7 +367,18 @@ describe("filesystem run persistence", () => {
         cleanupState: "released",
       }),
     ];
-    for (const entry of validated) await journal.append(runId, entry);
+    for (const entry of validated.slice(0, 6)) await journal.append(runId, entry);
+    await expect(
+      journal.append(
+        runId,
+        eventV3(runId, 12, "source.checked", {
+          before: otherSource,
+          after: source,
+          unchanged: true,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    for (const entry of validated.slice(6)) await journal.append(runId, entry);
 
     await expect(
       journal.append(

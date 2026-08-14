@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -44,6 +45,43 @@ const script = async (
   await writeFile(target, lines.join("\n"), "utf8");
   return target;
 };
+
+const storageExecutor =
+  (
+    executableScript: string,
+  ): NonNullable<ConstructorParameters<typeof UnityWorkspaceStorageCliAdapter>[3]> =>
+  async (_command, args, options) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [executableScript, ...args], {
+        cwd: options.cwd,
+        env: process.env,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const startedAt = Date.now();
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.once("spawn", () => child.stdin.end(options.input ?? "", "utf8"));
+      child.once("error", reject);
+      child.once("close", (exitCode, signal) => {
+        const stdoutBytes = Buffer.concat(stdout);
+        const stderrBytes = Buffer.concat(stderr);
+        resolve({
+          pid: child.pid ?? -1,
+          exitCode,
+          signal,
+          durationMs: Date.now() - startedAt,
+          stdoutBytes: stdoutBytes.byteLength,
+          stderrBytes: stderrBytes.byteLength,
+          termination: "exited",
+          stdout: stdoutBytes.toString("utf8"),
+          stderr: stderrBytes.toString("utf8"),
+        });
+      });
+    });
 
 const parentKey = {
   schemaVersion: 2,
@@ -123,6 +161,7 @@ describe("UnityWorkTransaction", () => {
       "  process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId, provider: 'vhdx-differencing', status: { activeChildCount: active, retainedChildCount: 0, pendingCount: 0, quarantineCount: 0 } }) + '\\n');",
       "} else { process.exitCode = 1; }",
     ]);
+    const executeStorage = storageExecutor(storageScript);
     const agentScript = await script(root, "agent.mjs", [
       "import fs from 'node:fs';",
       "import path from 'node:path';",
@@ -152,14 +191,15 @@ describe("UnityWorkTransaction", () => {
       "fs.mkdirSync(artifactRoot, { recursive: true });",
       "const files = { 'results.xml': '<test-run result=\"Passed\" />\\n', 'summary.json': '{\"passed\":1}\\n', 'manifest.json': '{\"schema_version\":\"1\"}\\n', 'stdout.log': 'passed\\n', 'stderr.log': '', 'events.ndjson': '{\"phase\":\"done\"}\\n' };",
       "for (const [name, content] of Object.entries(files)) fs.writeFileSync(path.join(artifactRoot, name), content);",
-      "process.stdout.write(JSON.stringify({ schema_version: '1', run_id: runId, status: 'passed' }) + '\\n');",
+      "const total = fs.existsSync(path.join(path.dirname(config.project_path), 'testplay-total-zero')) ? 0 : 1;",
+      "process.stdout.write(JSON.stringify({ schema_version: '1', run_id: runId, status: 'passed', total }) + '\\n');",
     ]);
 
     const config = UnityWorkConfigV1Schema.parse({
       schemaVersion: 1,
       sourceProjectPath: source,
       workspaceStorage: {
-        command: { command: process.execPath, args: [storageScript] },
+        command: { command: process.execPath },
         contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
         binarySha256: createHash("sha256")
           .update(await readFile(process.execPath))
@@ -195,6 +235,7 @@ describe("UnityWorkTransaction", () => {
           config.workspaceStorage.command,
           config.workspaceStorage.parentKey.provider,
           config.workspaceStorage.binarySha256,
+          executeStorage,
         ),
         new TestPlayCliAdapter(config.testplay),
       ).run(runId, "Create a verified Unity change.", config);
@@ -212,6 +253,7 @@ describe("UnityWorkTransaction", () => {
       config.workspaceStorage.command,
       config.workspaceStorage.parentKey.provider,
       config.workspaceStorage.binarySha256,
+      executeStorage,
     ).status("residual-" + runId, workspaceRoot);
     expect(status.status).toMatchObject({
       activeChildCount: 0,
@@ -224,6 +266,7 @@ describe("UnityWorkTransaction", () => {
         config.workspaceStorage.command,
         config.workspaceStorage.parentKey.provider,
         "0".repeat(64),
+        executeStorage,
       ).status("wrong-binary-pin", workspaceRoot),
     ).rejects.toMatchObject({ code: "workspace.protocol-invalid" });
     const replay = await journal.replay(runId);
@@ -256,6 +299,7 @@ describe("UnityWorkTransaction", () => {
           failedConfig.workspaceStorage.command,
           failedConfig.workspaceStorage.parentKey.provider,
           failedConfig.workspaceStorage.binarySha256,
+          executeStorage,
         ),
         new TestPlayCliAdapter(failedConfig.testplay),
       ).run(failedRunId, "fail after acquire", failedConfig);
@@ -272,10 +316,40 @@ describe("UnityWorkTransaction", () => {
       expect(failedReplay.events.at(-2)?.type).toBe("workspace.released");
       expect(failedReplay.terminal.type).toBe("workflow.failed");
     }
+
+    await writeFile(path.join(workspaceRoot, "testplay-total-zero"), "1", "utf8");
+    const zeroTestRunId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(runRoot).create(zeroTestRunId);
+    const zeroTestControls = new FileRunControl(runRoot);
+    const zeroTestLease = await zeroTestControls.acquire(zeroTestRunId);
+    try {
+      const zeroTestResult = await new UnityWorkTransaction(
+        new ChildProcessAgentRunner(),
+        new FileArtifactStore(runRoot),
+        new FileOrchestrationJournal(runRoot),
+        zeroTestControls,
+        new UnityProjectBootstrap(),
+        new UnityWorkspaceStorageCliAdapter(
+          config.workspaceStorage.command,
+          config.workspaceStorage.parentKey.provider,
+          config.workspaceStorage.binarySha256,
+          executeStorage,
+        ),
+        new TestPlayCliAdapter(config.testplay),
+      ).run(zeroTestRunId, "require at least one test", config);
+      expect(zeroTestResult.status).toBe("failed");
+      expect(zeroTestResult.failure?.errorCode).toBe("testplay.failed");
+      expect(zeroTestResult.release?.kind).toBe("workspace-release-receipt");
+    } finally {
+      await zeroTestLease.release();
+    }
+    await rm(path.join(workspaceRoot, "testplay-total-zero"));
+
     const finalStatus = await new UnityWorkspaceStorageCliAdapter(
       config.workspaceStorage.command,
       config.workspaceStorage.parentKey.provider,
       config.workspaceStorage.binarySha256,
+      executeStorage,
     ).status("final-residual-" + failedRunId, workspaceRoot);
     expect(finalStatus.status).toMatchObject({
       activeChildCount: 0,

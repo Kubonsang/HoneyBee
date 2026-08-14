@@ -734,7 +734,22 @@ export const UnityWorkConfigV1Schema = z
     sourceProjectPath: z.string().min(1),
     workspaceStorage: z
       .object({
-        command: AgentCommandSchema,
+        command: AgentCommandSchema.superRefine((command, context) => {
+          if ((command.args?.length ?? 0) > 0) {
+            context.addIssue({
+              code: "custom",
+              path: ["args"],
+              message: "Workspace storage must be one pinned executable without arguments.",
+            });
+          }
+          if (command.env !== undefined) {
+            context.addIssue({
+              code: "custom",
+              path: ["env"],
+              message: "Workspace storage cannot inject an unpinned execution environment.",
+            });
+          }
+        }),
         contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
         binarySha256: Sha256HexSchema,
         workspaceRoot: z.string().min(1),

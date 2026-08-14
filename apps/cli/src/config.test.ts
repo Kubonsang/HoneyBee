@@ -213,6 +213,19 @@ describe("loadUnityWorkConfig", () => {
         async (configPath) =>
           expect(loadUnityWorkConfig(configPath)).rejects.toThrow("absolute path"),
       );
+      for (const command of [
+        { command: process.execPath, args: ["storage.mjs"] },
+        { command: process.execPath, env: { NODE_OPTIONS: "--require=storage.cjs" } },
+      ]) {
+        const withUnpinnedStorage = candidate(directory);
+        await withConfig(
+          {
+            ...withUnpinnedStorage,
+            workspaceStorage: { ...withUnpinnedStorage.workspaceStorage, command },
+          },
+          async (configPath) => expect(loadUnityWorkConfig(configPath)).rejects.toThrow(/pinned/u),
+        );
+      }
       const withLocalPackages = candidate(directory);
       await withConfig(
         {

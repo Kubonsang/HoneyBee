@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import {
+  access,
   appendFile,
   copyFile,
   link,
@@ -14,7 +15,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { RunIdSchema, StepIdSchema } from "@honeybee/core";
+import { ContentDigestSchema, RunIdSchema, StepIdSchema } from "@honeybee/core";
 
 import {
   TestPlayCliAdapter,
@@ -53,12 +54,67 @@ const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-pr
   const sha256 = createHash("sha256")
     .update(await readFile(process.execPath))
     .digest("hex");
+  const executor: NonNullable<
+    ConstructorParameters<typeof UnityWorkspaceStorageCliAdapter>[3]
+  > = async (_configuredCommand, _args, options) => {
+    let stdout: string;
+    let exitCode = 0;
+    if (mode === "malformed") stdout = "not-json\n";
+    else if (mode === "rejected") {
+      stdout =
+        JSON.stringify({
+          schemaVersion: 1,
+          ok: false,
+          operation: "acquire",
+          error: { code: "workspace-command-failed", message: "rejected" },
+        }) + "\n";
+      exitCode = 1;
+    } else {
+      const parsed = JSON.parse(options.input ?? "{}") as WorkspaceAcquireRequest;
+      const library = path.join(options.cwd, "Library");
+      if (mode === "case-mount") await mkdir(library);
+      stdout =
+        JSON.stringify({
+          schemaVersion: 1,
+          requestId: parsed.requestId,
+          provider: mode === "case-mount" ? parsed.parentKey.provider : "wrong",
+          lease: {
+            leaseId: "lease",
+            runId: parsed.consumerId,
+            parentKey: parsed.parentKey.digest,
+            mountPath: mode === "case-mount" ? library.toUpperCase() : library,
+            state: "ready",
+            createdAt: new Date().toISOString(),
+            retained: false,
+          },
+        }) + "\n";
+    }
+    return {
+      pid: process.pid,
+      exitCode,
+      signal: null,
+      durationMs: 1,
+      stdoutBytes: Buffer.byteLength(stdout),
+      stderrBytes: 0,
+      stdoutDigest: ContentDigestSchema.parse(
+        "sha256:" + createHash("sha256").update(stdout).digest("hex"),
+      ),
+      stderrDigest: ContentDigestSchema.parse(
+        "sha256:" + createHash("sha256").update("").digest("hex"),
+      ),
+      termination: "exited",
+      stdout,
+      stderr: "",
+    };
+  };
   return {
     root,
+    executor,
     adapter: new UnityWorkspaceStorageCliAdapter(
-      { command: process.execPath, args: [script, mode] },
+      { command: process.execPath },
       "vhdx-differencing",
       sha256,
+      executor,
     ),
   };
 };
@@ -135,18 +191,30 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
       .update(await readFile(pinnedBinary))
       .digest("hex");
     const adapter = new UnityWorkspaceStorageCliAdapter(
-      {
-        command: pinnedBinary,
-        args: [path.join(fixture.root, "storage.mjs"), "wrong-provider"],
-      },
+      { command: pinnedBinary },
       "vhdx-differencing",
       sha256,
+      fixture.executor,
     );
     await adapter.preflight();
     await appendFile(pinnedBinary, "replaced-after-preflight", "utf8");
     await expect(
       adapter.acquire(request(), path.join(fixture.root, "workspace")),
     ).rejects.toMatchObject({ code: "workspace.protocol-invalid" });
+  });
+
+  it("rejects unpinned storage arguments and environment injection", async () => {
+    const sha256 = createHash("sha256")
+      .update(await readFile(process.execPath))
+      .digest("hex");
+    for (const configured of [
+      { command: process.execPath, args: ["storage.mjs"] },
+      { command: process.execPath, env: { NODE_OPTIONS: "--require=storage.cjs" } },
+    ]) {
+      await expect(
+        new UnityWorkspaceStorageCliAdapter(configured, "vhdx-differencing", sha256).preflight(),
+      ).rejects.toMatchObject({ code: "workspace.protocol-invalid" });
+    }
   });
 });
 
@@ -250,6 +318,36 @@ describe("TestPlayCliAdapter filesystem safety", () => {
 });
 
 describe("TestPlayCliAdapter process control", () => {
+  it("does not start TestPlay before its durable start registration completes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-start-barrier-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const marker = path.join(root, "executed");
+    const script = path.join(root, "testplay.mjs");
+    await mkdir(workspace);
+    await writeFile(
+      script,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');",
+      "utf8",
+    );
+    const adapter = new TestPlayCliAdapter({
+      command: { command: process.execPath, args: [script, marker] },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 10_000,
+    });
+
+    await expect(
+      adapter.run(RunIdSchema.parse(randomUUID()), workspace, new AbortController().signal, {
+        onStarted: async () => {
+          throw new Error("injected journal failure");
+        },
+        onExited: async () => undefined,
+      }),
+    ).rejects.toThrow("injected journal failure");
+    await expect(access(marker)).rejects.toBeDefined();
+  });
+
   it.skipIf(process.platform !== "win32")(
     "terminates the complete TestPlay process tree before reporting cancellation",
     async () => {
@@ -264,6 +362,7 @@ describe("TestPlayCliAdapter process control", () => {
         [
           "import { spawn } from 'node:child_process';",
           "import { writeFileSync } from 'node:fs';",
+          "process.stdin.resume();",
           "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
           "child.once('spawn', () => writeFileSync(process.argv[2], String(child.pid)));",
           "setInterval(() => {}, 1000);",
@@ -329,6 +428,38 @@ describe("TestPlayCliAdapter process control", () => {
 });
 
 describe("UnityAgentProcessRunner process control", () => {
+  it("does not start the Agent before its durable start registration completes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-agent-start-barrier-"));
+    directories.push(root);
+    const marker = path.join(root, "executed");
+    const script = path.join(root, "agent.mjs");
+    await writeFile(
+      script,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');",
+      "utf8",
+    );
+
+    await expect(
+      new UnityAgentProcessRunner().run(
+        {
+          runId: RunIdSchema.parse(randomUUID()),
+          stepId: StepIdSchema.parse("unity-agent"),
+          prompt: "work",
+          command: { command: process.execPath, args: [script, marker], cwd: root },
+          timeoutMs: 10_000,
+          maxOutputBytes: 1024 * 1024,
+        },
+        {
+          onStarted: async () => {
+            throw new Error("injected journal failure");
+          },
+          onExited: async () => undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "agent.spawn-failed" });
+    await expect(access(marker)).rejects.toBeDefined();
+  });
+
   it.skipIf(process.platform !== "win32")(
     "terminates the complete Agent process tree before reporting cancellation",
     async () => {
@@ -341,6 +472,7 @@ describe("UnityAgentProcessRunner process control", () => {
         [
           "import { spawn } from 'node:child_process';",
           "import { writeFileSync } from 'node:fs';",
+          "process.stdin.resume();",
           "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
           "child.once('spawn', () => writeFileSync(process.argv[2], String(child.pid)));",
           "setInterval(() => {}, 1000);",

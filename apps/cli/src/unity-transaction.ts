@@ -768,7 +768,9 @@ export class UnityWorkTransaction {
       response !== null &&
       !Array.isArray(response) &&
       (response as Record<string, unknown>).schema_version === "1" &&
-      typeof (response as Record<string, unknown>).run_id === "string";
+      typeof (response as Record<string, unknown>).run_id === "string" &&
+      Number.isInteger((response as Record<string, unknown>).total) &&
+      ((response as Record<string, unknown>).total as number) > 0;
     if (
       result.command.termination !== "exited" ||
       result.command.exitCode !== 0 ||

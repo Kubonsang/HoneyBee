@@ -38,7 +38,7 @@ corepack pnpm honeybee run cancel <run-id>
 corepack pnpm honeybee run resume <run-id>
 ```
 
-The strict Unity config contains one `stdio-framed-v2` Agent, an absolute source project path, the broker-owned workspace root, the complete provisioned `parentKey`, the absolute `unity-workspace-storage` command with `contractCommit` and `binarySha256` pins, and the TestPlay/Unity commands. Parent construction and broker administration remain operator responsibilities.
+The strict Unity config contains one `stdio-framed-v2` Agent, an absolute source project path, the broker-owned workspace root, the complete provisioned `parentKey`, and one absolute `unity-workspace-storage` executable with `contractCommit` and `binarySha256` pins. Storage command arguments and environment injection are rejected so the pinned executable is the complete execution payload. The config also declares the TestPlay/Unity commands. Parent construction and broker administration remain operator responsibilities.
 
 The source project, broker workspace root, and HoneyBee Run-state root must be mutually disjoint. The CLI rejects overlapping roots before it creates a Run or prepares a shell.
 

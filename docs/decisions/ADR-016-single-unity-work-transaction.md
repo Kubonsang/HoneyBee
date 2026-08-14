@@ -10,7 +10,7 @@ v0.3의 DAG kernel은 Agent process, Artifact Store, JSONL Journal과 executor l
 
 대상 storage provider는 `Kubonsang/unity-workspace-storage`의 public contract schema 1이다. 구현 기준은 commit `575c3b37896cd3dfa37a4705477837cc52ec6132`로 고정한다. parent construction과 broker administration은 public `acquire/status/release` lifecycle 밖의 operator 책임이다.
 
-Unity config는 위 commit을 literal `contractCommit`으로 요구하고 absolute storage executable의 `binarySha256`를 모든 public operation 전에 검증한다.
+Unity config는 위 commit을 literal `contractCommit`으로 요구하고 absolute storage executable의 `binarySha256`를 모든 public operation 전에 검증한다. Storage command는 별도 argument와 environment injection을 허용하지 않는 단일 executable이어야 하므로, pin 검증 밖의 script나 loader를 실행 payload에 추가할 수 없다.
 
 ## 결정
 
@@ -43,6 +43,7 @@ prepare
 Unity transaction은 Journal schemaVersion 3을 사용한다. schemaVersion 1과 2 Run은 기존 의미를 유지한다.
 
 - `workspace.acquired`가 fsync되기 전에는 Agent를 실행하지 않는다.
+- Agent와 TestPlay는 먼저 비활성 containment process를 등록하고 `agent.started` 또는 `testplay.started`가 fsync된 뒤에만 실제 command를 활성화한다. 실제 command 종료 뒤에도 exited event가 durable해질 때까지 containment PID를 유지하므로 parent crash 시 resume이 항상 기록된 process tree를 drain할 수 있다.
 - storage가 lease를 반환한 뒤 receipt Artifact 또는 `workspace.acquired` 기록이 실패하면 acquire failure로 확정하지 않는다. 동일 acquire request로 lease identity를 복구할 수 있도록 Run을 `cleanup-pending`으로 유지한다.
 - TestPlay Evidence는 Artifact Store에 publish된 뒤에만 `testplay.verified`가 기록된다.
 - semantic outcome은 release보다 먼저 `transaction.outcome-decided`로 확정한다.
@@ -60,7 +61,7 @@ HoneyBee/Agent/adapter process crash와 강제 종료 이후 Journal consistency
 
 source의 세 project directory에 대한 SHA-256 manifest를 transaction 전후로 계산한다. 각 path와 content는 byte length로 frame하여 tree serialization의 경계를 모호하지 않게 한다. 두 manifest가 다르면 `source.modified`로 fail-closed한다. Resume 시 source를 읽을 수 없어도 failed outcome을 확정한 뒤 release를 계속 시도한다.
 
-`completed` outcome은 TestPlay Evidence가 검증되고 source manifest가 unchanged로 확인된 뒤에만 유효하다. Journal replay는 terminal failure metadata와 Evidence/source/release Artifact reference를 각각 durable decision과 선행 event에 대조하며, 불일치하면 corruption으로 거부한다.
+`completed` outcome은 TestPlay가 양수 개수의 test를 실행하고, Evidence가 검증되고, source manifest가 unchanged로 확인된 뒤에만 유효하다. Journal replay는 `source.checked.before`를 durable baseline과 대조하고 terminal failure metadata와 Evidence/source/release Artifact reference를 각각 durable decision 및 선행 event에 대조하며, 불일치하면 corruption으로 거부한다.
 
 release 전에 다음 TestPlay 파일을 HoneyBee Artifact Store로 가져온다.
 

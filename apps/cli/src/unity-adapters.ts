@@ -5,10 +5,11 @@ import path from "node:path";
 
 import {
   ContentDigestSchema,
-  ChildProcessAgentRunner,
   HoneyBeeCoreError,
   type AgentCommand,
   type AgentExitObservation,
+  type AgentProcessResult,
+  type AgentProcessRunner,
   type ContentDigest,
   type RunId,
   type UnityWorkConfigV1,
@@ -118,15 +119,6 @@ const readBoundedEvidenceFile = async (
   }
 };
 
-export class UnityAgentProcessRunner extends ChildProcessAgentRunner {
-  public constructor() {
-    super({
-      detached: process.platform !== "win32",
-      terminate: terminateProcessTree,
-    });
-  }
-}
-
 export interface CommandResult extends AgentExitObservation {
   readonly stdout: string;
   readonly stderr: string;
@@ -137,6 +129,90 @@ interface CommandLifecycle {
   readonly onStarted?: (pid: number) => Promise<void>;
   readonly onExited?: (observation: AgentExitObservation) => Promise<void>;
 }
+
+const DEFERRED_PROCESS_LAUNCHER = String.raw`
+const { spawn } = require("node:child_process");
+let activated = false;
+let target;
+let targetClosed = false;
+let targetSpawnFailed = false;
+let keepAlive;
+let stdoutBytes = 0;
+let stderrBytes = 0;
+const send = (message, callback) => {
+  if (!process.connected) {
+    if (callback) callback();
+    return;
+  }
+  process.send(message, undefined, undefined, callback);
+};
+const finish = (code) => {
+  process.exitCode = typeof code === "number" ? code : 1;
+  if (keepAlive) clearInterval(keepAlive);
+  if (process.connected) process.disconnect();
+};
+process.on("message", (message) => {
+  if (message && message.type === "ack-exit" && targetClosed) {
+    finish(message.exitCode);
+    return;
+  }
+  if (!message || message.type !== "start" || activated) return;
+  activated = true;
+  try {
+    target = spawn(message.command, message.args, {
+      cwd: process.cwd(),
+      env: process.env,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"],
+      windowsHide: true,
+    });
+  } catch {
+    send({ type: "target-error" }, () => finish(1));
+    return;
+  }
+  target.stdout.on("data", (chunk) => {
+    stdoutBytes += chunk.length;
+    process.stdout.write(chunk);
+  });
+  target.stderr.on("data", (chunk) => {
+    stderrBytes += chunk.length;
+    process.stderr.write(chunk);
+  });
+  target.once("error", () => {
+    targetSpawnFailed = true;
+    send({ type: "target-error" }, () => finish(1));
+  });
+  const inputFailed = () => {
+    send({ type: "input-error" });
+  };
+  target.stdin.once("error", inputFailed);
+  target.stdin.once("close", () => {
+    if (!target.stdin.writableFinished && !targetClosed) inputFailed();
+  });
+  target.once("spawn", () => {
+    const inputWritten = () => {
+      target.stdin.removeListener("error", inputFailed);
+      send({ type: "input-written" });
+    };
+    if (message.input === undefined) target.stdin.end(inputWritten);
+    else target.stdin.end(message.input, "utf8", inputWritten);
+  });
+  target.once("close", (exitCode, signal) => {
+    targetClosed = true;
+    if (!targetSpawnFailed) {
+      send({ type: "target-exit", exitCode, signal, stdoutBytes, stderrBytes });
+    }
+  });
+});
+process.on("disconnect", () => {
+  if (!activated) process.exit(0);
+});
+if (!process.connected) process.exit(0);
+keepAlive = setInterval(() => {}, 1000);
+`;
+
+const isDeferredMessage = (value: unknown): value is Record<string, unknown> =>
+  isRecord(value) && typeof value.type === "string";
 
 const runCommand = (
   command: AgentCommand,
@@ -149,18 +225,26 @@ const runCommand = (
     lifecycle?: CommandLifecycle;
     environment?: Readonly<Record<string, string>>;
     terminateTree?: boolean;
+    deferExecutionUntilStarted?: boolean;
+    maxOutputBytes?: number;
   }>,
 ): Promise<CommandResult> =>
   new Promise((resolve, reject) => {
     const startedAt = Date.now();
-    const child = spawn(command.command, [...(command.args ?? []), ...args], {
-      cwd: options.cwd,
-      env: { ...process.env, ...command.env, ...options.environment },
-      shell: false,
-      stdio: ["pipe", "pipe", "pipe"],
-      windowsHide: true,
-      detached: options.terminateTree === true && process.platform !== "win32",
-    });
+    const targetArgs = [...(command.args ?? []), ...args];
+    const deferred = options.deferExecutionUntilStarted === true;
+    const child = spawn(
+      deferred ? process.execPath : command.command,
+      deferred ? ["-e", DEFERRED_PROCESS_LAUNCHER] : targetArgs,
+      {
+        cwd: options.cwd,
+        env: { ...process.env, ...command.env, ...options.environment },
+        shell: false,
+        stdio: deferred ? ["ignore", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+        detached: options.terminateTree === true && process.platform !== "win32",
+      },
+    );
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     const stdoutHash = createHash("sha256");
@@ -172,6 +256,110 @@ const runCommand = (
     let startBarrier: Promise<void> = Promise.resolve();
     let treeTermination: Promise<void> | undefined;
     let forcedTermination: ReturnType<typeof setTimeout> | undefined;
+    let targetExit: Pick<AgentExitObservation, "exitCode" | "signal"> | undefined;
+    let activationResolve: (() => void) | undefined;
+    let activationReject: ((error: unknown) => void) | undefined;
+    let persistedObservation: AgentExitObservation | undefined;
+    let exitPersistence: Promise<void> | undefined;
+    let outputProgress = (): void => undefined;
+    let outputWaitReject: ((error: unknown) => void) | undefined;
+
+    const observation = (
+      exitCode: number | null,
+      signal: NodeJS.Signals | null,
+    ): AgentExitObservation => ({
+      pid: child.pid ?? -1,
+      exitCode,
+      signal,
+      durationMs: Date.now() - startedAt,
+      stdoutBytes,
+      stderrBytes,
+      stdoutDigest: ContentDigestSchema.parse("sha256:" + stdoutHash.digest("hex")),
+      stderrDigest: ContentDigestSchema.parse("sha256:" + stderrHash.digest("hex")),
+    });
+    const waitForObservedOutput = (
+      expectedStdoutBytes: number,
+      expectedStderrBytes: number,
+    ): Promise<void> =>
+      new Promise((waitResolve, waitReject) => {
+        outputWaitReject = waitReject;
+        outputProgress = () => {
+          if (stdoutBytes > expectedStdoutBytes || stderrBytes > expectedStderrBytes) {
+            waitReject(new Error("Deferred process output framing was inconsistent."));
+          } else if (stdoutBytes === expectedStdoutBytes && stderrBytes === expectedStderrBytes) {
+            outputWaitReject = undefined;
+            outputProgress = () => undefined;
+            waitResolve();
+          }
+        };
+        outputProgress();
+      });
+    const acknowledgeExit = (exitCode: number | null): Promise<void> =>
+      new Promise((ackResolve, ackReject) => {
+        if (!child.connected || child.send === undefined) {
+          ackReject(new Error("The deferred process exited before its lifecycle was durable."));
+          return;
+        }
+        child.send({ type: "ack-exit", exitCode }, (error) => {
+          if (error === null) ackResolve();
+          else ackReject(error);
+        });
+      });
+
+    if (deferred) {
+      child.on("message", (message: unknown) => {
+        if (!isDeferredMessage(message)) return;
+        if (message.type === "input-written") {
+          activationResolve?.();
+          activationResolve = undefined;
+          activationReject = undefined;
+        } else if (message.type === "input-error") {
+          activationReject?.(
+            new HoneyBeeCoreError(
+              "agent.input-write-failed",
+              "Failed to deliver input to the deferred process.",
+            ),
+          );
+          activationResolve = undefined;
+          activationReject = undefined;
+        } else if (message.type === "target-error") {
+          activationReject?.(new Error("The deferred target process could not be started."));
+          activationResolve = undefined;
+          activationReject = undefined;
+        } else if (message.type === "target-exit") {
+          targetExit = {
+            exitCode: typeof message.exitCode === "number" ? message.exitCode : null,
+            signal: typeof message.signal === "string" ? (message.signal as NodeJS.Signals) : null,
+          };
+          const expectedStdoutBytes = message.stdoutBytes;
+          const expectedStderrBytes = message.stderrBytes;
+          if (
+            !Number.isSafeInteger(expectedStdoutBytes) ||
+            (expectedStdoutBytes as number) < 0 ||
+            !Number.isSafeInteger(expectedStderrBytes) ||
+            (expectedStderrBytes as number) < 0
+          ) {
+            exitPersistence = Promise.reject(
+              new Error("The deferred process returned invalid output counters."),
+            );
+          } else {
+            exitPersistence = (async () => {
+              await waitForObservedOutput(
+                expectedStdoutBytes as number,
+                expectedStderrBytes as number,
+              );
+              persistedObservation = observation(
+                targetExit?.exitCode ?? null,
+                targetExit?.signal ?? null,
+              );
+              await options.lifecycle?.onExited?.(persistedObservation);
+              await acknowledgeExit(persistedObservation.exitCode);
+            })();
+          }
+          void exitPersistence.catch(() => terminate("cancelled"));
+        }
+      });
+    }
 
     const terminate = (reason: CommandResult["termination"]): void => {
       if (termination === "exited") termination = reason;
@@ -210,14 +398,15 @@ const runCommand = (
         stderrBytes += bytes.byteLength;
         stderrHash.update(bytes);
       }
-      if (stdoutBytes + stderrBytes > MAX_COMMAND_OUTPUT_BYTES) {
+      if (stdoutBytes + stderrBytes > (options.maxOutputBytes ?? MAX_COMMAND_OUTPUT_BYTES)) {
         terminate("output-limit");
         return;
       }
       target.push(bytes);
+      outputProgress();
     };
-    child.stdout.on("data", (chunk: Buffer | string) => collect(stdout, "stdout", chunk));
-    child.stderr.on("data", (chunk: Buffer | string) => collect(stderr, "stderr", chunk));
+    child.stdout?.on("data", (chunk: Buffer | string) => collect(stdout, "stdout", chunk));
+    child.stderr?.on("data", (chunk: Buffer | string) => collect(stderr, "stderr", chunk));
 
     child.once("spawn", () => {
       const pid = child.pid;
@@ -229,12 +418,37 @@ const runCommand = (
               writeResolve();
               return;
             }
-            if (options.input === undefined) {
-              child.stdin.end(writeResolve);
+            if (termination !== "exited") {
+              writeResolve();
               return;
             }
-            child.stdin.once("error", writeReject);
-            child.stdin.end(options.input, "utf8", writeResolve);
+            if (deferred) {
+              activationResolve = writeResolve;
+              activationReject = writeReject;
+              child.send?.(
+                {
+                  type: "start",
+                  command: command.command,
+                  args: targetArgs,
+                  ...(options.input === undefined ? {} : { input: options.input }),
+                },
+                (error) => {
+                  if (error !== null) writeReject(error);
+                },
+              );
+              return;
+            }
+            const stdin = child.stdin;
+            if (stdin === null) {
+              writeReject(new Error("The process stdin pipe is unavailable."));
+              return;
+            }
+            if (options.input === undefined) {
+              stdin.end(writeResolve);
+              return;
+            }
+            stdin.once("error", writeReject);
+            stdin.end(options.input, "utf8", writeResolve);
           }),
       );
       if (termination !== "exited" && options.terminateTree === true) terminate(termination);
@@ -246,6 +460,7 @@ const runCommand = (
       clearTimeout(timeout);
       if (forcedTermination !== undefined) clearTimeout(forcedTermination);
       options.signal?.removeEventListener("abort", onAbort);
+      activationReject?.(error);
       reject(error);
     });
     child.once("close", (exitCode, signal) => {
@@ -254,6 +469,8 @@ const runCommand = (
       clearTimeout(timeout);
       if (forcedTermination !== undefined) clearTimeout(forcedTermination);
       options.signal?.removeEventListener("abort", onAbort);
+      outputWaitReject?.(new Error("The deferred process closed before output was drained."));
+      activationReject?.(new Error("The deferred process exited before accepting its input."));
       void (async () => {
         try {
           const [startResult, treeResult] = await Promise.allSettled([
@@ -262,19 +479,15 @@ const runCommand = (
           ]);
           if (treeResult.status === "rejected") throw treeResult.reason;
           if (startResult.status === "rejected") throw startResult.reason;
-          const observation: AgentExitObservation = {
-            pid: child.pid ?? -1,
-            exitCode,
-            signal,
-            durationMs: Date.now() - startedAt,
-            stdoutBytes,
-            stderrBytes,
-            stdoutDigest: ContentDigestSchema.parse("sha256:" + stdoutHash.digest("hex")),
-            stderrDigest: ContentDigestSchema.parse("sha256:" + stderrHash.digest("hex")),
-          };
-          await options.lifecycle?.onExited?.(observation);
+          if (exitPersistence !== undefined) await exitPersistence;
+          const finalObservation =
+            persistedObservation ??
+            observation(targetExit?.exitCode ?? exitCode, targetExit?.signal ?? signal);
+          if (persistedObservation === undefined) {
+            await options.lifecycle?.onExited?.(finalObservation);
+          }
           resolve({
-            ...observation,
+            ...finalObservation,
             stdout: Buffer.concat(stdout).toString("utf8"),
             stderr: Buffer.concat(stderr).toString("utf8"),
             termination,
@@ -285,6 +498,51 @@ const runCommand = (
       })();
     });
   });
+
+export class UnityAgentProcessRunner implements AgentProcessRunner {
+  public async run(
+    request: Parameters<AgentProcessRunner["run"]>[0],
+    lifecycle: Parameters<AgentProcessRunner["run"]>[1],
+  ): Promise<AgentProcessResult> {
+    if (request.command.command.trim().length === 0) {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-command",
+        `The ${request.stepId} command cannot be empty.`,
+        request.stepId,
+      );
+    }
+    let result: CommandResult;
+    try {
+      result = await runCommand(request.command, [], {
+        cwd: request.command.cwd ?? process.cwd(),
+        input: request.prompt,
+        timeoutMs: request.timeoutMs,
+        maxOutputBytes: request.maxOutputBytes,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+        lifecycle,
+        environment: {
+          HONEYBEE_RUN_ID: request.runId,
+          HONEYBEE_STEP_ID: request.stepId,
+        },
+        terminateTree: true,
+        deferExecutionUntilStarted: true,
+      });
+    } catch (error) {
+      if (error instanceof HoneyBeeCoreError) throw error;
+      throw new HoneyBeeCoreError(
+        "agent.spawn-failed",
+        `Failed to start the ${request.stepId} agent process.`,
+        request.stepId,
+        { cause: error instanceof Error ? error.message : String(error) },
+      );
+    }
+    return {
+      ...result,
+      stepId: request.stepId,
+      command: request.command.command,
+    };
+  }
+}
 
 export interface SourceManifest {
   readonly schemaVersion: 1;
@@ -542,6 +800,7 @@ export class UnityWorkspaceStorageCliAdapter {
     private readonly command: AgentCommand,
     private readonly expectedProvider: string,
     private readonly expectedBinarySha256: string,
+    private readonly execute: typeof runCommand = runCommand,
   ) {}
 
   public preflight(): Promise<void> {
@@ -556,7 +815,7 @@ export class UnityWorkspaceStorageCliAdapter {
     await this.verifyBinary();
     let result: CommandResult;
     try {
-      result = await runCommand(this.command, ["workspace", "acquire", "--request", "-"], {
+      result = await this.execute(this.command, ["workspace", "acquire", "--request", "-"], {
         cwd: workspacePath,
         input: JSON.stringify(request),
         timeoutMs: 120_000,
@@ -670,7 +929,7 @@ export class UnityWorkspaceStorageCliAdapter {
     await this.verifyBinary();
     let result: CommandResult;
     try {
-      result = await runCommand(
+      result = await this.execute(
         this.command,
         ["workspace", "release", "--lease-id", leaseId, "--request-id", requestId],
         { cwd, timeoutMs: 120_000 },
@@ -734,7 +993,7 @@ export class UnityWorkspaceStorageCliAdapter {
 
   public async status(requestId: string, cwd: string): Promise<Record<string, unknown>> {
     await this.verifyBinary();
-    const result = await runCommand(
+    const result = await this.execute(
       this.command,
       ["workspace", "status", "--request-id", requestId],
       { cwd, timeoutMs: 30_000 },
@@ -760,6 +1019,12 @@ export class UnityWorkspaceStorageCliAdapter {
 
   private verifyBinary(): Promise<void> {
     return (async () => {
+      if ((this.command.args?.length ?? 0) > 0 || this.command.env !== undefined) {
+        throw new HoneyBeeCoreError(
+          "workspace.protocol-invalid",
+          "Workspace storage must be one pinned executable without arguments or environment injection.",
+        );
+      }
       if (!path.isAbsolute(this.command.command)) {
         throw new HoneyBeeCoreError(
           "workspace.protocol-invalid",
@@ -833,6 +1098,7 @@ export class TestPlayCliAdapter {
       lifecycle,
       environment: { HONEYBEE_UNITY_PROJECT_PATH: workspacePath },
       terminateTree: true,
+      deferExecutionUntilStarted: true,
     });
     let response: unknown;
     try {

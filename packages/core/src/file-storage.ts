@@ -293,6 +293,7 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
   let acquireFailure: FailureMetadata | undefined;
   let storedEvidence: ArtifactRef | undefined;
   let verifiedEvidence: ArtifactRef | undefined;
+  let sourceBaseline: ArtifactRef | undefined;
   let sourceAfter: ArtifactRef | undefined;
   let releaseReceipt: ArtifactRef | undefined;
   let agentStarted: Extract<OrchestrationEventV3, { type: "agent.started" }> | undefined;
@@ -326,6 +327,7 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         break;
       case "source.baselined":
         if (phase !== "started") return false;
+        sourceBaseline = event.payload.manifest;
         phase = "baselined";
         break;
       case "workspace.acquire-started":
@@ -400,6 +402,7 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
         break;
       case "source.checked":
         if (
+          !sameArtifactRef(event.payload.before, sourceBaseline) ||
           ![
             "acquired",
             "agent",

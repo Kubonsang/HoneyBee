@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, truncate, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -39,6 +40,43 @@ afterEach(async () => {
     directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })),
   );
 });
+
+const storageExecutor =
+  (
+    executableScript: string,
+  ): NonNullable<ConstructorParameters<typeof UnityWorkspaceStorageCliAdapter>[3]> =>
+  async (_command, args, options) =>
+    new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [executableScript, ...args], {
+        cwd: options.cwd,
+        env: process.env,
+        shell: false,
+        stdio: ["pipe", "pipe", "pipe"],
+        windowsHide: true,
+      });
+      const startedAt = Date.now();
+      const stdout: Buffer[] = [];
+      const stderr: Buffer[] = [];
+      child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
+      child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
+      child.once("spawn", () => child.stdin.end(options.input ?? "", "utf8"));
+      child.once("error", reject);
+      child.once("close", (exitCode, signal) => {
+        const stdoutBytes = Buffer.concat(stdout);
+        const stderrBytes = Buffer.concat(stderr);
+        resolve({
+          pid: child.pid ?? -1,
+          exitCode,
+          signal,
+          durationMs: Date.now() - startedAt,
+          stdoutBytes: stdoutBytes.byteLength,
+          stderrBytes: stderrBytes.byteLength,
+          termination: "exited",
+          stdout: stdoutBytes.toString("utf8"),
+          stderr: stderrBytes.toString("utf8"),
+        });
+      });
+    });
 
 class CompletedRunner implements AgentProcessRunner {
   public calls = 0;
@@ -796,6 +834,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
       ].join("\n"),
       "utf8",
     );
+    const executeStorage = storageExecutor(storageScript);
     const testplayScript = path.join(root, "testplay.mjs");
     await writeFile(
       testplayScript,
@@ -805,7 +844,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
         "const count = path.join(path.dirname(c.project_path), 'testplay-count'); const n = fs.existsSync(count) ? Number(fs.readFileSync(count, 'utf8')) : 0; fs.writeFileSync(count, String(n + 1));",
         "const id = 'run'; const r = path.join(c.project_path, '.testplay', 'runs', id); fs.mkdirSync(r, { recursive: true });",
         "const f = { 'results.xml': '<ok />', 'summary.json': '{}', 'manifest.json': '{}', 'stdout.log': '', 'stderr.log': '', 'events.ndjson': '{}\\n' }; for (const [n, v] of Object.entries(f)) fs.writeFileSync(path.join(r, n), v);",
-        "process.stdout.write(JSON.stringify({ schema_version: '1', run_id: id }) + '\\n');",
+        "process.stdout.write(JSON.stringify({ schema_version: '1', run_id: id, total: 1 }) + '\\n');",
       ].join("\n"),
       "utf8",
     );
@@ -817,7 +856,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
       schemaVersion: 1,
       sourceProjectPath: source,
       workspaceStorage: {
-        command: { command: process.execPath, args: [storageScript] },
+        command: { command: process.execPath },
         contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
         binarySha256: storageBinarySha256,
         workspaceRoot,
@@ -869,6 +908,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
         config.workspaceStorage.command,
         config.workspaceStorage.parentKey.provider,
         config.workspaceStorage.binarySha256,
+        executeStorage,
       ),
       new TestPlayCliAdapter(config.testplay),
     );
