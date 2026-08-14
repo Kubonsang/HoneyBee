@@ -7,6 +7,7 @@ import {
   AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
+  OrchestrationEventV3Schema,
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV2Schema,
@@ -29,6 +30,29 @@ describe("orchestration contracts", () => {
     expect(StepIdSchema.safeParse("review_step-1").success).toBe(true);
     expect(StepIdSchema.safeParse("Review").success).toBe(false);
     expect(StepIdSchema.safeParse(`a${"b".repeat(64)}`).success).toBe(false);
+  });
+
+  it("scopes durable process drain markers to their started process kind", () => {
+    const base = {
+      schemaVersion: 3,
+      eventId: randomUUID(),
+      runId: randomUUID(),
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: "process.drain-completed",
+      payload: { process: "agent", startedEventId: randomUUID() },
+    } as const;
+    expect(OrchestrationEventV3Schema.safeParse(base).success).toBe(false);
+    expect(OrchestrationEventV3Schema.safeParse({ ...base, stepId: "unity-agent" }).success).toBe(
+      true,
+    );
+    expect(
+      OrchestrationEventV3Schema.safeParse({
+        ...base,
+        stepId: undefined,
+        payload: { ...base.payload, process: "testplay" },
+      }).success,
+    ).toBe(true);
   });
 
   it("rejects duplicate workflow step IDs", () => {

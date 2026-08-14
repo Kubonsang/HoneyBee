@@ -1110,6 +1110,15 @@ export const OrchestrationEventV3Schema = z
         .strict(),
     ),
     eventV3("testplay.exited", ProcessMetadataSchema),
+    eventV3(
+      "process.drain-completed",
+      z
+        .object({
+          process: z.enum(["agent", "testplay"]),
+          startedEventId: EventIdSchema,
+        })
+        .strict(),
+    ),
     eventV3("testplay.evidence-stored", z.object({ evidence: ArtifactRefSchema }).strict()),
     eventV3("testplay.verified", z.object({ evidence: ArtifactRefSchema }).strict()),
     eventV3(
@@ -1239,6 +1248,22 @@ export const OrchestrationEventV3Schema = z
         path: ["stepId"],
         message: "Agent-scoped Unity transaction event needs stepId.",
       });
+    }
+    if (event.type === "process.drain-completed") {
+      if (event.payload.process === "agent" && event.stepId === undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["stepId"],
+          message: "An Agent drain completion needs stepId.",
+        });
+      }
+      if (event.payload.process === "testplay" && event.stepId !== undefined) {
+        context.addIssue({
+          code: "custom",
+          path: ["stepId"],
+          message: "A TestPlay drain completion cannot have stepId.",
+        });
+      }
     }
     if (event.type.startsWith("workflow.") && event.stepId !== undefined) {
       context.addIssue({

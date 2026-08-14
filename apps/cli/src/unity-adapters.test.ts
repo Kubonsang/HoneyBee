@@ -4,10 +4,11 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { RunIdSchema } from "@honeybee/core";
+import { RunIdSchema, StepIdSchema } from "@honeybee/core";
 
 import {
   TestPlayCliAdapter,
+  UnityAgentProcessRunner,
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
   type WorkspaceAcquireRequest,
@@ -246,6 +247,88 @@ describe("TestPlayCliAdapter process control", () => {
             process.kill(pid, "SIGKILL");
           } catch {
             // Already terminated by the adapter.
+          }
+        }
+      }
+    },
+    30_000,
+  );
+});
+
+describe("UnityAgentProcessRunner process control", () => {
+  it.skipIf(process.platform !== "win32")(
+    "terminates the complete Agent process tree before reporting cancellation",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-agent-tree-"));
+      directories.push(root);
+      const script = path.join(root, "agent-wrapper.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      await writeFile(
+        script,
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
+          "child.once('spawn', () => writeFileSync(process.argv[2], String(child.pid)));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        "utf8",
+      );
+      const aborter = new AbortController();
+      let parentPid: number | undefined;
+      let grandchildPid: number | undefined;
+      let exitedAfterTreeDrain = false;
+      try {
+        const execution = new UnityAgentProcessRunner().run(
+          {
+            runId: RunIdSchema.parse(randomUUID()),
+            stepId: StepIdSchema.parse("unity-agent"),
+            prompt: "work",
+            command: { command: process.execPath, args: [script, grandchildPidPath], cwd: root },
+            timeoutMs: 20_000,
+            maxOutputBytes: 1024 * 1024,
+            signal: aborter.signal,
+          },
+          {
+            onStarted: async (pid) => {
+              parentPid = pid;
+            },
+            onExited: async () => {
+              exitedAfterTreeDrain =
+                grandchildPid !== undefined &&
+                (() => {
+                  try {
+                    process.kill(grandchildPid as number, 0);
+                    return false;
+                  } catch {
+                    return true;
+                  }
+                })();
+            },
+          },
+        );
+        for (let attempt = 0; attempt < 100 && grandchildPid === undefined; attempt += 1) {
+          try {
+            grandchildPid = Number.parseInt(await readFile(grandchildPidPath, "utf8"), 10);
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+        expect(grandchildPid).toBeGreaterThan(0);
+        aborter.abort();
+
+        const result = await execution;
+
+        expect(result.termination).toBe("cancelled");
+        expect(exitedAfterTreeDrain).toBe(true);
+        expect(() => process.kill(grandchildPid as number, 0)).toThrow();
+      } finally {
+        for (const pid of [grandchildPid, parentPid]) {
+          if (pid === undefined) continue;
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // Already terminated by the runner.
           }
         }
       }

@@ -144,6 +144,21 @@ class ResumeStorage extends UnityWorkspaceStorageCliAdapter {
   }
 }
 
+class FailFirstResumeStorage extends ResumeStorage {
+  public attempts = 0;
+
+  public override async release(
+    leaseId: string,
+    requestId: string,
+  ): Promise<WorkspaceReleaseReceipt> {
+    this.attempts += 1;
+    if (this.attempts === 1) {
+      throw new HoneyBeeCoreError("workspace.command-failed", "Injected release failure.");
+    }
+    return super.release(leaseId, requestId);
+  }
+}
+
 const resumeConfig = (root: string) => {
   const hex = (value: string) => value.repeat(64);
   return UnityWorkConfigV1Schema.parse({
@@ -335,6 +350,50 @@ describe("UnityWorkTransaction cleanup resume", () => {
     expect(result.failure?.errorCode).toBe("process.drain-failed");
     expect(storage.released).toBe(false);
     expect((await seeded.journal.replay(seeded.runId)).status).toBe("active");
+  });
+
+  it("persists a successful interrupted-process drain across release retries", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-drain-retry-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "agent");
+    const storage = new FailFirstResumeStorage();
+    let drainCalls = 0;
+    const processControl: UnityProcessControl = {
+      captureIdentity: async () => "unused",
+      drain: async () => {
+        drainCalls += 1;
+      },
+    };
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+      { processControl },
+    );
+
+    const first = await transaction.resume(seeded.runId, seeded.config);
+    expect(first.status).toBe("cleanup-pending");
+    expect(drainCalls).toBe(1);
+    const active = await seeded.journal.replay(seeded.runId);
+    expect(active.status).toBe("active");
+    if (active.status === "active") {
+      expect(
+        active.events.filter((event) => event.type === "process.drain-completed"),
+      ).toHaveLength(1);
+    }
+
+    const second = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(second.status).toBe("failed");
+    expect(second.failure?.errorCode).toBe("transaction.interrupted");
+    expect(drainCalls).toBe(1);
+    expect(storage.attempts).toBe(2);
+    expect(storage.released).toBe(true);
+    expect((await seeded.journal.replay(seeded.runId)).status).toBe("terminal");
   });
 
   it("continues release when the original source cannot be checked during resume", async () => {

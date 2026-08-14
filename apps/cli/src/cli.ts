@@ -33,6 +33,7 @@ import {
 import { loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
 import {
   TestPlayCliAdapter,
+  UnityAgentProcessRunner,
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
 } from "./unity-adapters.js";
@@ -345,7 +346,7 @@ const unityTransactionFor = (
   controls: FileRunControl,
 ): UnityWorkTransaction =>
   new UnityWorkTransaction(
-    new ChildProcessAgentRunner(),
+    new UnityAgentProcessRunner(),
     new FileArtifactStore(root),
     journal,
     controls,

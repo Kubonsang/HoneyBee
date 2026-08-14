@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   ContentDigestSchema,
+  ChildProcessAgentRunner,
   HoneyBeeCoreError,
   type AgentCommand,
   type AgentExitObservation,
@@ -38,6 +39,15 @@ const parseOneJson = (serialized: string, name: string): unknown => {
     throw new Error(name + " stdout was not one JSON value.");
   }
 };
+
+export class UnityAgentProcessRunner extends ChildProcessAgentRunner {
+  public constructor() {
+    super({
+      detached: process.platform !== "win32",
+      terminate: terminateProcessTree,
+    });
+  }
+}
 
 export interface CommandResult extends AgentExitObservation {
   readonly stdout: string;

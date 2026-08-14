@@ -290,15 +290,18 @@ describe("filesystem run persistence", () => {
         mediaType: "application/json",
         content: "{}",
       });
-    const [config, task, source, request, receipt, evidence, release] = await Promise.all([
-      put("workflow-config"),
-      put("task"),
-      put("unity-source-manifest"),
-      put("workspace-acquire-request"),
-      put("workspace-acquire-receipt"),
-      put("testplay-evidence"),
-      put("workspace-release-receipt"),
-    ]);
+    const [config, task, source, request, receipt, evidence, release, otherSource, otherRelease] =
+      await Promise.all([
+        put("workflow-config"),
+        put("task"),
+        put("unity-source-manifest"),
+        put("workspace-acquire-request"),
+        put("workspace-acquire-receipt"),
+        put("testplay-evidence"),
+        put("workspace-release-receipt"),
+        put("unity-source-manifest"),
+        put("workspace-release-receipt"),
+      ]);
     const journal = new FileOrchestrationJournal(root);
     const events: OrchestrationEventV3[] = [
       eventV3(runId, 1, "workflow.started", {
@@ -376,6 +379,26 @@ describe("filesystem run persistence", () => {
         }),
       ),
     ).rejects.toMatchObject({ code: "journal.write-failed" });
+    await expect(
+      journal.append(
+        runId,
+        eventV3(runId, 16, "workflow.failed", {
+          failure: { errorCode: "different.failure" },
+          release,
+          sourceAfter: source,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+    await expect(
+      journal.append(
+        runId,
+        eventV3(runId, 16, "workflow.failed", {
+          failure: { errorCode: "test.failure" },
+          release: otherRelease,
+          sourceAfter: otherSource,
+        }),
+      ),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
     await journal.append(
       runId,
       eventV3(runId, 16, "workflow.failed", {
@@ -385,6 +408,106 @@ describe("filesystem run persistence", () => {
       }),
     );
     expect((await journal.replay(runId)).status).toBe("terminal");
+
+    const journalPath = path.join(root, runId, "events.jsonl");
+    const lines = (await readFile(journalPath, "utf8")).trim().split("\n");
+    const terminal = JSON.parse(lines.at(-1) ?? "{}") as Record<string, unknown>;
+    terminal.payload = {
+      failure: { errorCode: "different.failure" },
+      release,
+      sourceAfter: source,
+    };
+    lines[lines.length - 1] = JSON.stringify(terminal);
+    await writeFile(journalPath, lines.join("\n") + "\n", "utf8");
+    expect((await journal.replay(runId)).status).toBe("indeterminate");
+  });
+
+  it("treats a completed Unity terminal with mismatched durable Artifacts as indeterminate", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const put = (kind: Parameters<FileArtifactStore["put"]>[0]["kind"]) =>
+      store.put({
+        runId,
+        artifactId: ArtifactIdSchema.parse(randomUUID()),
+        kind,
+        mediaType: "application/json",
+        content: "{}",
+      });
+    const [config, task, source, request, receipt, evidence, otherEvidence, release] =
+      await Promise.all([
+        put("workflow-config"),
+        put("task"),
+        put("unity-source-manifest"),
+        put("workspace-acquire-request"),
+        put("workspace-acquire-receipt"),
+        put("testplay-evidence"),
+        put("testplay-evidence"),
+        put("workspace-release-receipt"),
+      ]);
+    const observation = {
+      pid: 42,
+      exitCode: 0,
+      signal: null,
+      durationMs: 1,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+    };
+    const events: OrchestrationEventV3[] = [
+      eventV3(runId, 1, "workflow.started", {
+        mode: "unity-work-v1",
+        config,
+        task,
+      }),
+      eventV3(runId, 2, "source.baselined", { manifest: source }),
+      eventV3(runId, 3, "workspace.prepared", {
+        workspaceId: "workspace",
+        sourceManifest: source,
+      }),
+      eventV3(runId, 4, "workspace.acquire-started", {
+        request,
+        requestId: "acquire",
+      }),
+      eventV3(runId, 5, "workspace.acquired", {
+        workspaceId: "workspace",
+        leaseId: "lease",
+        receipt,
+      }),
+      eventV3(runId, 6, "agent.started", { pid: 42 }, "unity-agent"),
+      eventV3(runId, 7, "agent.exited", observation, "unity-agent"),
+      eventV3(runId, 8, "testplay.started", { pid: 43 }),
+      eventV3(runId, 9, "testplay.exited", { ...observation, pid: 43 }),
+      eventV3(runId, 10, "testplay.evidence-stored", { evidence }),
+      eventV3(runId, 11, "testplay.verified", { evidence }),
+      eventV3(runId, 12, "source.checked", {
+        before: source,
+        after: source,
+        unchanged: true,
+      }),
+      eventV3(runId, 13, "transaction.outcome-decided", { outcome: "completed" }),
+      eventV3(runId, 14, "workspace.release-started", {
+        leaseId: "lease",
+        requestId: "release",
+      }),
+      eventV3(runId, 15, "workspace.released", {
+        leaseId: "lease",
+        receipt: release,
+        cleanupState: "released",
+      }),
+      eventV3(runId, 16, "workflow.completed", {
+        evidence: otherEvidence,
+        release,
+        sourceAfter: source,
+      }),
+    ];
+    await writeFile(
+      path.join(root, runId, "events.jsonl"),
+      events.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+      "utf8",
+    );
+
+    expect((await new FileOrchestrationJournal(root).replay(runId)).status).toBe("indeterminate");
   });
 
   it("rejects outcomes and retries that do not match the active Agent attempt", async () => {

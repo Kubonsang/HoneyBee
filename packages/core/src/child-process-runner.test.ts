@@ -62,4 +62,40 @@ describe("ChildProcessAgentRunner", () => {
     expect(exit?.stdoutBytes).toBe(result.stdoutBytes);
     expect(exit?.stdoutDigest).toBe(result.stdoutDigest);
   });
+
+  it("uses the configured tree terminator when the start persistence barrier fails", async () => {
+    let childPid: number | undefined;
+    let terminationCalls = 0;
+    let exited = false;
+    const runner = new ChildProcessAgentRunner({
+      detached: false,
+      terminate: async (pid) => {
+        terminationCalls += 1;
+        process.kill(pid, "SIGKILL");
+      },
+    });
+    try {
+      await expect(
+        runner.run(request(["-e", "setInterval(() => {}, 1000)"], "input", 1024), {
+          onStarted: async (pid) => {
+            childPid = pid;
+            throw new Error("journal unavailable");
+          },
+          onExited: async () => {
+            exited = true;
+          },
+        }),
+      ).rejects.toThrow("journal unavailable");
+      expect(terminationCalls).toBe(1);
+      expect(exited).toBe(false);
+    } finally {
+      if (childPid !== undefined) {
+        try {
+          process.kill(childPid, "SIGKILL");
+        } catch {
+          // The injected terminator already stopped it.
+        }
+      }
+    }
+  });
 });

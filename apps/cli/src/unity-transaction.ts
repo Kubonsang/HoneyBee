@@ -513,7 +513,7 @@ export class UnityWorkTransaction {
     }
 
     try {
-      await this.#drainInterruptedChildren(events);
+      await this.#drainInterruptedChildren(events, writer);
     } catch (error) {
       return {
         runId,
@@ -940,7 +940,10 @@ export class UnityWorkTransaction {
     );
   }
 
-  async #drainInterruptedChildren(events: readonly OrchestrationEventV3[]): Promise<void> {
+  async #drainInterruptedChildren(
+    events: readonly OrchestrationEventV3[],
+    writer: UnityEventWriter,
+  ): Promise<void> {
     for (const [startedType, exitedType] of [
       ["agent.started", "agent.exited"],
       ["testplay.started", "testplay.exited"],
@@ -949,7 +952,20 @@ export class UnityWorkTransaction {
       if (started === undefined) continue;
       const exited = lastEvent(events, exitedType);
       if (exited !== undefined && exited.sequence > started.sequence) continue;
+      const processType = startedType === "agent.started" ? "agent" : "testplay";
+      const drained = events.some(
+        (event) =>
+          event.type === "process.drain-completed" &&
+          event.payload.process === processType &&
+          event.payload.startedEventId === started.eventId,
+      );
+      if (drained) continue;
       await this.#processControl.drain(started.payload.pid, started.payload.processIdentity);
+      await writer.emit(
+        "process.drain-completed",
+        { process: processType, startedEventId: started.eventId },
+        startedType === "agent.started" ? started.stepId : undefined,
+      );
     }
   }
 
