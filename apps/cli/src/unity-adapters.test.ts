@@ -1,11 +1,13 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { appendFile, copyFile, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { RunIdSchema } from "@honeybee/core";
 
 import {
+  TestPlayCliAdapter,
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
   type WorkspaceAcquireRequest,
@@ -171,4 +173,83 @@ describe("UnityProjectBootstrap source manifests", () => {
     expect(firstManifest.assetsDigest).not.toBe(secondManifest.assetsDigest);
     expect(firstManifest.digest).not.toBe(secondManifest.digest);
   });
+});
+
+describe("TestPlayCliAdapter process control", () => {
+  it.skipIf(process.platform !== "win32")(
+    "terminates the complete TestPlay process tree before reporting cancellation",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-tree-"));
+      directories.push(root);
+      const workspace = path.join(root, "workspace");
+      const script = path.join(root, "testplay-wrapper.mjs");
+      const grandchildPidPath = path.join(root, "grandchild.pid");
+      await mkdir(workspace);
+      await writeFile(
+        script,
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          "const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore', windowsHide: true });",
+          "child.once('spawn', () => writeFileSync(process.argv[2], String(child.pid)));",
+          "setInterval(() => {}, 1000);",
+        ].join("\n"),
+        "utf8",
+      );
+      const adapter = new TestPlayCliAdapter({
+        command: { command: process.execPath, args: [script, grandchildPidPath] },
+        unityPath: path.join(root, "Unity.exe"),
+        platform: "edit_mode",
+        timeoutMs: 20_000,
+      });
+      const aborter = new AbortController();
+      let parentPid: number | undefined;
+      let grandchildPid: number | undefined;
+      let exitedAfterTreeDrain = false;
+      try {
+        const execution = adapter.run(RunIdSchema.parse(randomUUID()), workspace, aborter.signal, {
+          onStarted: async (pid) => {
+            parentPid = pid;
+          },
+          onExited: async () => {
+            exitedAfterTreeDrain =
+              grandchildPid !== undefined &&
+              (() => {
+                try {
+                  process.kill(grandchildPid as number, 0);
+                  return false;
+                } catch {
+                  return true;
+                }
+              })();
+          },
+        });
+        for (let attempt = 0; attempt < 100 && grandchildPid === undefined; attempt += 1) {
+          try {
+            grandchildPid = Number.parseInt(await readFile(grandchildPidPath, "utf8"), 10);
+          } catch {
+            await new Promise((resolve) => setTimeout(resolve, 50));
+          }
+        }
+        expect(grandchildPid).toBeGreaterThan(0);
+        aborter.abort();
+
+        const result = await execution;
+
+        expect(result.command.termination).toBe("cancelled");
+        expect(exitedAfterTreeDrain).toBe(true);
+        expect(() => process.kill(grandchildPid as number, 0)).toThrow();
+      } finally {
+        for (const pid of [grandchildPid, parentPid]) {
+          if (pid === undefined) continue;
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            // Already terminated by the adapter.
+          }
+        }
+      }
+    },
+    30_000,
+  );
 });

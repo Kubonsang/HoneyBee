@@ -90,6 +90,60 @@ const waitForOriginalExit = async (pid: number, identity: string): Promise<boole
   return false;
 };
 
+const waitForProcessGroupExit = async (pid: number): Promise<boolean> => {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(-pid, 0);
+    } catch (error) {
+      if (errorCode(error) === "ESRCH") return true;
+    }
+    const remaining = deadline - Date.now();
+    if (remaining > 0) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, remaining)));
+    }
+  }
+  return false;
+};
+
+export const terminateProcessTree = async (pid: number): Promise<void> => {
+  if (process.platform === "win32") {
+    try {
+      await execFileAsync("taskkill.exe", ["/PID", String(pid), "/T", "/F"], {
+        encoding: "utf8",
+        timeout: 15_000,
+        windowsHide: true,
+      });
+      return;
+    } catch {
+      throw new HoneyBeeCoreError(
+        "process.drain-failed",
+        "The child process tree could not be terminated safely.",
+      );
+    }
+  }
+
+  try {
+    process.kill(-pid, "SIGTERM");
+  } catch {
+    throw new HoneyBeeCoreError(
+      "process.drain-failed",
+      "The child process group could not be identified safely.",
+    );
+  }
+  if (await waitForProcessGroupExit(pid)) return;
+  try {
+    process.kill(-pid, "SIGKILL");
+  } catch {
+    // The group may have exited between the observation and the signal.
+  }
+  if (await waitForProcessGroupExit(pid)) return;
+  throw new HoneyBeeCoreError(
+    "process.drain-failed",
+    "The child process tree could not be terminated safely.",
+  );
+};
+
 export interface UnityProcessControl {
   captureIdentity(pid: number): Promise<string | undefined>;
   drain(pid: number, processIdentity?: string): Promise<void>;
@@ -110,14 +164,24 @@ export class SystemUnityProcessControl implements UnityProcessControl {
 
   public async drain(pid: number, processIdentity?: string): Promise<void> {
     const observation = await observeProcess(pid);
-    if (observation.status === "missing") return;
+    if (observation.status === "missing") {
+      throw new HoneyBeeCoreError(
+        "process.drain-failed",
+        "The recorded parent process is gone, so surviving descendants cannot be ruled out.",
+      );
+    }
     if (processIdentity === undefined || observation.identity === undefined) {
       throw new HoneyBeeCoreError(
         "process.drain-failed",
         "A surviving child process cannot be identified safely.",
       );
     }
-    if (observation.identity !== processIdentity) return;
+    if (observation.identity !== processIdentity) {
+      throw new HoneyBeeCoreError(
+        "process.drain-failed",
+        "The recorded parent PID was reused, so surviving descendants cannot be ruled out.",
+      );
+    }
 
     try {
       if (process.platform === "win32") {
@@ -130,8 +194,10 @@ export class SystemUnityProcessControl implements UnityProcessControl {
         process.kill(pid, "SIGTERM");
       }
     } catch {
-      const afterFailure = await observeProcess(pid);
-      if (afterFailure.status === "missing" || afterFailure.identity !== processIdentity) return;
+      throw new HoneyBeeCoreError(
+        "process.drain-failed",
+        "The surviving child process tree could not be drained before workspace cleanup.",
+      );
     }
 
     if (await waitForOriginalExit(pid, processIdentity)) return;

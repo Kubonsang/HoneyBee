@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -207,6 +207,18 @@ describe("HoneyBee CLI sequential orchestration", () => {
       code: "run.cleanup-pending",
     });
     expect((await journal.replay(runId)).status).toBe("active");
+
+    await appendFile(path.join(root, runId, "events.jsonl"), '{"torn":', "utf8");
+    expect((await journal.replay(runId)).status).toBe("indeterminate");
+    const indeterminateDeletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+    expect(indeterminateDeletion.exitCode).toBe(1);
+    expect(JSON.parse(indeterminateDeletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toContain(
+      '"type":"workflow.started"',
+    );
   }, 20_000);
 
   it("returns runId and journalPath when an Agent fails", async () => {

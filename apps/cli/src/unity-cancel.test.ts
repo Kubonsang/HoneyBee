@@ -9,6 +9,7 @@ import {
   FileOrchestrationJournal,
   FileRunControl,
   FileRunRepository,
+  HoneyBeeCoreError,
   RunIdSchema,
   UnityWorkConfigV1Schema,
   type AgentProcessRunner,
@@ -142,52 +143,68 @@ class CancellableRunner implements AgentProcessRunner {
   }
 }
 
+class PollingErrorControl extends FileRunControl {
+  #pendingCalls = 0;
+
+  public override async pending(
+    runId: Parameters<FileRunControl["pending"]>[0],
+  ): ReturnType<FileRunControl["pending"]> {
+    this.#pendingCalls += 1;
+    if (this.#pendingCalls === 1) return super.pending(runId);
+    throw new HoneyBeeCoreError("control.read-failed", "Injected control inbox failure.");
+  }
+}
+
+const cancellationConfig = (root: string) => {
+  const hex = (value: string) => value.repeat(64);
+  return UnityWorkConfigV1Schema.parse({
+    schemaVersion: 1,
+    sourceProjectPath: path.join(root, "source"),
+    workspaceStorage: {
+      command: { command: process.execPath },
+      contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+      binarySha256: "0".repeat(64),
+      workspaceRoot: path.join(root, "workspaces"),
+      parentKey: {
+        schemaVersion: 2,
+        digest: hex("a"),
+        libraryKey: {
+          schemaVersion: "1",
+          digest: hex("b"),
+          unityVersion: "6000",
+          unityExecutableSha256: hex("c"),
+          manifestSha256: hex("d"),
+          packagesLockSha256: "missing",
+          projectSettingsSha256: hex("e"),
+          buildTarget: "windows/amd64",
+          scriptingBackend: "Mono",
+          projectIdentitySha256: hex("f"),
+        },
+        provider: "vhdx-differencing",
+        filesystem: "NTFS",
+        virtualBytes: 1,
+        blockBytes: 1,
+        sectorBytes: 1,
+      },
+    },
+    agent: {
+      command: { command: "unused" },
+      harness: "stdio-framed-v2",
+    },
+    testplay: {
+      command: { command: "unused" },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 1000,
+    },
+  });
+};
+
 describe("UnityWorkTransaction cancellation", () => {
   it("drains the Agent and releases with an independent cleanup path", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-cancel-"));
     try {
-      const hex = (value: string) => value.repeat(64);
-      const config = UnityWorkConfigV1Schema.parse({
-        schemaVersion: 1,
-        sourceProjectPath: path.join(root, "source"),
-        workspaceStorage: {
-          command: { command: process.execPath },
-          contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
-          binarySha256: "0".repeat(64),
-          workspaceRoot: path.join(root, "workspaces"),
-          parentKey: {
-            schemaVersion: 2,
-            digest: hex("a"),
-            libraryKey: {
-              schemaVersion: "1",
-              digest: hex("b"),
-              unityVersion: "6000",
-              unityExecutableSha256: hex("c"),
-              manifestSha256: hex("d"),
-              packagesLockSha256: "missing",
-              projectSettingsSha256: hex("e"),
-              buildTarget: "windows/amd64",
-              scriptingBackend: "Mono",
-              projectIdentitySha256: hex("f"),
-            },
-            provider: "vhdx-differencing",
-            filesystem: "NTFS",
-            virtualBytes: 1,
-            blockBytes: 1,
-            sectorBytes: 1,
-          },
-        },
-        agent: {
-          command: { command: "unused" },
-          harness: "stdio-framed-v2",
-        },
-        testplay: {
-          command: { command: "unused" },
-          unityPath: path.join(root, "Unity.exe"),
-          platform: "edit_mode",
-          timeoutMs: 1000,
-        },
-      });
+      const config = cancellationConfig(root);
       const runId = RunIdSchema.parse(randomUUID());
       await new FileRunRepository(root).create(runId);
       const controls = new FileRunControl(root);
@@ -222,6 +239,45 @@ describe("UnityWorkTransaction cancellation", () => {
         expect(replay.events.some((event) => event.type === "control.accepted")).toBe(true);
         expect(replay.events.at(-2)?.type).toBe("workspace.released");
         expect(replay.events.at(-1)?.type).toBe("workflow.cancelled");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+
+  it("records a control polling failure as failed rather than cancelled", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-control-error-"));
+    try {
+      const config = cancellationConfig(root);
+      const runId = RunIdSchema.parse(randomUUID());
+      await new FileRunRepository(root).create(runId);
+      const controls = new PollingErrorControl(root);
+      const journal = new FileOrchestrationJournal(root);
+      const storage = new RecordingStorage();
+      const bootstrap = new RecordingBootstrap();
+      const transaction = new UnityWorkTransaction(
+        new CancellableRunner(),
+        new FileArtifactStore(root),
+        journal,
+        controls,
+        bootstrap,
+        storage,
+        new TestPlayCliAdapter(config.testplay),
+      );
+
+      const result = await transaction.run(runId, "fail polling safely", config);
+
+      expect(result.status).toBe("failed");
+      expect(result.failure?.errorCode).toBe("control.read-failed");
+      expect(storage.releases).toBe(1);
+      expect(bootstrap.released).toBe(true);
+      const replay = await journal.replay(runId);
+      expect(replay.status).toBe("terminal");
+      if (replay.status === "terminal") {
+        expect(replay.terminal).toMatchObject({
+          type: "workflow.failed",
+          payload: { failure: { errorCode: "control.read-failed" } },
+        });
       }
     } finally {
       await rm(root, { recursive: true, force: true });

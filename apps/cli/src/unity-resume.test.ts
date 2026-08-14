@@ -10,6 +10,7 @@ import {
   FileOrchestrationJournal,
   FileRunControl,
   FileRunRepository,
+  HoneyBeeCoreError,
   OrchestrationEventV3Schema,
   RunIdSchema,
   UnityWorkConfigV1Schema,
@@ -261,7 +262,7 @@ const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | und
     );
     await append("testplay.started", { pid: 4343, processIdentity: "test:testplay" });
   }
-  return { runRoot, runId, config, artifacts, journal };
+  return { runRoot, runId, config, artifacts, journal, sourceArtifact, append };
 };
 
 describe("UnityWorkTransaction cleanup resume", () => {
@@ -303,6 +304,39 @@ describe("UnityWorkTransaction cleanup resume", () => {
     },
   );
 
+  it("keeps cleanup pending when an interrupted process tree cannot be proven drained", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-child-unknown-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "testplay");
+    const storage = new ResumeStorage();
+    const processControl: UnityProcessControl = {
+      captureIdentity: async () => "unused",
+      drain: async () => {
+        throw new HoneyBeeCoreError(
+          "process.drain-failed",
+          "Recorded parent is gone; descendants are unknown.",
+        );
+      },
+    };
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+      { processControl },
+    );
+
+    const result = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("cleanup-pending");
+    expect(result.failure?.errorCode).toBe("process.drain-failed");
+    expect(storage.released).toBe(false);
+    expect((await seeded.journal.replay(seeded.runId)).status).toBe("active");
+  });
+
   it("continues release when the original source cannot be checked during resume", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-source-missing-"));
     directories.push(root);
@@ -327,6 +361,39 @@ describe("UnityWorkTransaction cleanup resume", () => {
     expect(replay.status).toBe("terminal");
     if (replay.status === "terminal") {
       expect(replay.events.some((event) => event.type === "workspace.released")).toBe(true);
+      expect(replay.terminal.type).toBe("workflow.failed");
+    }
+  });
+
+  it("reuses a durable source.checked result instead of appending it twice", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-source-checked-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, undefined);
+    await seeded.append("source.checked", {
+      before: seeded.sourceArtifact,
+      after: seeded.sourceArtifact,
+      unchanged: true,
+    });
+    const storage = new ResumeStorage();
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(true),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+    );
+
+    const result = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("failed");
+    expect(result.failure?.errorCode).toBe("transaction.interrupted");
+    expect(storage.released).toBe(true);
+    const replay = await seeded.journal.replay(seeded.runId);
+    expect(replay.status).toBe("terminal");
+    if (replay.status === "terminal") {
+      expect(replay.events.filter((event) => event.type === "source.checked")).toHaveLength(1);
       expect(replay.terminal.type).toBe("workflow.failed");
     }
   });

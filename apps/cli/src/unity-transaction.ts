@@ -335,6 +335,7 @@ export class UnityWorkTransaction {
     if (await this.#acceptPendingCancel(runId, writer)) aborter.abort();
     const watcher = this.#watchCancellation(runId, writer, aborter);
     let decision: TransactionDecision;
+    let unsafeProcessFailure: FailureMetadata | undefined;
     let agentOutput: ArtifactRef | undefined;
     let evidence: ArtifactRef | undefined;
     try {
@@ -363,10 +364,28 @@ export class UnityWorkTransaction {
       if (verification.failure !== undefined) throw verification.failure;
       decision = { outcome: "completed" };
     } catch (error) {
+      const pollingError = watcher.error();
+      const operationFailure = failureMetadata(error);
+      if (operationFailure.errorCode === "process.drain-failed") {
+        unsafeProcessFailure = operationFailure;
+      }
       decision =
-        aborter.signal.aborted || failureMetadata(error).errorCode === "agent.cancelled"
-          ? { outcome: "cancelled" }
-          : { outcome: "failed", failure: failureMetadata(error) };
+        pollingError !== undefined
+          ? { outcome: "failed", failure: failureMetadata(pollingError) }
+          : aborter.signal.aborted || operationFailure.errorCode === "agent.cancelled"
+            ? { outcome: "cancelled" }
+            : { outcome: "failed", failure: operationFailure };
+    }
+
+    if (unsafeProcessFailure !== undefined) {
+      await watcher.stop();
+      return {
+        runId,
+        status: "cleanup-pending",
+        sourceBefore,
+        ...(agentOutput === undefined ? {} : { agentOutput }),
+        failure: unsafeProcessFailure,
+      };
     }
 
     let sourceAfter: ArtifactRef | undefined;
@@ -389,7 +408,7 @@ export class UnityWorkTransaction {
     if (aborter.signal.aborted && decision.outcome === "completed") {
       decision = { outcome: "cancelled" };
     }
-    if (watcher.error() !== undefined && decision.outcome === "completed") {
+    if (watcher.error() !== undefined && decision.outcome !== "failed") {
       decision = { outcome: "failed", failure: failureMetadata(watcher.error()) };
     }
     await writer.emit("transaction.outcome-decided", decision);
@@ -528,7 +547,7 @@ export class UnityWorkTransaction {
           });
         }
       }
-      if (sourceBefore !== undefined) {
+      if (sourceBefore !== undefined && sourceAfter === undefined) {
         try {
           const beforeValue = JSON.parse(
             await this.artifacts.get({ runId, artifact: sourceBefore }),

@@ -15,6 +15,7 @@ import {
 } from "@honeybee/core";
 
 import { physicalPathsOverlap, samePath } from "./path-safety.js";
+import { terminateProcessTree } from "./process-control.js";
 
 const MAX_COMMAND_OUTPUT_BYTES = 16 * 1024 * 1024;
 const SOURCE_DIRECTORIES = ["Assets", "Packages", "ProjectSettings"] as const;
@@ -59,6 +60,7 @@ const runCommand = (
     signal?: AbortSignal;
     lifecycle?: CommandLifecycle;
     environment?: Readonly<Record<string, string>>;
+    terminateTree?: boolean;
   }>,
 ): Promise<CommandResult> =>
   new Promise((resolve, reject) => {
@@ -69,6 +71,7 @@ const runCommand = (
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      detached: options.terminateTree === true && process.platform !== "win32",
     });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
@@ -79,11 +82,26 @@ const runCommand = (
     let settled = false;
     let termination: CommandResult["termination"] = "exited";
     let startBarrier: Promise<void> = Promise.resolve();
+    let treeTermination: Promise<void> | undefined;
     let forcedTermination: ReturnType<typeof setTimeout> | undefined;
 
     const terminate = (reason: CommandResult["termination"]): void => {
       if (termination === "exited") termination = reason;
       if (child.exitCode === null && child.signalCode === null) {
+        if (options.terminateTree === true) {
+          const pid = child.pid;
+          if (pid !== undefined && treeTermination === undefined) {
+            treeTermination = terminateProcessTree(pid);
+            void treeTermination.catch((error: unknown) => {
+              if (settled) return;
+              settled = true;
+              clearTimeout(timeout);
+              options.signal?.removeEventListener("abort", onAbort);
+              reject(error);
+            });
+          }
+          return;
+        }
         child.kill();
         forcedTermination ??= setTimeout(() => {
           if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
@@ -131,6 +149,7 @@ const runCommand = (
             child.stdin.end(options.input, "utf8", writeResolve);
           }),
       );
+      if (termination !== "exited" && options.terminateTree === true) terminate(termination);
       void startBarrier.catch(() => terminate("cancelled"));
     });
     child.once("error", (error) => {
@@ -149,7 +168,12 @@ const runCommand = (
       options.signal?.removeEventListener("abort", onAbort);
       void (async () => {
         try {
-          await startBarrier;
+          const [startResult, treeResult] = await Promise.allSettled([
+            startBarrier,
+            treeTermination ?? Promise.resolve(),
+          ]);
+          if (treeResult.status === "rejected") throw treeResult.reason;
+          if (startResult.status === "rejected") throw startResult.reason;
           const observation: AgentExitObservation = {
             pid: child.pid ?? -1,
             exitCode,
@@ -721,6 +745,7 @@ export class TestPlayCliAdapter {
       signal,
       lifecycle,
       environment: { HONEYBEE_UNITY_PROJECT_PATH: workspacePath },
+      terminateTree: true,
     });
     let response: unknown;
     try {

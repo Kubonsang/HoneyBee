@@ -30,11 +30,30 @@ describe("SystemUnityProcessControl", () => {
     }
   }, 20_000);
 
-  it("does not terminate a live PID whose incarnation differs", async () => {
+  it("fails closed without terminating a live PID whose incarnation differs", async () => {
     const control = new SystemUnityProcessControl();
-    await expect(
-      control.drain(process.pid, "not-the-current-incarnation"),
-    ).resolves.toBeUndefined();
+    await expect(control.drain(process.pid, "not-the-current-incarnation")).rejects.toMatchObject({
+      code: "process.drain-failed",
+    });
     expect(() => process.kill(process.pid, 0)).not.toThrow();
+  });
+
+  it("fails closed when the recorded parent is gone and descendants cannot be ruled out", async () => {
+    const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+      shell: false,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    await once(child, "spawn");
+    const pid = child.pid;
+    expect(pid).toBeDefined();
+    const control = new SystemUnityProcessControl();
+    const identity = await control.captureIdentity(pid as number);
+    child.kill("SIGKILL");
+    await once(child, "close");
+
+    await expect(control.drain(pid as number, identity)).rejects.toMatchObject({
+      code: "process.drain-failed",
+    });
   });
 });
