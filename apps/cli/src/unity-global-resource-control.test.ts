@@ -1,0 +1,171 @@
+import { randomUUID } from "node:crypto";
+import { spawn } from "node:child_process";
+import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { EventIdSchema, ResourceIdSchema, RunIdSchema } from "@honeybee/core";
+import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
+
+const directories: string[] = [];
+
+afterEach(async () => {
+  await Promise.all(directories.splice(0).map((entry) => rm(entry, { recursive: true })));
+});
+
+const temporaryRoot = async (): Promise<string> => {
+  const root = await mkdtemp(path.join(tmpdir(), "honeybee-global-resource-"));
+  directories.push(root);
+  return root;
+};
+
+const request = (resourceId: string, requestId = randomUUID()) => ({
+  resourceId: ResourceIdSchema.parse(resourceId),
+  requestId: EventIdSchema.parse(requestId),
+  ownerRunId: RunIdSchema.parse(randomUUID()),
+});
+
+const coordinatorModuleUrl = new URL("../dist/unity-global-resource-control.js", import.meta.url)
+  .href;
+
+const acquireInChild = async (
+  root: string,
+  value: ReturnType<typeof request>,
+): Promise<Readonly<{ output: Promise<string>; exited: Promise<number | null> }>> => {
+  const script = [
+    `import { FileUnityResourceCoordinator } from ${JSON.stringify(coordinatorModuleUrl)};`,
+    "const root = process.argv[1];",
+    "const request = JSON.parse(process.argv[2]);",
+    "const coordinator = new FileUnityResourceCoordinator(root);",
+    "await coordinator.enqueue(request);",
+    "const lease = await coordinator.acquire(request.requestId);",
+    "process.stdout.write(JSON.stringify(lease) + '\\n');",
+  ].join("\n");
+  const child = spawn(
+    process.execPath,
+    ["--input-type=module", "-e", script, root, JSON.stringify(value)],
+    {
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    },
+  );
+  let stdout = "";
+  let stderr = "";
+  const output = new Promise<string>((resolve, reject) => {
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+      const line = stdout.split(/\r?\n/u)[0];
+      if (line !== undefined && line.length > 0) resolve(line);
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    child.once("error", reject);
+    child.once("exit", (code) => {
+      if (stdout.length === 0 && code !== 0) reject(new Error(stderr || `child exited ${code}`));
+    });
+  });
+  const exited = new Promise<number | null>((resolve) => child.once("exit", resolve));
+  return { output, exited };
+};
+
+describe("FileUnityResourceCoordinator", () => {
+  it("serializes one resource across processes and preserves an orphaned active lease", async () => {
+    const root = await temporaryRoot();
+    const coordinator = new FileUnityResourceCoordinator(root);
+    const firstRequest = request("unity-editor");
+    const secondRequest = request("unity-editor");
+
+    const firstChild = await acquireInChild(root, firstRequest);
+    const firstLease = JSON.parse(await firstChild.output) as Awaited<
+      ReturnType<FileUnityResourceCoordinator["acquire"]>
+    >;
+    expect(await firstChild.exited).toBe(0);
+    expect(await coordinator.status(firstRequest.requestId)).toEqual({
+      state: "active",
+      lease: firstLease,
+    });
+
+    const secondChild = await acquireInChild(root, secondRequest);
+    let secondSettled = false;
+    void secondChild.output.then(() => {
+      secondSettled = true;
+    });
+    await vi.waitFor(async () => {
+      expect((await coordinator.status(secondRequest.requestId)).state).toBe("queued");
+    });
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(secondSettled).toBe(false);
+
+    await coordinator.release(firstLease);
+    const secondLease = JSON.parse(await secondChild.output) as Awaited<
+      ReturnType<FileUnityResourceCoordinator["acquire"]>
+    >;
+    expect(secondLease.ticket).toBe(2);
+    expect(await secondChild.exited).toBe(0);
+    await coordinator.release(secondLease);
+    expect((await coordinator.status(secondRequest.requestId)).state).toBe("released");
+  }, 30_000);
+
+  it("allows distinct resources concurrently and cancels queued requests durably", async () => {
+    const root = await temporaryRoot();
+    const first = new FileUnityResourceCoordinator(root);
+    const second = new FileUnityResourceCoordinator(root);
+    const editor = request("unity-editor");
+    const license = request("unity-license");
+    const waiting = request("unity-editor");
+    await Promise.all([first.enqueue(editor), second.enqueue(license), second.enqueue(waiting)]);
+
+    const [editorLease, licenseLease] = await Promise.all([
+      first.acquire(editor.requestId),
+      second.acquire(license.requestId),
+    ]);
+    await second.cancel(waiting.requestId);
+    expect(await first.status(waiting.requestId)).toMatchObject({ state: "cancelled" });
+    await expect(first.acquire(waiting.requestId)).rejects.toMatchObject({
+      code: "agent.cancelled",
+    });
+    await Promise.all([second.release(editorLease), first.release(licenseLease)]);
+  }, 30_000);
+
+  it("fails closed on journal gaps and request ownership reuse", async () => {
+    const root = await temporaryRoot();
+    const coordinator = new FileUnityResourceCoordinator(root);
+    const original = request("unity-editor");
+    await coordinator.enqueue(original);
+    await expect(
+      coordinator.enqueue({ ...original, ownerRunId: RunIdSchema.parse(randomUUID()) }),
+    ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
+    await expect(
+      coordinator.enqueue({ ...original, resourceId: ResourceIdSchema.parse("unity-license") }),
+    ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
+
+    const events = path.join(root, ".unity-resources", "v1", "unity-editor", "events");
+    await mkdir(events, { recursive: true });
+    await writeFile(path.join(events, "00000000000000000003.json"), "{}\n", "utf8");
+    await expect(coordinator.status(original.requestId)).rejects.toMatchObject({
+      code: "run.indeterminate",
+    });
+  });
+
+  it("rejects a resource directory link before publishing outside its state root", async () => {
+    const root = await temporaryRoot();
+    const target = path.join(root, "link-target");
+    const resourceRoot = path.join(root, ".unity-resources", "v1");
+    await Promise.all([mkdir(target), mkdir(resourceRoot, { recursive: true })]);
+    await symlink(
+      target,
+      path.join(resourceRoot, "unity-editor"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    const coordinator = new FileUnityResourceCoordinator(root);
+
+    await expect(coordinator.enqueue(request("unity-editor"))).rejects.toMatchObject({
+      code: "run.indeterminate",
+    });
+  });
+});

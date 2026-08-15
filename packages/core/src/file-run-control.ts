@@ -192,19 +192,31 @@ export class FileRunControl implements RunLeaseManager {
           return {
             release: async () => {
               if (released) return;
-              released = true;
               const current = await this.#readLease(paths.active);
-              if (current?.leaseId !== leaseId) return;
-              try {
-                await rename(paths.active, paths.released);
-              } catch (error) {
-                if (errorCode(error) === "ENOENT") return;
-                throw new HoneyBeeCoreError(
-                  "run.lease-failed",
-                  `Could not release Run ${validated}.`,
-                );
+              if (current?.leaseId !== leaseId) {
+                released = true;
+                return;
               }
-              await rm(paths.released, { recursive: true, force: true });
+              for (let releaseAttempt = 0; releaseAttempt < 16; releaseAttempt += 1) {
+                try {
+                  await rename(paths.active, paths.released);
+                  released = true;
+                  await rm(paths.released, { recursive: true, force: true });
+                  return;
+                } catch (error) {
+                  if (errorCode(error) === "ENOENT") {
+                    released = true;
+                    return;
+                  }
+                  if (!contentionError(error) || releaseAttempt === 15) {
+                    throw new HoneyBeeCoreError(
+                      "run.lease-failed",
+                      `Could not release Run ${validated}.`,
+                    );
+                  }
+                  await new Promise((resolve) => setTimeout(resolve, 25 * (releaseAttempt + 1)));
+                }
+              }
             },
           };
         } catch (error) {

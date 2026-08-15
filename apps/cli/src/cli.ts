@@ -18,7 +18,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV3Schema,
-  UnityBatchConfigV1Schema,
+  UnityBatchConfigSchema,
   UnityWorkConfigV1Schema,
   type AnyOrchestrationEvent,
   type ControlAction,
@@ -45,9 +45,10 @@ import {
 } from "./unity-batch.js";
 import { UnityPatchBuilder } from "./unity-patch.js";
 import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js";
+import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
 import { physicalPathsOverlap } from "./path-safety.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const HELP = `HoneyBee ${VERSION}
 
 Usage:
@@ -364,7 +365,7 @@ const unityTransactionFor = (
 
 const unityBatchFor = (
   root: string,
-  config: ReturnType<typeof UnityBatchConfigV1Schema.parse>,
+  config: ReturnType<typeof UnityBatchConfigSchema.parse>,
   journal: VersionedOrchestrationJournal,
   controls: FileRunControl,
 ): UnityBatchWorkflow => {
@@ -391,7 +392,9 @@ const unityBatchFor = (
     controls,
     controls,
     transaction,
-    new BatchLocalUnityResourceCoordinator(),
+    config.schemaVersion === 2
+      ? new FileUnityResourceCoordinator(root)
+      : new BatchLocalUnityResourceCoordinator(),
     new UnityPatchBuilder(artifacts, bootstrap, path.join(root, ".patch-verification")),
   );
 };
@@ -525,7 +528,7 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
         );
       }
       const artifacts = new FileArtifactStore(root);
-      const config = UnityBatchConfigV1Schema.parse(
+      const config = UnityBatchConfigSchema.parse(
         JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
       );
       await assertUnityPathsDisjoint(root, config.transaction);

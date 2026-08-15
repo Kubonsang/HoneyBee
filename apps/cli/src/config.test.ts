@@ -315,6 +315,20 @@ describe("loadUnityWorkConfig", () => {
         expect(config.works.map((work) => work.id)).toEqual(["work-a", "work-b"]);
         expect(config.transaction.sourceProjectPath).toBe(path.join(directory, "source"));
       });
+      await withConfig(
+        { ...batch, schemaVersion: 2, resourceScope: "global-file-v1" },
+        async (configPath) => {
+          const config = await loadUnityBatchConfig(configPath);
+          expect(config.schemaVersion).toBe(2);
+          expect("resourceScope" in config ? config.resourceScope : undefined).toBe(
+            "global-file-v1",
+          );
+          expect(config.transaction.sourceProjectPath).toBe(path.join(directory, "source"));
+        },
+      );
+      await withConfig({ ...batch, schemaVersion: 2 }, async (configPath) =>
+        expect(loadUnityBatchConfig(configPath)).rejects.toThrow("Invalid Unity batch"),
+      );
       await withConfig({ ...batch, typo: true }, async (configPath) =>
         expect(loadUnityBatchConfig(configPath)).rejects.toThrow("Invalid Unity batch"),
       );

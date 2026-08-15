@@ -8,7 +8,7 @@ import {
   HoneyBeeCoreError,
   OrchestrationEventV4Schema,
   RunIdSchema,
-  UnityBatchConfigV1Schema,
+  UnityBatchConfigSchema,
   type ArtifactRef,
   type ArtifactStore,
   type FailureMetadata,
@@ -18,7 +18,7 @@ import {
   type RunLeaseManager,
   type RunRepository,
   type StepId,
-  type UnityBatchConfigV1,
+  type UnityBatchConfig,
   type VersionedOrchestrationJournal,
 } from "@honeybee/core";
 
@@ -51,7 +51,7 @@ export interface UnityBatchRunResult {
 }
 
 interface Registration {
-  readonly work: UnityBatchConfigV1["works"][number];
+  readonly work: UnityBatchConfig["works"][number];
   readonly childRunId: RunId;
 }
 
@@ -59,12 +59,12 @@ export interface UnityWorkExecutor {
   run(
     runId: RunId,
     task: string,
-    config: UnityBatchConfigV1["transaction"],
+    config: UnityBatchConfig["transaction"],
     execution: UnityWorkV4Execution,
   ): Promise<UnityWorkRunResult>;
   resume(
     runId: RunId,
-    config: UnityBatchConfigV1["transaction"],
+    config: UnityBatchConfig["transaction"],
     execution: UnityWorkV4Execution,
   ): Promise<UnityWorkRunResult>;
 }
@@ -145,6 +145,9 @@ const batchSummary = (works: readonly UnityBatchWorkResult[]) => ({
   cancelled: works.filter((work) => work.status === "cancelled").length,
 });
 
+const resourceScopeFor = (config: UnityBatchConfig) =>
+  config.schemaVersion === 2 ? config.resourceScope : ("batch-local-v1" as const);
+
 export const inspectUnityBatchEvents = (
   runIdValue: RunId,
   events: readonly OrchestrationEventV4[],
@@ -223,12 +226,9 @@ export class UnityBatchWorkflow {
     this.#randomId = options.randomId ?? randomUUID;
   }
 
-  public async run(
-    runIdValue: RunId,
-    configValue: UnityBatchConfigV1,
-  ): Promise<UnityBatchRunResult> {
+  public async run(runIdValue: RunId, configValue: UnityBatchConfig): Promise<UnityBatchRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
-    const config = UnityBatchConfigV1Schema.parse(configValue);
+    const config = UnityBatchConfigSchema.parse(configValue);
     const configArtifact = await this.#putConfig(runId, config);
     const writer = new BatchEventWriter(this.journal, runId, 0, this.#now, this.#randomId);
     await writer.emit("workflow.started", {
@@ -236,7 +236,7 @@ export class UnityBatchWorkflow {
       config: configArtifact,
       workCount: config.works.length,
       maxParallelWorks: config.maxParallelWorks,
-      resourceScope: "batch-local-v1",
+      resourceScope: resourceScopeFor(config),
     });
     await writer.emit("artifact.stored", { artifact: configArtifact });
     const registrations: Registration[] = [];
@@ -268,9 +268,15 @@ export class UnityBatchWorkflow {
       throw new HoneyBeeCoreError("run.not-resumable", "Run is not a Unity batch.");
     }
     if (replay.status === "terminal") return inspectUnityBatchEvents(runId, events);
-    const config = UnityBatchConfigV1Schema.parse(
+    const config = UnityBatchConfigSchema.parse(
       JSON.parse(await this.artifacts.get({ runId, artifact: start.payload.config })) as unknown,
     );
+    if (start.payload.resourceScope !== resourceScopeFor(config)) {
+      throw new HoneyBeeCoreError(
+        "run.indeterminate",
+        "Batch resource scope does not match its durable config.",
+      );
+    }
     const registeredEvents = events.filter(
       (event): event is Extract<OrchestrationEventV4, { type: "work.registered" }> =>
         event.type === "work.registered",
@@ -330,7 +336,7 @@ export class UnityBatchWorkflow {
 
   async #execute(
     parentRunId: RunId,
-    config: UnityBatchConfigV1,
+    config: UnityBatchConfig,
     registrations: readonly Registration[],
     writer: BatchEventWriter,
     existing: readonly OrchestrationEventV4[],
@@ -526,7 +532,7 @@ export class UnityBatchWorkflow {
 
   async #executeChild(
     parentRunId: RunId,
-    config: UnityBatchConfigV1,
+    config: UnityBatchConfig,
     registration: Registration,
     cancelling: boolean,
   ): Promise<UnityWorkRunResult> {
@@ -544,7 +550,7 @@ export class UnityBatchWorkflow {
       parentRunId,
       workId: registration.work.id,
       resourceId: registration.work.resourceRef,
-      resourceScope: "batch-local-v1",
+      resourceScope: resourceScopeFor(config),
       resources: this.resources,
       patchBuilder: this.patchBuilder,
     };
@@ -623,7 +629,7 @@ export class UnityBatchWorkflow {
     }
   }
 
-  async #putConfig(runId: RunId, config: UnityBatchConfigV1): Promise<ArtifactRef> {
+  async #putConfig(runId: RunId, config: UnityBatchConfig): Promise<ArtifactRef> {
     return this.artifacts.put({
       runId,
       artifactId: ArtifactIdSchema.parse(this.#randomId()),
