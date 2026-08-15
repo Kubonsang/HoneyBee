@@ -5,6 +5,8 @@ import { promisify } from "node:util";
 import { HoneyBeeCoreError } from "@honeybee/core";
 
 const execFileAsync = promisify(execFile);
+const WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS = 15_000;
+const PROCESS_IDENTITY_ATTEMPTS = 3;
 
 const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
@@ -28,7 +30,7 @@ const readProcessIdentity = async (pid: number): Promise<string> => {
     const { stdout } = await execFileAsync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+      { encoding: "utf8", timeout: WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS, windowsHide: true },
     );
     const ticks = stdout.trim();
     if (!/^\d+$/u.test(ticks)) throw new Error("Invalid Windows process creation time.");
@@ -75,6 +77,20 @@ const observeProcess = async (pid: number): Promise<ProcessObservation> => {
   } catch {
     return processExists(pid) ? { status: "alive" } : { status: "missing" };
   }
+};
+
+const observeProcessWithIdentity = async (pid: number): Promise<ProcessObservation> => {
+  let lastObservation: ProcessObservation = { status: "alive" };
+  for (let attempt = 0; attempt < PROCESS_IDENTITY_ATTEMPTS; attempt += 1) {
+    lastObservation = await observeProcess(pid);
+    if (lastObservation.status === "missing" || lastObservation.identity !== undefined) {
+      return lastObservation;
+    }
+    if (attempt + 1 < PROCESS_IDENTITY_ATTEMPTS) {
+      await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+    }
+  }
+  return lastObservation;
 };
 
 const waitForOriginalExit = async (pid: number, identity: string): Promise<boolean> => {
@@ -155,7 +171,7 @@ export interface UnityProcessControl {
 
 export class SystemUnityProcessControl implements UnityProcessControl {
   public async captureIdentity(pid: number): Promise<string | undefined> {
-    const observation = await observeProcess(pid);
+    const observation = await observeProcessWithIdentity(pid);
     if (observation.status === "missing") return undefined;
     if (observation.identity === undefined) {
       throw new HoneyBeeCoreError(

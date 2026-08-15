@@ -115,6 +115,25 @@ describe("filesystem run persistence", () => {
     expect(blobPath).not.toContain(first.artifactId);
   });
 
+  it("round-trips arbitrary binary Artifact bytes without UTF-8 conversion", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const bytes = Buffer.from([0, 255, 128, 10, 13, 0]);
+
+    const stored = await store.putBytes({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "unity-patch-content",
+      mediaType: "application/octet-stream",
+      content: bytes,
+    });
+
+    expect(stored.byteLength).toBe(bytes.byteLength);
+    expect(Buffer.from(await store.getBytes({ runId, artifact: stored }))).toEqual(bytes);
+  });
+
   it("revalidates every read and never overwrites a tampered existing blob", async () => {
     const root = await temporaryRoot();
     const runId = RunIdSchema.parse(randomUUID());

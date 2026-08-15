@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
+import { loadUnityBatchConfig, loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
 
 const withConfig = async (value: unknown, run: (path: string) => Promise<void>): Promise<void> => {
   const directory = await mkdtemp(path.join(tmpdir(), "honeybee-config-"));
@@ -290,6 +290,41 @@ describe("loadUnityWorkConfig", () => {
         },
         async (configPath) =>
           expect(loadUnityWorkConfig(configPath)).rejects.toThrow("must be disjoint"),
+      );
+    } finally {
+      await rm(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("loads a strict Unity batch and rejects duplicate or unknown resource references", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "honeybee-unity-batch-config-"));
+    const batch = {
+      schemaVersion: 1,
+      mode: "unity-batch",
+      maxParallelWorks: 2,
+      transaction: candidate(directory),
+      resources: [{ id: "unity-editor", capacity: 1 }],
+      works: [
+        { id: "work-a", task: "A", resourceRef: "unity-editor" },
+        { id: "work-b", task: "B", resourceRef: "unity-editor" },
+      ],
+    } as const;
+    try {
+      await withConfig(batch, async (configPath) => {
+        const config = await loadUnityBatchConfig(configPath);
+        expect(config.works.map((work) => work.id)).toEqual(["work-a", "work-b"]);
+        expect(config.transaction.sourceProjectPath).toBe(path.join(directory, "source"));
+      });
+      await withConfig({ ...batch, typo: true }, async (configPath) =>
+        expect(loadUnityBatchConfig(configPath)).rejects.toThrow("Invalid Unity batch"),
+      );
+      await withConfig(
+        {
+          ...batch,
+          works: [batch.works[0], { id: "work-b", task: "B", resourceRef: "missing" }],
+        },
+        async (configPath) =>
+          expect(loadUnityBatchConfig(configPath)).rejects.toThrow("Unknown resource reference"),
       );
     } finally {
       await rm(directory, { recursive: true, force: true });

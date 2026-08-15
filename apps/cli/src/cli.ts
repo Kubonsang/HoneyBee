@@ -18,6 +18,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV3Schema,
+  UnityBatchConfigV1Schema,
   UnityWorkConfigV1Schema,
   type AnyOrchestrationEvent,
   type ControlAction,
@@ -26,9 +27,10 @@ import {
   type VersionedOrchestrationJournal,
   type WorkflowConfigV3,
   type HoneyBeeCoreErrorCode,
+  type OrchestrationEventV4,
 } from "@honeybee/core";
 
-import { loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
+import { loadUnityBatchConfig, loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
 import {
   TestPlayCliAdapter,
   UnityAgentProcessRunner,
@@ -36,6 +38,13 @@ import {
   UnityWorkspaceStorageCliAdapter,
 } from "./unity-adapters.js";
 import { UnityWorkTransaction, type UnityWorkRunResult } from "./unity-transaction.js";
+import {
+  UnityBatchWorkflow,
+  inspectUnityBatchEvents,
+  type UnityBatchRunResult,
+} from "./unity-batch.js";
+import { UnityPatchBuilder } from "./unity-patch.js";
+import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js";
 import { physicalPathsOverlap } from "./path-safety.js";
 
 const VERSION = "0.4.0";
@@ -45,6 +54,7 @@ Usage:
   honeybee demo --task <text> [--json]
   honeybee run --config <path> --task <text> [--json]
   honeybee unity run --config <path> --task <text> [--json]
+  honeybee unity batch run --config <path> [--json]
   honeybee run show <run-id> [--json]
   honeybee run pause <run-id> [--json]
   honeybee run resume <run-id> [--json]
@@ -59,6 +69,7 @@ Commands:
   demo                 Run a deterministic two-process compatible workflow.
   run                  Run a strict schemaVersion 1, 2, or 3 configuration.
   unity run            Run one isolated Unity work transaction.
+  unity batch run      Run an experimental process-local parallel Unity batch.
   run show             Replay durable Run and Step state.
   run pause/resume     Pause at a checkpoint or resume from the Journal.
   run approve/reject   Resolve a durable human approval gate.
@@ -82,6 +93,7 @@ type ParsedArguments =
       config?: string;
       json: boolean;
     }>
+  | Readonly<{ command: "unity-batch-execute"; config?: string; json: boolean }>
   | Readonly<{ command: "show"; runId: string; json: boolean }>
   | Readonly<{ command: "resume"; runId: string; json: boolean }>
   | Readonly<{ command: "delete"; runId: string; yes: boolean; json: boolean }>
@@ -114,6 +126,14 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
     return {
       command: "unity-execute",
       ...(task === undefined ? {} : { task }),
+      ...(config === undefined ? {} : { config }),
+      json: args.includes("--json"),
+    };
+  }
+  if (args[0] === "unity" && args[1] === "batch" && args[2] === "run") {
+    const config = optionValue(args, "--config");
+    return {
+      command: "unity-batch-execute",
       ...(config === undefined ? {} : { config }),
       json: args.includes("--json"),
     };
@@ -175,9 +195,13 @@ const parseArguments = (args: readonly string[]): ParsedArguments => {
 
 const eventLine = (event: AnyOrchestrationEvent): string => {
   if (event.type === "workflow.started") {
-    return event.schemaVersion === 3
-      ? "[workflow] started run=" + event.runId + " mode=unity-work-v1"
-      : "[workflow] started run=" + event.runId + " steps=" + event.payload.stepCount;
+    if (event.schemaVersion === 3) {
+      return "[workflow] started run=" + event.runId + " mode=unity-work-v1";
+    }
+    if (event.schemaVersion === 4) {
+      return "[workflow] started run=" + event.runId + " mode=" + event.payload.mode;
+    }
+    return "[workflow] started run=" + event.runId + " steps=" + event.payload.stepCount;
   }
   if (event.type === "artifact.stored") {
     return `[artifact] stored kind=${event.payload.artifact.kind} id=${event.payload.artifact.artifactId}`;
@@ -306,6 +330,18 @@ const finishUnityExecution = (
   else if (result.status === "cancelled") process.exitCode = 130;
 };
 
+const finishUnityBatchExecution = (
+  result: UnityBatchRunResult,
+  journalPath: string,
+  json: boolean,
+): void => {
+  if (json) output({ ok: result.status === "completed", ...result, journalPath }, true);
+  else output("Unity Batch " + result.runId + ": " + result.status, false);
+  if (result.status === "failed") process.exitCode = 1;
+  else if (result.status === "cleanup-pending") process.exitCode = 4;
+  else if (result.status === "cancelled") process.exitCode = 130;
+};
+
 const unityTransactionFor = (
   root: string,
   config: ReturnType<typeof UnityWorkConfigV1Schema.parse>,
@@ -325,6 +361,40 @@ const unityTransactionFor = (
     ),
     new TestPlayCliAdapter(config.testplay),
   );
+
+const unityBatchFor = (
+  root: string,
+  config: ReturnType<typeof UnityBatchConfigV1Schema.parse>,
+  journal: VersionedOrchestrationJournal,
+  controls: FileRunControl,
+): UnityBatchWorkflow => {
+  const artifacts = new FileArtifactStore(root);
+  const bootstrap = new UnityProjectBootstrap();
+  const transaction = new UnityWorkTransaction(
+    new UnityAgentProcessRunner(),
+    artifacts,
+    journal,
+    controls,
+    bootstrap,
+    new UnityWorkspaceStorageCliAdapter(
+      config.transaction.workspaceStorage.command,
+      config.transaction.workspaceStorage.parentKey.provider,
+      config.transaction.workspaceStorage.binarySha256,
+    ),
+    new TestPlayCliAdapter(config.transaction.testplay),
+  );
+  return new UnityBatchWorkflow(
+    root,
+    artifacts,
+    journal,
+    new FileRunRepository(root),
+    controls,
+    controls,
+    transaction,
+    new BatchLocalUnityResourceCoordinator(),
+    new UnityPatchBuilder(artifacts, bootstrap, path.join(root, ".patch-verification")),
+  );
+};
 
 const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
   if (args.task === undefined || args.task.trim().length === 0)
@@ -410,6 +480,29 @@ const executeUnity = async (
   }
 };
 
+const executeUnityBatch = async (
+  args: Extract<ParsedArguments, { command: "unity-batch-execute" }>,
+): Promise<void> => {
+  if (args.config === undefined) throw new Error("--config is required for unity batch run.");
+  const config = await loadUnityBatchConfig(args.config);
+  const runId = RunIdSchema.parse(randomUUID());
+  const root = stateRoot();
+  await assertUnityPathsDisjoint(root, config.transaction);
+  await new FileRunRepository(root).create(runId);
+  const controls = new FileRunControl(root);
+  const executorLease = await controls.acquire(runId);
+  const journal = new FileOrchestrationJournal(root);
+  const journalPath = path.join(root, runId, "events.jsonl");
+  try {
+    const result = await unityBatchFor(root, config, journal, controls).run(runId, config);
+    finishUnityBatchExecution(result, journalPath, args.json);
+  } catch (error) {
+    throw new CliRunExecutionError(runId, journalPath, error);
+  } finally {
+    await executorLease.release();
+  }
+};
+
 const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>): Promise<void> => {
   const runId = RunIdSchema.parse(args.runId);
   const root = stateRoot();
@@ -420,6 +513,26 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
   try {
     const journal = new FileOrchestrationJournal(root);
     const replay = await journal.replay(runId);
+    if (replay.status !== "indeterminate" && replay.events[0]?.schemaVersion === 4) {
+      const start = replay.events[0];
+      if (start.type !== "workflow.started") {
+        throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
+      }
+      if (start.payload.mode === "unity-work-v2") {
+        throw new HoneyBeeCoreError(
+          "batch.child-managed",
+          "A Unity batch child can only be resumed through its parent Run.",
+        );
+      }
+      const artifacts = new FileArtifactStore(root);
+      const config = UnityBatchConfigV1Schema.parse(
+        JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+      );
+      await assertUnityPathsDisjoint(root, config.transaction);
+      const result = await unityBatchFor(root, config, journal, controls).resume(runId);
+      finishUnityBatchExecution(result, journalPath, args.json);
+      return;
+    }
     if (replay.status !== "indeterminate" && replay.events[0]?.schemaVersion === 3) {
       const start = replay.events[0];
       if (start.type !== "workflow.started") {
@@ -474,6 +587,59 @@ const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Pro
     return;
   }
   const executorPresent = await new FileRunControl(root).executorPresent(runId);
+  if (replay.events[0]?.schemaVersion === 4) {
+    const start = replay.events[0];
+    if (start.type !== "workflow.started") {
+      throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
+    }
+    if (start.payload.mode === "unity-batch-v1") {
+      const result = inspectUnityBatchEvents(
+        runId,
+        replay.events as readonly OrchestrationEventV4[],
+      );
+      const status =
+        replay.status === "active" && !executorPresent ? "cleanup-pending" : result.status;
+      output(
+        args.json
+          ? {
+              ok: status === "completed",
+              ...result,
+              status,
+              eventCount: replay.events.length,
+              executorPresent,
+              requiresResume: replay.status === "active" && !executorPresent,
+            }
+          : `Unity Batch ${runId}: ${status}`,
+        args.json,
+      );
+      return;
+    }
+    const terminalStatus =
+      replay.status === "terminal" ? replay.terminal.type.slice("workflow.".length) : undefined;
+    const cleanupPending = replay.status === "active" && !executorPresent;
+    const status = terminalStatus ?? (cleanupPending ? "cleanup-pending" : "running");
+    const terminal = replay.status === "terminal" ? replay.terminal : undefined;
+    output(
+      args.json
+        ? {
+            ok: status === "completed",
+            runId,
+            status,
+            parentRunId: start.payload.linkage.parentRunId,
+            workId: start.payload.linkage.workId,
+            patch:
+              terminal?.type === "workflow.completed" && "patch" in terminal.payload
+                ? terminal.payload.patch
+                : undefined,
+            eventCount: replay.events.length,
+            executorPresent,
+            requiresResume: cleanupPending,
+          }
+        : `Unity Batch child ${runId}: ${status}`,
+      args.json,
+    );
+    return;
+  }
   if (replay.events[0]?.schemaVersion === 3) {
     const terminalStatus =
       replay.status === "terminal" ? replay.terminal.type.slice("workflow.".length) : undefined;
@@ -572,6 +738,21 @@ const submitControl = async (
   if (replay.status === "terminal") {
     throw new HoneyBeeCoreError("run.terminal", "A terminal Run cannot accept control requests.");
   }
+  const start = replay.events[0];
+  if (start?.schemaVersion === 4) {
+    if (start.type !== "workflow.started" || start.payload.mode !== "unity-batch-v1") {
+      throw new HoneyBeeCoreError(
+        "batch.child-managed",
+        "A Unity batch child only accepts controls through its parent Run.",
+      );
+    }
+    if (args.action !== "cancel") {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Unity batch Runs accept only run cancel.",
+      );
+    }
+  }
   if (replay.events[0]?.schemaVersion === 3 && args.action !== "cancel") {
     throw new HoneyBeeCoreError(
       "validation.invalid-workflow",
@@ -632,14 +813,85 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     const repository = new FileRunRepository(root);
     await repository.open(runId);
     const replay = await new FileOrchestrationJournal(root).replay(runId);
+    const start = replay.status === "indeterminate" ? undefined : replay.events[0];
+    if (
+      start?.schemaVersion === 4 &&
+      start.type === "workflow.started" &&
+      start.payload.mode === "unity-work-v2"
+    ) {
+      throw new HoneyBeeCoreError(
+        "batch.child-managed",
+        "A Unity batch child can only be deleted with its parent Run.",
+      );
+    }
     if (
       replay.status === "indeterminate" ||
-      (replay.status === "active" && replay.events[0]?.schemaVersion === 3)
+      (replay.status === "active" && [3, 4].includes(replay.events[0]?.schemaVersion ?? 0))
     ) {
       throw new HoneyBeeCoreError(
         "run.cleanup-pending",
         "A Run with unconfirmed cleanup cannot be deleted.",
       );
+    }
+    if (
+      replay.status === "terminal" &&
+      start?.schemaVersion === 4 &&
+      start.type === "workflow.started" &&
+      start.payload.mode === "unity-batch-v1"
+    ) {
+      const childRunIds = replay.events
+        .filter((event) => event.schemaVersion === 4 && event.type === "work.registered")
+        .map((event) => event.payload.childRunId)
+        .sort();
+      const childLeases: Array<{ release(): Promise<void> }> = [];
+      try {
+        for (const childRunId of childRunIds) {
+          childLeases.push(await controls.acquire(childRunId));
+        }
+        const journal = new FileOrchestrationJournal(root);
+        for (const childRunId of childRunIds) {
+          const finish = replay.events.find(
+            (event) =>
+              event.schemaVersion === 4 &&
+              event.type === "work.finished" &&
+              event.payload.childRunId === childRunId,
+          );
+          if (
+            finish?.schemaVersion === 4 &&
+            finish.type === "work.finished" &&
+            finish.payload.status === "cancelled" &&
+            !finish.payload.started
+          ) {
+            continue;
+          }
+          await repository.open(childRunId);
+          const childReplay = await journal.replay(childRunId);
+          const childStart =
+            childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
+          if (
+            childReplay.status !== "terminal" ||
+            childStart?.schemaVersion !== 4 ||
+            childStart.type !== "workflow.started" ||
+            childStart.payload.mode !== "unity-work-v2" ||
+            childStart.payload.linkage.parentRunId !== runId
+          ) {
+            throw new HoneyBeeCoreError(
+              "run.cleanup-pending",
+              "A batch child does not have a confirmed terminal cleanup state.",
+            );
+          }
+        }
+        for (const childRunId of childRunIds) {
+          try {
+            await repository.delete(childRunId);
+          } catch (error) {
+            if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found")
+              throw error;
+          }
+        }
+      } finally {
+        for (const childLease of childLeases.reverse()) await childLease.release();
+      }
     }
     await repository.delete(runId);
   } finally {
@@ -654,6 +906,7 @@ const main = async (): Promise<void> => {
   if (args.command === "version") return void process.stdout.write(`${VERSION}\n`);
   if (args.command === "execute") return execute(args);
   if (args.command === "unity-execute") return executeUnity(args);
+  if (args.command === "unity-batch-execute") return executeUnityBatch(args);
   if (args.command === "show") return showRun(args);
   if (args.command === "resume") return resumeRun(args);
   if (args.command === "control") return submitControl(args);

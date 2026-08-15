@@ -260,6 +260,18 @@ class FailOnceAcquireReceiptStore implements ArtifactStore {
   public get(request: Parameters<ArtifactStore["get"]>[0]): ReturnType<ArtifactStore["get"]> {
     return this.delegate.get(request);
   }
+
+  public putBytes(
+    request: Parameters<ArtifactStore["putBytes"]>[0],
+  ): ReturnType<ArtifactStore["putBytes"]> {
+    return this.delegate.putBytes(request);
+  }
+
+  public getBytes(
+    request: Parameters<ArtifactStore["getBytes"]>[0],
+  ): ReturnType<ArtifactStore["getBytes"]> {
+    return this.delegate.getBytes(request);
+  }
 }
 
 const resumeConfig = (root: string) => {

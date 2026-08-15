@@ -20,6 +20,7 @@ import type {
   AgentProcessRunner,
   ArtifactGetRequest,
   ArtifactPutRequest,
+  ArtifactPutBytesRequest,
   ArtifactStore,
   OrchestrationJournal,
 } from "./types.js";
@@ -28,24 +29,39 @@ const contentDigest = (value: string) =>
   ContentDigestSchema.parse(`sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`);
 
 class MemoryArtifactStore implements ArtifactStore {
-  readonly values = new Map<string, string>();
+  readonly values = new Map<string, Uint8Array>();
   readonly puts: Array<Readonly<{ request: ArtifactPutRequest; artifact: ArtifactRef }>> = [];
   readonly gets: ArtifactGetRequest[] = [];
 
   public async put(request: ArtifactPutRequest): Promise<ArtifactRef> {
-    const artifact = ArtifactRefSchema.parse({
-      artifactId: request.artifactId,
-      kind: request.kind,
-      mediaType: request.mediaType,
-      byteLength: Buffer.byteLength(request.content, "utf8"),
-      contentDigest: contentDigest(request.content),
+    const artifact = await this.putBytes({
+      ...request,
+      content: Buffer.from(request.content, "utf8"),
     });
-    this.values.set(artifact.artifactId, request.content);
     this.puts.push({ request, artifact });
     return artifact;
   }
 
+  public async putBytes(request: ArtifactPutBytesRequest): Promise<ArtifactRef> {
+    const content = Buffer.from(request.content);
+    const artifact = ArtifactRefSchema.parse({
+      artifactId: request.artifactId,
+      kind: request.kind,
+      mediaType: request.mediaType,
+      byteLength: content.byteLength,
+      contentDigest: ContentDigestSchema.parse(
+        `sha256:${createHash("sha256").update(content).digest("hex")}`,
+      ),
+    });
+    this.values.set(artifact.artifactId, content);
+    return artifact;
+  }
+
   public async get(request: ArtifactGetRequest): Promise<string> {
+    return Buffer.from(await this.getBytes(request)).toString("utf8");
+  }
+
+  public async getBytes(request: ArtifactGetRequest): Promise<Uint8Array> {
     this.gets.push(request);
     const value = this.values.get(request.artifact.artifactId);
     if (value === undefined) {

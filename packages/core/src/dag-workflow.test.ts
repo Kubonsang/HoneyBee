@@ -31,6 +31,7 @@ import type {
   AgentProcessRunner,
   ArtifactGetRequest,
   ArtifactPutRequest,
+  ArtifactPutBytesRequest,
   ArtifactStore,
   RunControlPort,
   VersionedOrchestrationJournal,
@@ -40,19 +41,28 @@ const digest = (value: string) =>
   ContentDigestSchema.parse(`sha256:${createHash("sha256").update(value).digest("hex")}`);
 
 class MemoryArtifacts implements ArtifactStore {
-  readonly values = new Map<string, string>();
+  readonly values = new Map<string, Uint8Array>();
   public async put(request: ArtifactPutRequest): Promise<ArtifactRef> {
+    return this.putBytes({ ...request, content: Buffer.from(request.content, "utf8") });
+  }
+  public async putBytes(request: ArtifactPutBytesRequest): Promise<ArtifactRef> {
+    const content = Buffer.from(request.content);
     const artifact = ArtifactRefSchema.parse({
       artifactId: request.artifactId,
       kind: request.kind,
       mediaType: request.mediaType,
-      byteLength: Buffer.byteLength(request.content),
-      contentDigest: digest(request.content),
+      byteLength: content.byteLength,
+      contentDigest: ContentDigestSchema.parse(
+        `sha256:${createHash("sha256").update(content).digest("hex")}`,
+      ),
     });
-    this.values.set(artifact.artifactId, request.content);
+    this.values.set(artifact.artifactId, content);
     return artifact;
   }
   public async get(request: ArtifactGetRequest): Promise<string> {
+    return Buffer.from(await this.getBytes(request)).toString("utf8");
+  }
+  public async getBytes(request: ArtifactGetRequest): Promise<Uint8Array> {
     const value = this.values.get(request.artifact.artifactId);
     if (value === undefined) throw new Error("missing Artifact");
     return value;

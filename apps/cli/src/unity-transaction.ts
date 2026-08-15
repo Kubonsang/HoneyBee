@@ -10,6 +10,7 @@ import {
   HarnessIdSchema,
   HoneyBeeCoreError,
   OrchestrationEventV3Schema,
+  OrchestrationEventV4Schema,
   PortNameSchema,
   RunIdSchema,
   StepIdSchema,
@@ -24,6 +25,8 @@ import {
   type EventId,
   type FailureMetadata,
   type OrchestrationEventV3,
+  type OrchestrationEventV4,
+  type ResourceId,
   type RunControlPort,
   type RunId,
   type StepId,
@@ -42,6 +45,8 @@ import type {
   WorkspaceAcquireReceipt,
 } from "./unity-adapters.js";
 import { SystemUnityProcessControl, type UnityProcessControl } from "./process-control.js";
+import type { UnityPatchBuilder } from "./unity-patch.js";
+import type { UnityResourceCoordinator, UnityResourceLease } from "./unity-resource-control.js";
 
 const UNITY_STEP_ID = StepIdSchema.parse("unity-agent");
 const UNITY_AGENT_ID = AgentIdSchema.parse("unity-agent");
@@ -61,8 +66,21 @@ export interface UnityWorkRunResult {
   readonly agentOutput?: ArtifactRef;
   readonly evidence?: ArtifactRef;
   readonly release?: ArtifactRef;
+  readonly patch?: ArtifactRef;
+  readonly resultManifest?: ArtifactRef;
   readonly failure?: FailureMetadata;
 }
+
+export interface UnityWorkV4Execution {
+  readonly parentRunId: RunId;
+  readonly workId: StepId;
+  readonly resourceId: ResourceId;
+  readonly resourceScope: "batch-local-v1";
+  readonly resources: UnityResourceCoordinator;
+  readonly patchBuilder: UnityPatchBuilder;
+}
+
+type UnityEvent = OrchestrationEventV3 | OrchestrationEventV4;
 
 class UnityEventWriter {
   #sequence: number;
@@ -74,26 +92,23 @@ class UnityEventWriter {
     initialSequence: number,
     private readonly now: () => Date,
     private readonly randomId: () => string,
+    public readonly schemaVersion: 3 | 4,
   ) {
     this.#sequence = initialSequence;
   }
 
-  public emit(
-    type: OrchestrationEventV3["type"],
-    payload: unknown,
-    stepId?: StepId,
-  ): Promise<void> {
+  public emit(type: UnityEvent["type"], payload: unknown, stepId?: StepId): Promise<void> {
     return this.emitEvent(type, payload, stepId).then(() => undefined);
   }
 
   public emitEvent(
-    type: OrchestrationEventV3["type"],
+    type: UnityEvent["type"],
     payload: unknown,
     stepId?: StepId,
-  ): Promise<OrchestrationEventV3> {
+  ): Promise<UnityEvent> {
     const operation = this.#tail.then(async () => {
-      const event = OrchestrationEventV3Schema.parse({
-        schemaVersion: 3,
+      const value = {
+        schemaVersion: this.schemaVersion,
         eventId: EventIdSchema.parse(this.randomId()),
         runId: this.runId,
         sequence: ++this.#sequence,
@@ -101,7 +116,11 @@ class UnityEventWriter {
         type,
         ...(stepId === undefined ? {} : { stepId }),
         payload,
-      });
+      };
+      const event =
+        this.schemaVersion === 3
+          ? OrchestrationEventV3Schema.parse(value)
+          : OrchestrationEventV4Schema.parse(value);
       await this.journal.append(this.runId, event);
       return event;
     });
@@ -163,14 +182,14 @@ const workspaceIdFor = (runId: RunId): string => "hb-" + runId;
 const acquireRequestIdFor = (runId: RunId): string => "hb-" + runId + "-acquire";
 const releaseRequestIdFor = (runId: RunId): string => "hb-" + runId + "-release";
 
-const lastEvent = <Type extends OrchestrationEventV3["type"]>(
-  events: readonly OrchestrationEventV3[],
+const lastEvent = <Type extends UnityEvent["type"]>(
+  events: readonly UnityEvent[],
   type: Type,
-): Extract<OrchestrationEventV3, { type: Type }> | undefined => {
+): Extract<UnityEvent, { type: Type }> | undefined => {
   for (let index = events.length - 1; index >= 0; index -= 1) {
     const event = events[index];
     if (event?.type === type) {
-      return event as Extract<OrchestrationEventV3, { type: Type }>;
+      return event as Extract<UnityEvent, { type: Type }>;
     }
   }
   return undefined;
@@ -204,6 +223,7 @@ export class UnityWorkTransaction {
     runIdValue: RunId,
     taskValue: string,
     config: UnityWorkConfigV1,
+    execution?: UnityWorkV4Execution,
   ): Promise<UnityWorkRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
     const task = taskValue.trim();
@@ -217,27 +237,74 @@ export class UnityWorkTransaction {
       JSON.stringify(config),
     );
     const taskArtifact = await this.#put(runId, "task", "text/plain; charset=utf-8", task);
-    const writer = new UnityEventWriter(this.journal, runId, 0, this.#now, this.#randomId);
-    await writer.emit("workflow.started", {
-      mode: "unity-work-v1",
-      config: configArtifact,
-      task: taskArtifact,
-    });
+    const schemaVersion = execution === undefined ? 3 : 4;
+    const writer = new UnityEventWriter(
+      this.journal,
+      runId,
+      0,
+      this.#now,
+      this.#randomId,
+      schemaVersion,
+    );
+    await writer.emit(
+      "workflow.started",
+      execution === undefined
+        ? { mode: "unity-work-v1", config: configArtifact, task: taskArtifact }
+        : {
+            mode: "unity-work-v2",
+            config: configArtifact,
+            task: taskArtifact,
+            linkage: {
+              parentRunId: execution.parentRunId,
+              workId: execution.workId,
+              resourceId: execution.resourceId,
+              resourceScope: execution.resourceScope,
+            },
+          },
+    );
     await writer.emit("artifact.stored", { artifact: configArtifact });
     await writer.emit("artifact.stored", { artifact: taskArtifact });
-    return this.#runFresh(runId, config, taskArtifact, writer);
+    return this.#runFresh(runId, config, taskArtifact, writer, execution);
   }
 
-  public async resume(runIdValue: RunId, config: UnityWorkConfigV1): Promise<UnityWorkRunResult> {
+  public async resume(
+    runIdValue: RunId,
+    config: UnityWorkConfigV1,
+    execution?: UnityWorkV4Execution,
+  ): Promise<UnityWorkRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
     const replay = await this.journal.replay(runId);
     if (replay.status === "indeterminate") {
       throw new HoneyBeeCoreError("run.indeterminate", replay.message);
     }
-    if (replay.events[0]?.schemaVersion !== 3) {
+    const schemaVersion = replay.events[0]?.schemaVersion;
+    if (schemaVersion !== 3 && schemaVersion !== 4) {
       throw new HoneyBeeCoreError("run.not-resumable", "Run is not a Unity work transaction.");
     }
-    const events = replay.events as readonly OrchestrationEventV3[];
+    if (schemaVersion === 4 && execution === undefined) {
+      throw new HoneyBeeCoreError(
+        "run.not-resumable",
+        "A schema v4 Unity child needs its batch context.",
+      );
+    }
+    if (schemaVersion === 4) {
+      const start = replay.events[0];
+      if (
+        start?.type !== "workflow.started" ||
+        start.payload.mode !== "unity-work-v2" ||
+        execution === undefined ||
+        start.payload.linkage.parentRunId !== execution.parentRunId ||
+        start.payload.linkage.workId !== execution.workId ||
+        start.payload.linkage.resourceId !== execution.resourceId ||
+        start.payload.linkage.resourceScope !== execution.resourceScope
+      ) {
+        throw new HoneyBeeCoreError(
+          "run.indeterminate",
+          "Unity child linkage does not match its batch execution context.",
+        );
+      }
+    }
+    const events = replay.events as readonly UnityEvent[];
     if (replay.status === "terminal") return this.#resultFrom(events);
     const writer = new UnityEventWriter(
       this.journal,
@@ -245,8 +312,9 @@ export class UnityWorkTransaction {
       events.length,
       this.#now,
       this.#randomId,
+      schemaVersion,
     );
-    return this.#resumeCleanup(runId, config, events, writer);
+    return this.#resumeCleanup(runId, config, events, writer, execution);
   }
 
   async #runFresh(
@@ -254,6 +322,7 @@ export class UnityWorkTransaction {
     config: UnityWorkConfigV1,
     taskArtifact: ArtifactRef,
     writer: UnityEventWriter,
+    execution?: UnityWorkV4Execution,
   ): Promise<UnityWorkRunResult> {
     const workspaceId = workspaceIdFor(runId);
     const workspacePath = path.resolve(config.workspaceStorage.workspaceRoot, workspaceId);
@@ -356,6 +425,9 @@ export class UnityWorkTransaction {
     let unsafeProcessFailure: FailureMetadata | undefined;
     let agentOutput: ArtifactRef | undefined;
     let evidence: ArtifactRef | undefined;
+    let resourceLease: UnityResourceLease | undefined;
+    let patch: ArtifactRef | undefined;
+    let resultManifest: ArtifactRef | undefined;
     try {
       if (aborter.signal.aborted) {
         throw new HoneyBeeCoreError(
@@ -376,6 +448,9 @@ export class UnityWorkTransaction {
           "agent.cancelled",
           "Unity transaction was cancelled before TestPlay.",
         );
+      }
+      if (execution !== undefined) {
+        resourceLease = await this.#acquireResource(runId, execution, writer, aborter.signal);
       }
       const verification = await this.#runTestPlay(runId, workspacePath, writer, aborter.signal);
       evidence = verification.evidence;
@@ -406,6 +481,22 @@ export class UnityWorkTransaction {
       };
     }
 
+    if (resourceLease !== undefined && execution !== undefined) {
+      try {
+        await this.#releaseResource(execution, resourceLease, writer);
+      } catch (error) {
+        await watcher.stop();
+        return {
+          runId,
+          status: "cleanup-pending",
+          sourceBefore,
+          ...(agentOutput === undefined ? {} : { agentOutput }),
+          ...(evidence === undefined ? {} : { evidence }),
+          failure: failureMetadata(error),
+        };
+      }
+    }
+
     let sourceAfter: ArtifactRef | undefined;
     try {
       const sourceCheck = await this.#checkSource(
@@ -418,6 +509,30 @@ export class UnityWorkTransaction {
       sourceAfter = sourceCheck.after;
       if (!sourceCheck.unchanged) {
         decision = { outcome: "failed", failure: { errorCode: "source.modified" } };
+      }
+      if (decision.outcome === "completed" && execution !== undefined) {
+        const verified = await execution.patchBuilder.build({
+          runId,
+          sourceProjectPath: config.sourceProjectPath,
+          workspacePath,
+          baseManifest: sourceBefore,
+          verifySource: async () => {
+            const current = await this.bootstrap.manifest(config.sourceProjectPath);
+            if (!sameManifest(sourceBeforeValue, current)) {
+              throw new HoneyBeeCoreError("source.modified", "The original Unity project changed.");
+            }
+          },
+          publishBytes: async (kind, mediaType, content) =>
+            this.#storeBytes(writer, runId, kind, mediaType, content),
+          publishJson: async (kind, value) => this.#storeJson(writer, runId, kind, value),
+        });
+        patch = verified.patch;
+        resultManifest = verified.resultManifest;
+        await writer.emit("patch.verified", {
+          patch,
+          baseManifest: sourceBefore,
+          resultManifest,
+        });
       }
     } catch (error) {
       decision = { outcome: "failed", failure: failureMetadata(error) };
@@ -441,14 +556,17 @@ export class UnityWorkTransaction {
       ...(sourceAfter === undefined ? {} : { sourceAfter }),
       ...(agentOutput === undefined ? {} : { agentOutput }),
       ...(evidence === undefined ? {} : { evidence }),
+      ...(patch === undefined ? {} : { patch }),
+      ...(resultManifest === undefined ? {} : { resultManifest }),
     });
   }
 
   async #resumeCleanup(
     runId: RunId,
     config: UnityWorkConfigV1,
-    events: readonly OrchestrationEventV3[],
+    events: readonly UnityEvent[],
     writer: UnityEventWriter,
+    execution?: UnityWorkV4Execution,
   ): Promise<UnityWorkRunResult> {
     const workspaceId = workspaceIdFor(runId);
     const workspacePath = path.resolve(config.workspaceStorage.workspaceRoot, workspaceId);
@@ -540,6 +658,18 @@ export class UnityWorkTransaction {
         failure: failureMetadata(error),
       };
     }
+    if (execution !== undefined) {
+      try {
+        await this.#recoverBatchLocalResource(events, writer);
+      } catch (error) {
+        return {
+          runId,
+          status: "cleanup-pending",
+          ...(sourceBefore === undefined ? {} : { sourceBefore }),
+          failure: failureMetadata(error),
+        };
+      }
+    }
 
     const released = lastEvent(events, "workspace.released");
     const decisionEvent = lastEvent(events, "transaction.outcome-decided");
@@ -548,6 +678,10 @@ export class UnityWorkTransaction {
     let after = sourceAfter?.payload.after;
     let sourceUnchanged = sourceAfter?.payload.unchanged;
     let recoveredEvidence: ArtifactRef | undefined;
+    const verifiedPatch = lastEvent(events, "patch.verified");
+    let patch = verifiedPatch?.type === "patch.verified" ? verifiedPatch.payload.patch : undefined;
+    let resultManifest =
+      verifiedPatch?.type === "patch.verified" ? verifiedPatch.payload.resultManifest : undefined;
     if (decision === undefined) {
       const exited = lastEvent(events, "testplay.exited");
       const storedEvidence = lastEvent(events, "testplay.evidence-stored");
@@ -586,18 +720,69 @@ export class UnityWorkTransaction {
         if (sourceUnchanged === false) {
           decision = { outcome: "failed", failure: { errorCode: "source.modified" } };
         } else if (
-          acceptedCancel === undefined &&
-          !(await this.#acceptPendingCancel(runId, writer))
+          acceptedCancel !== undefined ||
+          (await this.#acceptPendingCancel(runId, writer))
         ) {
+          decision = { outcome: "cancelled" };
+        } else if (
+          execution !== undefined &&
+          lastEvent(events, "testplay.verified") !== undefined
+        ) {
+          try {
+            if (sourceBefore === undefined) {
+              throw new HoneyBeeCoreError(
+                "run.indeterminate",
+                "Unity child has no source baseline.",
+              );
+            }
+            if (patch === undefined || resultManifest === undefined) {
+              const beforeValue = JSON.parse(
+                await this.artifacts.get({ runId, artifact: sourceBefore }),
+              ) as SourceManifest;
+              const verified = await execution.patchBuilder.build({
+                runId,
+                sourceProjectPath: config.sourceProjectPath,
+                workspacePath,
+                baseManifest: sourceBefore,
+                verifySource: async () => {
+                  const current = await this.bootstrap.manifest(config.sourceProjectPath);
+                  if (!sameManifest(beforeValue, current)) {
+                    throw new HoneyBeeCoreError(
+                      "source.modified",
+                      "The original Unity project changed.",
+                    );
+                  }
+                },
+                publishBytes: async (kind, mediaType, content) =>
+                  this.#storeBytes(writer, runId, kind, mediaType, content),
+                publishJson: async (kind, value) => this.#storeJson(writer, runId, kind, value),
+              });
+              patch = verified.patch;
+              resultManifest = verified.resultManifest;
+              await writer.emit("patch.verified", {
+                patch,
+                baseManifest: sourceBefore,
+                resultManifest,
+              });
+            }
+            decision = { outcome: "completed" };
+          } catch (error) {
+            decision = { outcome: "failed", failure: failureMetadata(error) };
+          }
+        } else if (acceptedCancel === undefined) {
           decision = {
             outcome: "failed",
             failure: { errorCode: "transaction.interrupted" },
           };
-        } else {
-          decision = { outcome: "cancelled" };
         }
       }
+      if (decision === undefined) {
+        throw new HoneyBeeCoreError("run.indeterminate", "Unity transaction outcome is missing.");
+      }
       await writer.emit("transaction.outcome-decided", decision);
+    }
+    if (decision === undefined) {
+      throw new HoneyBeeCoreError("run.indeterminate", "Unity transaction outcome is missing.");
     }
     const evidenceEvent = lastEvent(events, "testplay.evidence-stored");
     const evidence =
@@ -614,6 +799,9 @@ export class UnityWorkTransaction {
         after,
         evidence,
         released.payload.receipt,
+        undefined,
+        patch,
+        resultManifest,
       );
     }
     if (leaseId === undefined) {
@@ -636,6 +824,8 @@ export class UnityWorkTransaction {
       ...(sourceBefore === undefined ? {} : { sourceBefore }),
       ...(after === undefined ? {} : { sourceAfter: after }),
       ...(evidence === undefined ? {} : { evidence }),
+      ...(patch === undefined ? {} : { patch }),
+      ...(resultManifest === undefined ? {} : { resultManifest }),
     });
   }
 
@@ -869,7 +1059,7 @@ export class UnityWorkTransaction {
     runId: RunId,
     writer: UnityEventWriter,
     recovered: readonly TestPlayEvidenceFile[],
-    observation: Extract<OrchestrationEventV3, { type: "testplay.exited" }>["payload"],
+    observation: Extract<UnityEvent, { type: "testplay.exited" }>["payload"],
   ): Promise<ArtifactRef> {
     const files: Array<{ name: string; artifact: ArtifactRef }> = [];
     for (const file of recovered) {
@@ -921,6 +1111,8 @@ export class UnityWorkTransaction {
       sourceAfter?: ArtifactRef;
       agentOutput?: ArtifactRef;
       evidence?: ArtifactRef;
+      patch?: ArtifactRef;
+      resultManifest?: ArtifactRef;
       releaseAlreadyStarted?: boolean;
     }>,
   ): Promise<UnityWorkRunResult> {
@@ -961,6 +1153,8 @@ export class UnityWorkTransaction {
         input.evidence,
         release,
         input.agentOutput,
+        input.patch,
+        input.resultManifest,
       );
     } catch (error) {
       const failure = failureMetadata(error);
@@ -975,6 +1169,8 @@ export class UnityWorkTransaction {
         ...(input.sourceAfter === undefined ? {} : { sourceAfter: input.sourceAfter }),
         ...(input.agentOutput === undefined ? {} : { agentOutput: input.agentOutput }),
         ...(input.evidence === undefined ? {} : { evidence: input.evidence }),
+        ...(input.patch === undefined ? {} : { patch: input.patch }),
+        ...(input.resultManifest === undefined ? {} : { resultManifest: input.resultManifest }),
         failure,
       };
     }
@@ -1031,7 +1227,7 @@ export class UnityWorkTransaction {
   }
 
   async #drainInterruptedChildren(
-    events: readonly OrchestrationEventV3[],
+    events: readonly UnityEvent[],
     writer: UnityEventWriter,
   ): Promise<void> {
     for (const [startedType, exitedType] of [
@@ -1080,15 +1276,26 @@ export class UnityWorkTransaction {
     evidence: ArtifactRef | undefined,
     release: ArtifactRef,
     agentOutput?: ArtifactRef,
+    patch?: ArtifactRef,
+    resultManifest?: ArtifactRef,
   ): Promise<UnityWorkRunResult> {
     if (decision.outcome === "completed") {
-      if (evidence === undefined || sourceAfter === undefined) {
+      if (
+        evidence === undefined ||
+        sourceAfter === undefined ||
+        (writer.schemaVersion === 4 && (patch === undefined || resultManifest === undefined))
+      ) {
         throw new HoneyBeeCoreError(
           "run.indeterminate",
           "Completed Unity transaction is missing durable Evidence.",
         );
       }
-      await writer.emit("workflow.completed", { evidence, release, sourceAfter });
+      await writer.emit(
+        "workflow.completed",
+        writer.schemaVersion === 4
+          ? { evidence, patch, resultManifest, release, sourceAfter }
+          : { evidence, release, sourceAfter },
+      );
       return {
         runId,
         status: "completed",
@@ -1097,6 +1304,8 @@ export class UnityWorkTransaction {
         ...(agentOutput === undefined ? {} : { agentOutput }),
         evidence,
         release,
+        ...(patch === undefined ? {} : { patch }),
+        ...(resultManifest === undefined ? {} : { resultManifest }),
       };
     }
     if (decision.outcome === "cancelled") {
@@ -1174,6 +1383,135 @@ export class UnityWorkTransaction {
     return true;
   }
 
+  async #acquireResource(
+    runId: RunId,
+    execution: UnityWorkV4Execution,
+    writer: UnityEventWriter,
+    signal: AbortSignal,
+  ): Promise<UnityResourceLease> {
+    const requestId = EventIdSchema.parse(this.#randomId());
+    await writer.emit("resource.acquire-started", {
+      resourceId: execution.resourceId,
+      requestId,
+    });
+    try {
+      const ticket = await execution.resources.enqueue({
+        resourceId: execution.resourceId,
+        requestId,
+        ownerRunId: runId,
+      });
+      await writer.emit("resource.queued", {
+        resourceId: ticket.resourceId,
+        requestId: ticket.requestId,
+        ticket: ticket.ticket,
+      });
+      const lease = await execution.resources.acquire(requestId, signal);
+      await writer.emit("resource.acquired", {
+        resourceId: lease.resourceId,
+        requestId: lease.requestId,
+        ticket: lease.ticket,
+        leaseId: lease.leaseId,
+      });
+      return lease;
+    } catch (error) {
+      const observation = await execution.resources.status(requestId);
+      if (observation.state === "queued") {
+        await execution.resources.cancel(requestId);
+      } else if (observation.state === "active") {
+        await execution.resources.release(observation.lease);
+      }
+      if (signal.aborted || observation.state === "cancelled") {
+        if (observation.state !== "missing") {
+          await writer.emit("resource.acquire-cancelled", {
+            resourceId: execution.resourceId,
+            requestId,
+          });
+        }
+        throw new HoneyBeeCoreError("agent.cancelled", "Unity resource wait was cancelled.");
+      }
+      const failure = failureMetadata(error);
+      await writer.emit("resource.acquire-failed", {
+        resourceId: execution.resourceId,
+        requestId,
+        failure,
+      });
+      throw new HoneyBeeCoreError(
+        "resource.acquire-failed",
+        "Unity resource could not be acquired.",
+      );
+    }
+  }
+
+  async #recoverBatchLocalResource(
+    events: readonly UnityEvent[],
+    writer: UnityEventWriter,
+  ): Promise<void> {
+    const started = lastEvent(events, "resource.acquire-started");
+    if (started === undefined) return;
+    if (
+      lastEvent(events, "resource.released") !== undefined ||
+      lastEvent(events, "resource.acquire-cancelled") !== undefined ||
+      lastEvent(events, "resource.acquire-failed") !== undefined
+    ) {
+      return;
+    }
+    const acquired = lastEvent(events, "resource.acquired");
+    if (acquired === undefined) {
+      await writer.emit("resource.acquire-cancelled", {
+        resourceId: started.payload.resourceId,
+        requestId: started.payload.requestId,
+      });
+      return;
+    }
+    const payload = {
+      resourceId: acquired.payload.resourceId,
+      requestId: acquired.payload.requestId,
+      ticket: acquired.payload.ticket,
+      leaseId: acquired.payload.leaseId,
+    };
+    const releaseStarted = lastEvent(events, "resource.release-started");
+    const releaseFailed = lastEvent(events, "resource.release-failed");
+    if (
+      releaseStarted === undefined ||
+      (releaseFailed !== undefined && releaseFailed.sequence > releaseStarted.sequence)
+    ) {
+      await writer.emit("resource.release-started", payload);
+    }
+    await writer.emit("resource.released", payload);
+  }
+
+  async #releaseResource(
+    execution: UnityWorkV4Execution,
+    lease: UnityResourceLease,
+    writer: UnityEventWriter,
+  ): Promise<void> {
+    const payload = {
+      resourceId: lease.resourceId,
+      requestId: lease.requestId,
+      ticket: lease.ticket,
+      leaseId: lease.leaseId,
+    };
+    try {
+      await writer.emit("resource.release-started", payload);
+    } catch (error) {
+      // The batch-local lease is process memory, so it must not block siblings
+      // merely because its durable release-start marker could not be written.
+      await execution.resources.release(lease);
+      throw error;
+    }
+    try {
+      await execution.resources.release(lease);
+      await writer.emit("resource.released", payload);
+    } catch (error) {
+      const failure = failureMetadata(error);
+      await writer.emit("resource.release-failed", { ...payload, failure });
+      throw new HoneyBeeCoreError(
+        "resource.release-failed",
+        "Unity resource release was not confirmed.",
+      );
+    }
+  }
+
   #acquireRequest(
     runId: RunId,
     config: UnityWorkConfigV1,
@@ -1201,7 +1539,32 @@ export class UnityWorkTransaction {
     kind: ArtifactKind,
     value: unknown,
   ): Promise<ArtifactRef> {
-    const artifact = await this.#put(runId, kind, "application/json", JSON.stringify(value));
+    const artifact = await this.#put(
+      runId,
+      kind,
+      kind === "unity-verified-patch"
+        ? "application/vnd.honeybee.unity-patch+json"
+        : "application/json",
+      JSON.stringify(value),
+    );
+    await writer.emit("artifact.stored", { artifact });
+    return artifact;
+  }
+
+  async #storeBytes(
+    writer: UnityEventWriter,
+    runId: RunId,
+    kind: ArtifactKind,
+    mediaType: ArtifactMediaType,
+    content: Uint8Array,
+  ): Promise<ArtifactRef> {
+    const artifact = await this.artifacts.putBytes({
+      runId,
+      artifactId: ArtifactIdSchema.parse(this.#randomId()),
+      kind,
+      mediaType,
+      content,
+    });
     await writer.emit("artifact.stored", { artifact });
     return artifact;
   }
@@ -1221,7 +1584,7 @@ export class UnityWorkTransaction {
     });
   }
 
-  #resultFrom(events: readonly OrchestrationEventV3[]): UnityWorkRunResult {
+  #resultFrom(events: readonly UnityEvent[]): UnityWorkRunResult {
     const runId = events[0]?.runId;
     if (runId === undefined) {
       throw new HoneyBeeCoreError("run.indeterminate", "Unity transaction Journal is empty.");
@@ -1230,6 +1593,7 @@ export class UnityWorkTransaction {
     const checked = lastEvent(events, "source.checked");
     const evidence = lastEvent(events, "testplay.evidence-stored");
     const release = lastEvent(events, "workspace.released");
+    const verifiedPatch = lastEvent(events, "patch.verified");
     const terminal = events.at(-1);
     if (
       terminal?.type !== "workflow.completed" &&
@@ -1239,7 +1603,10 @@ export class UnityWorkTransaction {
       throw new HoneyBeeCoreError("run.indeterminate", "Unity transaction has no terminal event.");
     }
     const status = terminal.type.slice("workflow.".length) as "completed" | "failed" | "cancelled";
-    const failure = terminal.type === "workflow.failed" ? terminal.payload.failure : undefined;
+    const failure =
+      terminal.type === "workflow.failed" && !("summary" in terminal.payload)
+        ? terminal.payload.failure
+        : undefined;
     return {
       runId,
       status,
@@ -1249,6 +1616,12 @@ export class UnityWorkTransaction {
         ? { evidence: evidence.payload.evidence }
         : {}),
       ...(release?.type === "workspace.released" ? { release: release.payload.receipt } : {}),
+      ...(verifiedPatch?.type === "patch.verified"
+        ? {
+            patch: verifiedPatch.payload.patch,
+            resultManifest: verifiedPatch.payload.resultManifest,
+          }
+        : {}),
       ...(failure === undefined ? {} : { failure }),
     };
   }
