@@ -287,36 +287,46 @@ describe("UnityWorkTransaction", () => {
     const childBootstrap = new UnityProjectBootstrap();
     const childControls = new FileRunControl(runRoot);
     const childJournal = new FileOrchestrationJournal(runRoot);
+    const childParentRunId = RunIdSchema.parse(randomUUID());
+    const childResources = new BatchLocalUnityResourceCoordinator();
+    const childPatchBuilder = new UnityPatchBuilder(
+      childArtifacts,
+      childBootstrap,
+      path.join(runRoot, ".patch-verification"),
+    );
+    const childTransaction = new UnityWorkTransaction(
+      new ChildProcessAgentRunner(),
+      childArtifacts,
+      childJournal,
+      childControls,
+      childBootstrap,
+      new UnityWorkspaceStorageCliAdapter(
+        config.workspaceStorage.command,
+        config.workspaceStorage.parentKey.provider,
+        config.workspaceStorage.binarySha256,
+        executeStorage,
+      ),
+      new TestPlayCliAdapter(config.testplay),
+    );
+    const childExecution = {
+      parentRunId: childParentRunId,
+      workId: StepIdSchema.parse("work-a"),
+      resourceId: ResourceIdSchema.parse("unity-editor"),
+      resourceScope: "batch-local-v1" as const,
+      resources: childResources,
+      patchBuilder: childPatchBuilder,
+    };
     let durableChildPatch:
       NonNullable<Awaited<ReturnType<UnityWorkTransaction["run"]>>["patch"]> | undefined;
     await new FileRunRepository(runRoot).create(childRunId);
     const childLease = await childControls.acquire(childRunId);
     try {
-      const child = await new UnityWorkTransaction(
-        new ChildProcessAgentRunner(),
-        childArtifacts,
-        childJournal,
-        childControls,
-        childBootstrap,
-        new UnityWorkspaceStorageCliAdapter(
-          config.workspaceStorage.command,
-          config.workspaceStorage.parentKey.provider,
-          config.workspaceStorage.binarySha256,
-          executeStorage,
-        ),
-        new TestPlayCliAdapter(config.testplay),
-      ).run(childRunId, "Create a durable verified patch.", config, {
-        parentRunId: RunIdSchema.parse(randomUUID()),
-        workId: StepIdSchema.parse("work-a"),
-        resourceId: ResourceIdSchema.parse("unity-editor"),
-        resourceScope: "batch-local-v1",
-        resources: new BatchLocalUnityResourceCoordinator(),
-        patchBuilder: new UnityPatchBuilder(
-          childArtifacts,
-          childBootstrap,
-          path.join(runRoot, ".patch-verification"),
-        ),
-      });
+      const child = await childTransaction.run(
+        childRunId,
+        "Create a durable verified patch.",
+        config,
+        childExecution,
+      );
       expect(child.status).toBe("completed");
       expect(child.patch?.kind).toBe("unity-verified-patch");
       expect(child.resultManifest?.kind).toBe("unity-workspace-manifest");
@@ -342,6 +352,12 @@ describe("UnityWorkTransaction", () => {
       expect(types.indexOf("resource.released")).toBeGreaterThan(types.indexOf("testplay.exited"));
       expect(types.indexOf("patch.verified")).toBeGreaterThan(types.indexOf("source.checked"));
     }
+    await expect(
+      childTransaction.resume(childRunId, config, {
+        ...childExecution,
+        parentRunId: RunIdSchema.parse(randomUUID()),
+      }),
+    ).rejects.toMatchObject({ code: "run.indeterminate" });
     if (durableChildPatch === undefined) throw new Error("missing durable child patch");
     const unrelatedPatch = await childArtifacts.put({
       runId: childRunId,

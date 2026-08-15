@@ -669,7 +669,8 @@ const validV4BatchTransitions = (events: readonly OrchestrationEventV4[]): boole
           registered.size !== start.payload.workCount ||
           finished.size !== registered.size ||
           !sameSummary(event.payload.summary) ||
-          event.payload.summary.failed === 0
+          (event.payload.summary.failed === 0 &&
+            (cancelling || event.payload.summary.cancelled === 0))
         ) {
           return false;
         }

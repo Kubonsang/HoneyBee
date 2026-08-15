@@ -287,6 +287,23 @@ export class UnityWorkTransaction {
         "A schema v4 Unity child needs its batch context.",
       );
     }
+    if (schemaVersion === 4) {
+      const start = replay.events[0];
+      if (
+        start?.type !== "workflow.started" ||
+        start.payload.mode !== "unity-work-v2" ||
+        execution === undefined ||
+        start.payload.linkage.parentRunId !== execution.parentRunId ||
+        start.payload.linkage.workId !== execution.workId ||
+        start.payload.linkage.resourceId !== execution.resourceId ||
+        start.payload.linkage.resourceScope !== execution.resourceScope
+      ) {
+        throw new HoneyBeeCoreError(
+          "run.indeterminate",
+          "Unity child linkage does not match its batch execution context.",
+        );
+      }
+    }
     const events = replay.events as readonly UnityEvent[];
     if (replay.status === "terminal") return this.#resultFrom(events);
     const writer = new UnityEventWriter(

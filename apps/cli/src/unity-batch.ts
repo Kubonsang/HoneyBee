@@ -335,6 +335,9 @@ export class UnityBatchWorkflow {
     writer: BatchEventWriter,
     existing: readonly OrchestrationEventV4[],
   ): Promise<UnityBatchRunResult> {
+    for (const registration of registrations) {
+      await this.#ensureChildRun(registration.childRunId);
+    }
     const results = new Map<StepId, UnityBatchWorkResult>();
     for (const registration of registrations) {
       const finished = finishedEvent(existing, registration.work.id);
@@ -475,7 +478,10 @@ export class UnityBatchWorkflow {
       }
     }
 
-    if (fatal !== undefined && !cancelling) {
+    const cleanupPending = [...results.values()].some(
+      (result) => result.status === "cleanup-pending",
+    );
+    if ((fatal !== undefined || cleanupPending) && !cancelling) {
       await Promise.allSettled(
         registrations
           .filter((registration) => running.has(registration.work.id))
@@ -503,8 +509,10 @@ export class UnityBatchWorkflow {
       return this.#result(parentRunId, "cleanup-pending", values);
     }
     const summary = batchSummary(values);
-    if (summary.failed > 0) {
-      const failure = { errorCode: "batch.work-failed" };
+    if (summary.failed > 0 || (!cancelling && summary.cancelled > 0)) {
+      const failure = {
+        errorCode: summary.failed > 0 ? "batch.work-failed" : "batch.work-cancelled-for-safety",
+      };
       await writer.emit("workflow.failed", { failure, summary });
       return this.#result(parentRunId, "failed", values, failure);
     }
@@ -522,14 +530,7 @@ export class UnityBatchWorkflow {
     registration: Registration,
     cancelling: boolean,
   ): Promise<UnityWorkRunResult> {
-    let exists = true;
-    try {
-      await this.repository.open(registration.childRunId);
-    } catch (error) {
-      if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found") throw error;
-      exists = false;
-      await this.repository.create(registration.childRunId);
-    }
+    await this.#ensureChildRun(registration.childRunId);
     if (cancelling) {
       await this.controls.submit({
         requestId: EventIdSchema.parse(this.#randomId()),
@@ -548,7 +549,7 @@ export class UnityBatchWorkflow {
       patchBuilder: this.patchBuilder,
     };
     try {
-      const journalExists = exists && (await this.#childJournalExists(registration.childRunId));
+      const journalExists = await this.#childJournalExists(registration.childRunId);
       return journalExists
         ? await this.transaction.resume(registration.childRunId, config.transaction, execution)
         : await this.transaction.run(
@@ -610,6 +611,15 @@ export class UnityBatchWorkflow {
       return true;
     } catch {
       return false;
+    }
+  }
+
+  async #ensureChildRun(runId: RunId): Promise<void> {
+    try {
+      await this.repository.open(runId);
+    } catch (error) {
+      if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found") throw error;
+      await this.repository.create(runId);
     }
   }
 

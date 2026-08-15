@@ -44,6 +44,7 @@ ADR-016은 하나의 Unity Work Transaction을 `prepare → acquire → Agent �
 
 - parent cancel은 새 Work dispatch를 중단하고 실행/대기 중 child에 cancel을 전달한 뒤 모두 settle될 때까지 기다린다.
 - parent resume은 `work.registered`와 child Journal을 대조하고 기존 child recovery barrier가 끝난 뒤에만 시작되지 않은 Work를 실행한다.
+- 한 child가 cleanup-pending이면 parent는 active sibling을 정리해 executor lease를 안전하게 반환한다. 이 내부 안전 취소가 recovery 뒤에도 남으면 사용자 취소가 아니라 batch failure로 닫는다.
 - parent terminal event는 모든 registered Work가 terminal일 때만 기록한다. cleanup-pending은 terminal이 아니다.
 - active 또는 indeterminate schema v4 Run은 삭제할 수 없다. terminal parent 삭제는 child executor lease를 모두 획득한 뒤 child와 parent Run을 함께 삭제한다. child 단독 삭제는 거부한다.
 

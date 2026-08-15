@@ -100,12 +100,15 @@ class FakeExecutor implements UnityWorkExecutor {
   public maximumActive = 0;
   public readonly runCalls: string[] = [];
   public readonly resumeCalls: string[] = [];
+  public readonly cancelledRuns: RunId[] = [];
 
   public constructor(
     private readonly artifacts: FileArtifactStore,
     private readonly journal: FileOrchestrationJournal,
+    private readonly controls: FileRunControl,
     private readonly cleanupTask?: string,
     private readonly delayMs = 20,
+    private readonly recoverCleanup = false,
   ) {}
 
   public async run(
@@ -119,6 +122,19 @@ class FakeExecutor implements UnityWorkExecutor {
     this.maximumActive = Math.max(this.maximumActive, this.active);
     try {
       await new Promise((resolve) => setTimeout(resolve, this.delayMs));
+      if (task === "wait-for-cancel") {
+        for (;;) {
+          const cancel = (await this.controls.pending(runId)).find(
+            (request) => request.action === "cancel",
+          );
+          if (cancel !== undefined) {
+            await this.controls.acknowledge(cancel);
+            this.cancelledRuns.push(runId);
+            return { runId, status: "cancelled" };
+          }
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+      }
       if (task === this.cleanupTask) {
         const configArtifact = await this.artifacts.put({
           runId,
@@ -169,16 +185,29 @@ class FakeExecutor implements UnityWorkExecutor {
 
   public async resume(runId: RunId): Promise<UnityWorkRunResult> {
     this.resumeCalls.push(runId);
+    if (this.recoverCleanup) return { runId, status: "completed", patch: patchRef() };
     return { runId, status: "cleanup-pending", failure: { errorCode: "cleanup.pending" } };
   }
 }
 
-const fixture = async (root: string, cleanupTask?: string, delayMs?: number) => {
+const fixture = async (
+  root: string,
+  cleanupTask?: string,
+  delayMs?: number,
+  recoverCleanup?: boolean,
+) => {
   const artifacts = new FileArtifactStore(root);
   const journal = new FileOrchestrationJournal(root);
   const repository = new FileRunRepository(root);
   const controls = new FileRunControl(root);
-  const executor = new FakeExecutor(artifacts, journal, cleanupTask, delayMs);
+  const executor = new FakeExecutor(
+    artifacts,
+    journal,
+    controls,
+    cleanupTask,
+    delayMs,
+    recoverCleanup,
+  );
   const workflow = new UnityBatchWorkflow(
     root,
     artifacts,
@@ -255,6 +284,29 @@ describe("UnityBatchWorkflow", () => {
     expect(resumed.status).toBe("cleanup-pending");
     expect(setup.executor.resumeCalls).toHaveLength(1);
     expect(setup.executor.runCalls).toEqual(["needs-cleanup"]);
+  });
+
+  it("cancels active siblings when cleanup is pending and fails closed after recovery", async () => {
+    const root = await temporaryRoot();
+    const parentRunId = RunIdSchema.parse(randomUUID());
+    const setup = await fixture(root, "needs-cleanup", 20, true);
+    await setup.repository.create(parentRunId);
+    const batch = config(root, [
+      { id: "work-a", task: "needs-cleanup" },
+      { id: "work-b", task: "wait-for-cancel" },
+    ]);
+
+    const first = await setup.workflow.run(parentRunId, batch);
+    expect(first.status).toBe("cleanup-pending");
+    expect(setup.executor.cancelledRuns).toHaveLength(1);
+
+    const resumed = await setup.workflow.resume(parentRunId);
+    expect(resumed.status).toBe("failed");
+    expect(resumed.failure).toEqual({ errorCode: "batch.work-cancelled-for-safety" });
+    expect(resumed.summary).toEqual({ total: 2, completed: 1, failed: 0, cancelled: 1 });
+    const replay = await setup.journal.replay(parentRunId);
+    expect(replay.status).toBe("terminal");
+    expect(replay.status === "terminal" ? replay.terminal.type : "").toBe("workflow.failed");
   });
 
   it("recovers registration after a crash between deterministic child registrations", async () => {
