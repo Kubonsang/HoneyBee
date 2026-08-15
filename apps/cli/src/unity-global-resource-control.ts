@@ -85,12 +85,44 @@ interface ResourceSnapshot {
   readonly nextTicket: number;
 }
 
-const ensureRealDirectory = async (directory: string): Promise<void> => {
-  await mkdir(directory, { recursive: true });
-  const entry = await lstat(directory);
-  if (!entry.isDirectory() || entry.isSymbolicLink()) {
-    throw new HoneyBeeCoreError("run.indeterminate", "Global resource path is not a directory.");
+const ensureRealDirectoryPath = async (
+  rootDirectory: string,
+  components: readonly string[],
+): Promise<string> => {
+  let directory = path.resolve(rootDirectory);
+  for (const component of components) {
+    const child = path.resolve(directory, component);
+    if (path.dirname(child) !== directory) {
+      throw new HoneyBeeCoreError("run.indeterminate", "Global resource path escaped its root.");
+    }
+    try {
+      await mkdir(child);
+    } catch (error) {
+      if (errorCode(error) !== "EEXIST") {
+        throw new HoneyBeeCoreError(
+          "run.indeterminate",
+          "Global resource path could not be prepared safely.",
+        );
+      }
+    }
+    let entry;
+    try {
+      entry = await lstat(child);
+    } catch {
+      throw new HoneyBeeCoreError(
+        "run.indeterminate",
+        "Global resource path could not be verified.",
+      );
+    }
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw new HoneyBeeCoreError(
+        "run.indeterminate",
+        "Global resource path is not a real directory.",
+      );
+    }
+    directory = child;
   }
+  return directory;
 };
 
 const ticketFrom = (event: UnityGlobalResourceEventV1): UnityResourceTicket => ({
@@ -114,7 +146,7 @@ const sameLease = (left: UnityResourceLease, right: UnityResourceLease): boolean
   sameTicket(left, right) && left.leaseId === right.leaseId;
 
 export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
-  readonly #resourceRoot: string;
+  readonly #stateRoot: string;
   readonly #locks: FileRunControl;
   readonly #observedSequences = new Map<ResourceId, number>();
 
@@ -125,7 +157,7 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
     private readonly readDirectory: ReadEventDirectory = readEventDirectory,
   ) {
     const root = path.resolve(rootDirectory);
-    this.#resourceRoot = path.join(root, ".unity-resources", "v1");
+    this.#stateRoot = root;
     this.#locks = new FileRunControl(path.join(root, ".unity-resource-locks", "v1"));
   }
 
@@ -295,10 +327,12 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
     const deadline = Date.now() + LOCK_TIMEOUT_MS;
     for (;;) {
       try {
+        await this.#ensureLockState();
         const lease = await this.#locks.acquire(lockRunIdFor(resourceId));
         try {
           return await operation();
         } finally {
+          await this.#ensureLockState();
           await lease.release();
         }
       } catch (error) {
@@ -310,12 +344,7 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
 
   async #read(resourceIdValue: ResourceId): Promise<ResourceSnapshot> {
     const resourceId = ResourceIdSchema.parse(resourceIdValue);
-    const directory = this.#resourceDirectory(resourceId);
-    const eventsDirectory = path.join(directory, "events");
-    await ensureRealDirectory(this.#resourceRoot);
-    await ensureRealDirectory(directory);
-    await ensureRealDirectory(eventsDirectory);
-    await ensureRealDirectory(path.join(directory, "tmp"));
+    const { eventsDirectory } = await this.#ensureResourceState(resourceId);
     const minimumSequence = this.#observedSequences.get(resourceId) ?? 0;
     let entries: readonly EventDirectoryEntry[];
     for (let attempt = 0; ; attempt += 1) {
@@ -452,13 +481,7 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
     event: UnityGlobalResourceEventV1,
   ): Promise<void> {
     const resourceId = ResourceIdSchema.parse(resourceIdValue);
-    const directory = this.#resourceDirectory(resourceId);
-    const eventsDirectory = path.join(directory, "events");
-    const temporaryDirectory = path.join(directory, "tmp");
-    await ensureRealDirectory(this.#resourceRoot);
-    await ensureRealDirectory(directory);
-    await ensureRealDirectory(eventsDirectory);
-    await ensureRealDirectory(temporaryDirectory);
+    const { eventsDirectory, temporaryDirectory } = await this.#ensureResourceState(resourceId);
     const temporaryPath = path.join(temporaryDirectory, `${randomUUID()}.tmp`);
     const finalPath = path.join(
       eventsDirectory,
@@ -497,11 +520,33 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
     }
   }
 
-  #resourceDirectory(resourceId: ResourceId): string {
-    const target = path.resolve(this.#resourceRoot, ResourceIdSchema.parse(resourceId));
-    if (path.dirname(target) !== this.#resourceRoot) {
-      throw new HoneyBeeCoreError("run.invalid-path", "Global resource path escaped its root.");
+  async #ensureResourceState(resourceIdValue: ResourceId): Promise<
+    Readonly<{
+      eventsDirectory: string;
+      temporaryDirectory: string;
+    }>
+  > {
+    const resourceId = ResourceIdSchema.parse(resourceIdValue);
+    const components = [".unity-resources", "v1", resourceId] as const;
+    const eventsDirectory = await ensureRealDirectoryPath(this.#stateRoot, [
+      ...components,
+      "events",
+    ]);
+    const temporaryDirectory = await ensureRealDirectoryPath(this.#stateRoot, [
+      ...components,
+      "tmp",
+    ]);
+    return { eventsDirectory, temporaryDirectory };
+  }
+
+  async #ensureLockState(): Promise<void> {
+    for (const leaf of ["active", "candidates", "stale", "released"] as const) {
+      await ensureRealDirectoryPath(this.#stateRoot, [
+        ".unity-resource-locks",
+        "v1",
+        ".leases",
+        leaf,
+      ]);
     }
-    return target;
   }
 }

@@ -190,7 +190,8 @@ describe("FileUnityResourceCoordinator", () => {
     const editor = request("unity-editor");
     const license = request("unity-license");
     const waiting = request("unity-editor");
-    await Promise.all([first.enqueue(editor), second.enqueue(license), second.enqueue(waiting)]);
+    await Promise.all([first.enqueue(editor), second.enqueue(license)]);
+    await second.enqueue(waiting);
 
     const [editorLease, licenseLease] = await Promise.all([
       first.acquire(editor),
@@ -220,20 +221,33 @@ describe("FileUnityResourceCoordinator", () => {
     });
   });
 
-  it("rejects a resource directory link before publishing outside its state root", async () => {
-    const root = await temporaryRoot();
-    const target = path.join(root, "link-target");
-    const resourceRoot = path.join(root, ".unity-resources", "v1");
-    await Promise.all([mkdir(target), mkdir(resourceRoot, { recursive: true })]);
-    await symlink(
-      target,
-      path.join(resourceRoot, "unity-editor"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
-    const coordinator = new FileUnityResourceCoordinator(root);
+  it.each([
+    ["resource root", [".unity-resources"]],
+    ["resource version", [".unity-resources", "v1"]],
+    ["resource directory", [".unity-resources", "v1", "unity-editor"]],
+    ["event directory", [".unity-resources", "v1", "unity-editor", "events"]],
+    ["temporary directory", [".unity-resources", "v1", "unity-editor", "tmp"]],
+    ["lock root", [".unity-resource-locks"]],
+    ["lock version", [".unity-resource-locks", "v1"]],
+    ["lease root", [".unity-resource-locks", "v1", ".leases"]],
+    ["active lease directory", [".unity-resource-locks", "v1", ".leases", "active"]],
+    ["candidate lease directory", [".unity-resource-locks", "v1", ".leases", "candidates"]],
+    ["stale lease directory", [".unity-resource-locks", "v1", ".leases", "stale"]],
+    ["released lease directory", [".unity-resource-locks", "v1", ".leases", "released"]],
+  ] as const)(
+    "rejects a link at the %s before publishing outside the state root",
+    async (_name, parts) => {
+      const root = await temporaryRoot();
+      const target = path.join(root, `link-target-${randomUUID()}`);
+      const linkPath = path.join(root, ...parts);
+      await Promise.all([mkdir(target), mkdir(path.dirname(linkPath), { recursive: true })]);
+      await symlink(target, linkPath, process.platform === "win32" ? "junction" : "dir");
+      const coordinator = new FileUnityResourceCoordinator(root);
 
-    await expect(coordinator.enqueue(request("unity-editor"))).rejects.toMatchObject({
-      code: "run.indeterminate",
-    });
-  });
+      await expect(coordinator.enqueue(request("unity-editor"))).rejects.toMatchObject({
+        code: "run.indeterminate",
+      });
+      expect(await readdir(target)).toEqual([]);
+    },
+  );
 });
