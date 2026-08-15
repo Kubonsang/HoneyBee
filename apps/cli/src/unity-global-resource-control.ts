@@ -26,6 +26,8 @@ const LOCK_POLL_MS = 25;
 const LOCK_TIMEOUT_MS = 30_000;
 const ACQUIRE_POLL_MS = 50;
 const EVENT_NAME = /^(\d{20})\.json$/u;
+const PUBLISHED_READ_ATTEMPTS = 16;
+const TRANSIENT_READ_ERRORS = new Set(["EACCES", "EBUSY", "ENOENT", "EPERM"]);
 
 const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
@@ -34,6 +36,22 @@ const errorCode = (error: unknown): string | undefined =>
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+const readPublishedFile = async (filePath: string): Promise<Buffer> => {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return await readFile(filePath);
+    } catch (error) {
+      if (
+        attempt + 1 >= PUBLISHED_READ_ATTEMPTS ||
+        !TRANSIENT_READ_ERRORS.has(errorCode(error) ?? "")
+      ) {
+        throw error;
+      }
+      await delay(10 * (attempt + 1));
+    }
+  }
+};
 
 const lockRunIdFor = (resourceId: ResourceId): RunId => {
   const bytes = createHash("sha256")
@@ -301,13 +319,17 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       if (Number(entry.match?.[1]) !== index + 1) {
         throw new HoneyBeeCoreError("run.indeterminate", "Global resource sequence is corrupt.");
       }
-      let parsed: unknown;
+      let raw: string;
       try {
-        parsed = JSON.parse(
-          await readFile(path.join(eventsDirectory, entry.name), "utf8"),
-        ) as unknown;
+        raw = (await readPublishedFile(path.join(eventsDirectory, entry.name))).toString("utf8");
       } catch {
         throw new HoneyBeeCoreError("run.indeterminate", "Global resource event is unreadable.");
+      }
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(raw) as unknown;
+      } catch {
+        throw new HoneyBeeCoreError("run.indeterminate", "Global resource event is malformed.");
       }
       const event = UnityGlobalResourceEventV1Schema.safeParse(parsed);
       if (
@@ -428,7 +450,7 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
         await handle.close();
       }
       await link(temporaryPath, finalPath);
-      if (!Buffer.from(await readFile(finalPath)).equals(bytes)) {
+      if (!Buffer.from(await readPublishedFile(finalPath)).equals(bytes)) {
         throw new HoneyBeeCoreError("run.indeterminate", "Global resource publish was corrupted.");
       }
     } catch (error) {

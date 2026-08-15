@@ -74,6 +74,52 @@ const acquireInChild = async (
 };
 
 describe("FileUnityResourceCoordinator", () => {
+  it.skipIf(process.platform !== "win32")(
+    "retries a transient Windows sharing violation when reading an immutable event",
+    async () => {
+      const root = await temporaryRoot();
+      const coordinator = new FileUnityResourceCoordinator(root);
+      const original = request("unity-editor");
+      await coordinator.enqueue(original);
+      const eventPath = path.join(
+        root,
+        ".unity-resources",
+        "v1",
+        "unity-editor",
+        "events",
+        "00000000000000000001.json",
+      );
+      const escapedEventPath = eventPath.replaceAll("'", "''");
+      const script = [
+        `$stream = [System.IO.File]::Open('${escapedEventPath}', [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::None)`,
+        "[Console]::Out.WriteLine('locked')",
+        "Start-Sleep -Milliseconds 300",
+        "$stream.Dispose()",
+      ].join("; ");
+      const locker = spawn(
+        "powershell.exe",
+        ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+        { stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
+      );
+      const exited = new Promise<void>((resolve, reject) => {
+        locker.once("exit", (code) => (code === 0 ? resolve() : reject(new Error(String(code)))));
+      });
+      const locked = new Promise<void>((resolve, reject) => {
+        locker.stdout.setEncoding("utf8");
+        locker.stdout.once("data", () => resolve());
+        locker.once("error", reject);
+        locker.once("exit", (code) => {
+          if (code !== 0) reject(new Error(`locker exited ${code}`));
+        });
+      });
+      await locked;
+
+      expect((await coordinator.status(original)).state).toBe("queued");
+      await exited;
+    },
+    10_000,
+  );
+
   it("serializes one resource across processes and preserves an orphaned active lease", async () => {
     const root = await temporaryRoot();
     const coordinator = new FileUnityResourceCoordinator(root);
