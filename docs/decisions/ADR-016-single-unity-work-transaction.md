@@ -43,13 +43,13 @@ prepare
 Unity transaction은 Journal schemaVersion 3을 사용한다. schemaVersion 1과 2 Run은 기존 의미를 유지한다.
 
 - `workspace.acquired`가 fsync되기 전에는 Agent를 실행하지 않는다.
-- Agent와 TestPlay는 먼저 비활성 containment process를 등록하고 `agent.started` 또는 `testplay.started`가 fsync된 뒤에만 실제 command를 활성화한다. 실제 command 종료 뒤에도 exited event가 durable해질 때까지 containment PID를 유지하므로 parent crash 시 resume이 항상 기록된 process tree를 drain할 수 있다.
+- Agent와 TestPlay는 target 환경과 분리된 최소 내부 환경으로 비활성 containment launcher를 먼저 시작한다. `agent.started` 또는 `testplay.started`를 fsync한 뒤 IPC 등록을 수행하고, 그 응답을 `process.containment-registered`로 fsync한 뒤에만 target 환경과 command를 전달해 활성화한다. 따라서 target의 `NODE_OPTIONS` 같은 loader 설정은 durable start 경계 전에 HoneyBee launcher에서 실행되지 않는다.
 - storage가 lease를 반환한 뒤 receipt Artifact 또는 `workspace.acquired` 기록이 실패하면 acquire failure로 확정하지 않는다. 동일 acquire request로 lease identity를 복구할 수 있도록 Run을 `cleanup-pending`으로 유지한다.
 - TestPlay Evidence는 Artifact Store에 publish된 뒤에만 `testplay.verified`가 기록된다.
 - semantic outcome은 release보다 먼저 `transaction.outcome-decided`로 확정한다.
 - terminal workflow event는 `workspace.released` 이후 Journal의 마지막 event로만 기록한다.
 - 실패와 cancel은 Agent와 TestPlay의 전체 process tree를 drain한 뒤 원래 AbortSignal과 분리된 cleanup path에서 release한다.
-- `agent.started`와 `testplay.started`는 가능한 경우 PID와 process incarnation을 함께 기록한다. Resume은 대응하는 exit가 없는 동일 incarnation의 Windows process tree를 먼저 drain하며, 성공하면 해당 started event를 가리키는 `process.drain-completed`를 기록한다. 이후 resume은 이 durable marker를 재사용한다. 안전하게 식별하거나 종료할 수 없으면 release하지 않고 `cleanup-pending`을 유지한다.
+- `agent.started`와 `testplay.started`는 가능한 경우 PID와 process incarnation을 함께 기록한다. 등록 전 parent crash에서는 target이 아직 실행될 수 없으므로 사라진 deferred launcher를 안전한 미실행 상태로 처리한다. `process.containment-registered` 이후에는 exited event가 있더라도 살아 있는 containment tree를 확인·drain하며, 정상 runner도 tree drain 뒤 해당 started event를 가리키는 `process.drain-completed`를 기록한다. exited가 durable한 deferred launcher가 이미 사라졌다면 launcher protocol상 전체 tree 종료가 완료된 것으로 취급하고 marker를 복구한다. 이후 resume은 이 durable marker를 재사용한다. exited 전 등록된 launcher를 안전하게 식별하거나 종료할 수 없으면 release하지 않고 `cleanup-pending`을 유지한다.
 - release 실패 또는 응답 유실은 terminal failure가 아니다. Run은 `cleanup-pending`으로 남는다.
 - `run resume`는 같은 release request ID로 cleanup만 복구하며 Agent와 TestPlay를 재실행하지 않는다.
 - nonterminal Unity Run과 Journal이 손상된 모든 `indeterminate` Run은 `run delete`로 제거할 수 없다.

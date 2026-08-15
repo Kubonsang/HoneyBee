@@ -146,7 +146,11 @@ export const terminateProcessTree = async (pid: number): Promise<void> => {
 
 export interface UnityProcessControl {
   captureIdentity(pid: number): Promise<string | undefined>;
-  drain(pid: number, processIdentity?: string): Promise<void>;
+  drain(
+    pid: number,
+    processIdentity?: string,
+    missingPolicy?: "unsafe" | "safe",
+  ): Promise<"drained" | "missing">;
 }
 
 export class SystemUnityProcessControl implements UnityProcessControl {
@@ -162,9 +166,14 @@ export class SystemUnityProcessControl implements UnityProcessControl {
     return observation.identity;
   }
 
-  public async drain(pid: number, processIdentity?: string): Promise<void> {
+  public async drain(
+    pid: number,
+    processIdentity?: string,
+    missingPolicy: "unsafe" | "safe" = "unsafe",
+  ): Promise<"drained" | "missing"> {
     const observation = await observeProcess(pid);
     if (observation.status === "missing") {
+      if (missingPolicy === "safe") return "missing";
       throw new HoneyBeeCoreError(
         "process.drain-failed",
         "The recorded parent process is gone, so surviving descendants cannot be ruled out.",
@@ -200,14 +209,14 @@ export class SystemUnityProcessControl implements UnityProcessControl {
       );
     }
 
-    if (await waitForOriginalExit(pid, processIdentity)) return;
+    if (await waitForOriginalExit(pid, processIdentity)) return "drained";
     if (process.platform !== "win32") {
       try {
         process.kill(pid, "SIGKILL");
       } catch {
         // The process may have exited between the observation and the signal.
       }
-      if (await waitForOriginalExit(pid, processIdentity)) return;
+      if (await waitForOriginalExit(pid, processIdentity)) return "drained";
     }
     throw new HoneyBeeCoreError(
       "process.drain-failed",

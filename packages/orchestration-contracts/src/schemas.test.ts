@@ -55,6 +55,43 @@ describe("orchestration contracts", () => {
     ).toBe(true);
   });
 
+  it.each([
+    ["agent.started", "agent", "unity-agent"],
+    ["testplay.started", "testplay", undefined],
+  ] as const)(
+    "strictly validates deferred containment lifecycle for %s",
+    (type, process, stepId) => {
+      const runId = randomUUID();
+      const startedEventId = randomUUID();
+      const started = {
+        schemaVersion: 3,
+        eventId: startedEventId,
+        runId,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type,
+        ...(stepId === undefined ? {} : { stepId }),
+        payload: { pid: 42, containment: "deferred-v1" },
+      } as const;
+      expect(OrchestrationEventV3Schema.safeParse(started).success).toBe(true);
+      expect(
+        OrchestrationEventV3Schema.safeParse({
+          ...started,
+          payload: { ...started.payload, containment: "other" },
+        }).success,
+      ).toBe(false);
+      expect(
+        OrchestrationEventV3Schema.safeParse({
+          ...started,
+          eventId: randomUUID(),
+          sequence: 2,
+          type: "process.containment-registered",
+          payload: { process, startedEventId },
+        }).success,
+      ).toBe(true);
+    },
+  );
+
   it("rejects duplicate workflow step IDs", () => {
     expect(
       WorkflowConfigV2Schema.safeParse({

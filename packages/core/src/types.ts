@@ -43,7 +43,11 @@ export interface AgentExitObservation {
 }
 
 export interface AgentProcessLifecycle {
-  readonly onStarted: (pid: number) => Promise<void>;
+  readonly onStarted: (
+    pid: number,
+    metadata?: Readonly<{ containment?: "deferred-v1" }>,
+  ) => Promise<void>;
+  readonly onRegistered?: (pid: number) => Promise<void>;
   readonly onExited: (observation: AgentExitObservation) => Promise<void>;
 }
 

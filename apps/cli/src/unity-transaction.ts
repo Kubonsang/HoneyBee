@@ -21,6 +21,7 @@ import {
   type ArtifactMediaType,
   type ArtifactRef,
   type ArtifactStore,
+  type EventId,
   type FailureMetadata,
   type OrchestrationEventV3,
   type RunControlPort,
@@ -82,6 +83,14 @@ class UnityEventWriter {
     payload: unknown,
     stepId?: StepId,
   ): Promise<void> {
+    return this.emitEvent(type, payload, stepId).then(() => undefined);
+  }
+
+  public emitEvent(
+    type: OrchestrationEventV3["type"],
+    payload: unknown,
+    stepId?: StepId,
+  ): Promise<OrchestrationEventV3> {
     const operation = this.#tail.then(async () => {
       const event = OrchestrationEventV3Schema.parse({
         schemaVersion: 3,
@@ -94,8 +103,9 @@ class UnityEventWriter {
         payload,
       });
       await this.journal.append(this.runId, event);
+      return event;
     });
-    this.#tail = operation;
+    this.#tail = operation.then(() => undefined);
     return operation;
   }
 }
@@ -661,6 +671,8 @@ export class UnityWorkTransaction {
     );
     await writer.emit("artifact.stored", { artifact: input }, UNITY_STEP_ID);
     let result: AgentProcessResult;
+    let startedEventId: EventId | undefined;
+    let deferred = false;
     try {
       result = await this.runner.run(
         {
@@ -683,7 +695,18 @@ export class UnityWorkTransaction {
           signal,
         },
         {
-          onStarted: (pid) => this.#emitProcessStarted(writer, "agent.started", pid, UNITY_STEP_ID),
+          onStarted: async (pid, metadata) => {
+            deferred = metadata?.containment === "deferred-v1";
+            startedEventId = await this.#emitProcessStarted(
+              writer,
+              "agent.started",
+              pid,
+              metadata?.containment,
+              UNITY_STEP_ID,
+            );
+          },
+          onRegistered: () =>
+            this.#emitContainmentRegistered(writer, "agent", startedEventId, UNITY_STEP_ID),
           onExited: (observation) => writer.emit("agent.exited", observation, UNITY_STEP_ID),
         },
       );
@@ -692,6 +715,9 @@ export class UnityWorkTransaction {
         await writer.emit("agent.input-write-failed", failureMetadata(error), UNITY_STEP_ID);
       }
       throw error;
+    }
+    if (deferred) {
+      await this.#emitProcessDrainCompleted(writer, "agent", startedEventId, UNITY_STEP_ID);
     }
     if (result.termination !== "exited") {
       const code =
@@ -747,10 +773,24 @@ export class UnityWorkTransaction {
     writer: UnityEventWriter,
     signal: AbortSignal,
   ): Promise<{ evidence: ArtifactRef; failure?: HoneyBeeCoreError }> {
+    let startedEventId: EventId | undefined;
+    let deferred = false;
     const result = await this.testplay.run(runId, workspacePath, signal, {
-      onStarted: (pid) => this.#emitProcessStarted(writer, "testplay.started", pid),
+      onStarted: async (pid, metadata) => {
+        deferred = metadata?.containment === "deferred-v1";
+        startedEventId = await this.#emitProcessStarted(
+          writer,
+          "testplay.started",
+          pid,
+          metadata?.containment,
+        );
+      },
+      onRegistered: () => this.#emitContainmentRegistered(writer, "testplay", startedEventId),
       onExited: (observation) => writer.emit("testplay.exited", observation),
     });
+    if (deferred) {
+      await this.#emitProcessDrainCompleted(writer, "testplay", startedEventId);
+    }
     const evidence = await this.#storeTestPlayEvidence(runId, writer, result);
     await writer.emit("testplay.evidence-stored", { evidence });
     const required = new Set([
@@ -944,14 +984,50 @@ export class UnityWorkTransaction {
     writer: UnityEventWriter,
     type: "agent.started" | "testplay.started",
     pid: number,
+    containment?: "deferred-v1",
     stepId?: StepId,
-  ): Promise<void> {
+  ): Promise<EventId> {
     const processIdentity = await this.#processControl.captureIdentity(pid);
-    await writer.emit(
+    const event = await writer.emitEvent(
       type,
-      { pid, ...(processIdentity === undefined ? {} : { processIdentity }) },
+      {
+        pid,
+        ...(processIdentity === undefined ? {} : { processIdentity }),
+        ...(containment === undefined ? {} : { containment }),
+      },
       stepId,
     );
+    return event.eventId;
+  }
+
+  async #emitContainmentRegistered(
+    writer: UnityEventWriter,
+    process: "agent" | "testplay",
+    startedEventId: EventId | undefined,
+    stepId?: StepId,
+  ): Promise<void> {
+    if (startedEventId === undefined) {
+      throw new HoneyBeeCoreError(
+        "process.registration-failed",
+        "The containment process registered without a durable start event.",
+      );
+    }
+    await writer.emit("process.containment-registered", { process, startedEventId }, stepId);
+  }
+
+  async #emitProcessDrainCompleted(
+    writer: UnityEventWriter,
+    process: "agent" | "testplay",
+    startedEventId: EventId | undefined,
+    stepId?: StepId,
+  ): Promise<void> {
+    if (startedEventId === undefined) {
+      throw new HoneyBeeCoreError(
+        "process.drain-failed",
+        "The containment process drained without a durable start event.",
+      );
+    }
+    await writer.emit("process.drain-completed", { process, startedEventId }, stepId);
   }
 
   async #drainInterruptedChildren(
@@ -965,8 +1041,16 @@ export class UnityWorkTransaction {
       const started = lastEvent(events, startedType);
       if (started === undefined) continue;
       const exited = lastEvent(events, exitedType);
-      if (exited !== undefined && exited.sequence > started.sequence) continue;
+      const hasExited = exited !== undefined && exited.sequence > started.sequence;
+      const deferred = started.payload.containment === "deferred-v1";
+      if (hasExited && !deferred) continue;
       const processType = startedType === "agent.started" ? "agent" : "testplay";
+      const registered = events.some(
+        (event) =>
+          event.type === "process.containment-registered" &&
+          event.payload.process === processType &&
+          event.payload.startedEventId === started.eventId,
+      );
       const drained = events.some(
         (event) =>
           event.type === "process.drain-completed" &&
@@ -974,7 +1058,11 @@ export class UnityWorkTransaction {
           event.payload.startedEventId === started.eventId,
       );
       if (drained) continue;
-      await this.#processControl.drain(started.payload.pid, started.payload.processIdentity);
+      await this.#processControl.drain(
+        started.payload.pid,
+        started.payload.processIdentity,
+        deferred && (!registered || hasExited) ? "safe" : "unsafe",
+      );
       await writer.emit(
         "process.drain-completed",
         { process: processType, startedEventId: started.eventId },

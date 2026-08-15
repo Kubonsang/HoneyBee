@@ -1110,6 +1110,7 @@ export const OrchestrationEventV3Schema = z
         .object({
           pid: z.number().int().positive(),
           processIdentity: z.string().min(1).max(512).optional(),
+          containment: z.literal("deferred-v1").optional(),
         })
         .strict(),
     ),
@@ -1121,6 +1122,16 @@ export const OrchestrationEventV3Schema = z
         .object({
           pid: z.number().int().positive(),
           processIdentity: z.string().min(1).max(512).optional(),
+          containment: z.literal("deferred-v1").optional(),
+        })
+        .strict(),
+    ),
+    eventV3(
+      "process.containment-registered",
+      z
+        .object({
+          process: z.enum(["agent", "testplay"]),
+          startedEventId: EventIdSchema,
         })
         .strict(),
     ),
@@ -1264,19 +1275,22 @@ export const OrchestrationEventV3Schema = z
         message: "Agent-scoped Unity transaction event needs stepId.",
       });
     }
-    if (event.type === "process.drain-completed") {
+    if (
+      event.type === "process.containment-registered" ||
+      event.type === "process.drain-completed"
+    ) {
       if (event.payload.process === "agent" && event.stepId === undefined) {
         context.addIssue({
           code: "custom",
           path: ["stepId"],
-          message: "An Agent drain completion needs stepId.",
+          message: "An Agent process lifecycle event needs stepId.",
         });
       }
       if (event.payload.process === "testplay" && event.stepId !== undefined) {
         context.addIssue({
           code: "custom",
           path: ["stepId"],
-          message: "A TestPlay drain completion cannot have stepId.",
+          message: "A TestPlay process lifecycle event cannot have stepId.",
         });
       }
     }

@@ -34,6 +34,7 @@ export type HoneyBeeCoreErrorCode =
   | "source.check-failed"
   | "transaction.interrupted"
   | "process.identity-failed"
+  | "process.registration-failed"
   | "process.drain-failed"
   | "run.already-exists"
   | "run.not-found"

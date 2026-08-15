@@ -304,7 +304,11 @@ const resumeConfig = (root: string) => {
   });
 };
 
-const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | undefined) => {
+const seedAcquiredRun = async (
+  root: string,
+  started: "agent" | "testplay" | undefined,
+  options: Readonly<{ deferred?: boolean; registered?: boolean; exited?: boolean }> = {},
+) => {
   const runRoot = path.join(root, "runs");
   const runId = RunIdSchema.parse(randomUUID());
   const config = resumeConfig(root);
@@ -331,20 +335,19 @@ const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | und
     ]);
   const journal = new FileOrchestrationJournal(runRoot);
   let sequence = 0;
-  const append = async (type: string, payload: unknown, stepId?: string): Promise<void> => {
-    await journal.append(
+  const append = async (type: string, payload: unknown, stepId?: string) => {
+    const event = OrchestrationEventV3Schema.parse({
+      schemaVersion: 3,
+      eventId: EventIdSchema.parse(randomUUID()),
       runId,
-      OrchestrationEventV3Schema.parse({
-        schemaVersion: 3,
-        eventId: EventIdSchema.parse(randomUUID()),
-        runId,
-        sequence: ++sequence,
-        timestamp: new Date(0).toISOString(),
-        type,
-        ...(stepId === undefined ? {} : { stepId }),
-        payload,
-      }),
-    );
+      sequence: ++sequence,
+      timestamp: new Date(0).toISOString(),
+      type,
+      ...(stepId === undefined ? {} : { stepId }),
+      payload,
+    });
+    await journal.append(runId, event);
+    return event;
   };
   await append("workflow.started", {
     mode: "unity-work-v1",
@@ -363,7 +366,25 @@ const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | und
     receipt: receiptArtifact,
   });
   if (started !== undefined) {
-    await append("agent.started", { pid: 4242, processIdentity: "test:agent" }, "unity-agent");
+    const agentStarted = await append(
+      "agent.started",
+      {
+        pid: 4242,
+        processIdentity: "test:agent",
+        ...(options.deferred === true ? { containment: "deferred-v1" } : {}),
+      },
+      "unity-agent",
+    );
+    if (
+      options.deferred === true &&
+      (started === "testplay" || options.registered === true || options.exited === true)
+    ) {
+      await append(
+        "process.containment-registered",
+        { process: "agent", startedEventId: agentStarted.eventId },
+        "unity-agent",
+      );
+    }
   }
   if (started === "testplay") {
     await append(
@@ -378,9 +399,42 @@ const seedAcquiredRun = async (root: string, started: "agent" | "testplay" | und
       },
       "unity-agent",
     );
-    await append("testplay.started", { pid: 4343, processIdentity: "test:testplay" });
+    const testplayStarted = await append("testplay.started", {
+      pid: 4343,
+      processIdentity: "test:testplay",
+      ...(options.deferred === true ? { containment: "deferred-v1" } : {}),
+    });
+    if (options.deferred === true && (options.registered === true || options.exited === true)) {
+      await append("process.containment-registered", {
+        process: "testplay",
+        startedEventId: testplayStarted.eventId,
+      });
+    }
   }
-  return { runRoot, runId, config, artifacts, journal, sourceArtifact, append };
+  if (options.exited === true && started !== undefined) {
+    const processType = started === "agent" ? "agent" : "testplay";
+    await append(
+      processType + ".exited",
+      {
+        pid: processType === "agent" ? 4242 : 4343,
+        exitCode: 0,
+        signal: null,
+        durationMs: 1,
+        stdoutBytes: 0,
+        stderrBytes: 0,
+      },
+      processType === "agent" ? "unity-agent" : undefined,
+    );
+  }
+  return {
+    runRoot,
+    runId,
+    config,
+    artifacts,
+    journal,
+    sourceArtifact,
+    append,
+  };
 };
 
 describe("UnityWorkTransaction cleanup resume", () => {
@@ -447,6 +501,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
         drain: async (pid, identity) => {
           storage.order.push("drain");
           drained.push({ pid, ...(identity === undefined ? {} : { identity }) });
+          return "drained";
         },
       };
       const transaction = new UnityWorkTransaction(
@@ -471,6 +526,130 @@ describe("UnityWorkTransaction cleanup resume", () => {
       ]);
     },
   );
+
+  it("treats a missing unregistered deferred launcher as safely unactivated", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-unregistered-launcher-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "agent", { deferred: true });
+    const storage = new ResumeStorage();
+    const calls: Array<{ pid: number; identity?: string; missingPolicy?: string }> = [];
+    const processControl: UnityProcessControl = {
+      captureIdentity: async () => "unused",
+      drain: async (pid, identity, missingPolicy) => {
+        storage.order.push("drain");
+        calls.push({
+          pid,
+          ...(identity === undefined ? {} : { identity }),
+          ...(missingPolicy === undefined ? {} : { missingPolicy }),
+        });
+        return "missing";
+      },
+    };
+    const result = await new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+      { processControl },
+    ).resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("failed");
+    expect(storage.order).toEqual(["drain", "release"]);
+    expect(calls).toEqual([{ pid: 4242, identity: "test:agent", missingPolicy: "safe" }]);
+    const replay = await seeded.journal.replay(seeded.runId);
+    expect(replay.status).toBe("terminal");
+    if (replay.status === "terminal") {
+      expect(
+        replay.events.filter((event) => event.type === "process.drain-completed"),
+      ).toHaveLength(1);
+    }
+  });
+
+  it("persists a post-exit deferred drain across release retries", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-exited-launcher-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "agent", {
+      deferred: true,
+      exited: true,
+    });
+    const storage = new FailFirstResumeStorage();
+    let drainCalls = 0;
+    const processControl: UnityProcessControl = {
+      captureIdentity: async () => "unused",
+      drain: async (_pid, _identity, missingPolicy) => {
+        drainCalls += 1;
+        expect(missingPolicy).toBe("safe");
+        storage.order.push("drain");
+        return "drained";
+      },
+    };
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+      { processControl },
+    );
+    const first = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(first.status).toBe("cleanup-pending");
+    expect(drainCalls).toBe(1);
+    expect(storage.order).toEqual(["drain"]);
+    const active = await seeded.journal.replay(seeded.runId);
+    expect(active.status).toBe("active");
+    if (active.status === "active") {
+      expect(
+        active.events.filter((event) => event.type === "process.drain-completed"),
+      ).toHaveLength(1);
+    }
+
+    const second = await transaction.resume(seeded.runId, seeded.config);
+
+    expect(second.status).toBe("failed");
+    expect(drainCalls).toBe(1);
+    expect(storage.order).toEqual(["drain", "release"]);
+    expect((await seeded.journal.replay(seeded.runId)).status).toBe("terminal");
+  });
+
+  it("fails closed if a registered deferred launcher disappears before cleanup", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-registered-missing-"));
+    directories.push(root);
+    const seeded = await seedAcquiredRun(root, "agent", {
+      deferred: true,
+      registered: true,
+    });
+    const storage = new ResumeStorage();
+    const processControl: UnityProcessControl = {
+      captureIdentity: async () => "unused",
+      drain: async (_pid, _identity, missingPolicy) => {
+        expect(missingPolicy).toBe("unsafe");
+        throw new HoneyBeeCoreError(
+          "process.drain-failed",
+          "A registered containment process cannot be proven drained.",
+        );
+      },
+    };
+    const result = await new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      new ResumeBootstrap(),
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+      { processControl },
+    ).resume(seeded.runId, seeded.config);
+
+    expect(result.status).toBe("cleanup-pending");
+    expect(result.failure?.errorCode).toBe("process.drain-failed");
+    expect(storage.released).toBe(false);
+  });
 
   it("keeps cleanup pending when an interrupted process tree cannot be proven drained", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-child-unknown-"));
@@ -515,6 +694,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
       captureIdentity: async () => "unused",
       drain: async () => {
         drainCalls += 1;
+        return "drained";
       },
     };
     const transaction = new UnityWorkTransaction(

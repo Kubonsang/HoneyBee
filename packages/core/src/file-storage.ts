@@ -298,6 +298,10 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
   let releaseReceipt: ArtifactRef | undefined;
   let agentStarted: Extract<OrchestrationEventV3, { type: "agent.started" }> | undefined;
   let testplayStarted: Extract<OrchestrationEventV3, { type: "testplay.started" }> | undefined;
+  let agentContainmentRegistered = false;
+  let testplayContainmentRegistered = false;
+  let agentDrained = false;
+  let testplayDrained = false;
 
   for (const event of events.slice(1)) {
     switch (event.type) {
@@ -347,10 +351,43 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
       case "agent.started":
         if (phase !== "acquired") return false;
         agentStarted = event;
+        agentContainmentRegistered = false;
+        agentDrained = false;
         phase = "agent";
         break;
+      case "process.containment-registered":
+        if (event.payload.process === "agent") {
+          if (
+            phase !== "agent" ||
+            agentStarted === undefined ||
+            agentStarted.payload.containment !== "deferred-v1" ||
+            agentContainmentRegistered ||
+            event.payload.startedEventId !== agentStarted.eventId ||
+            event.stepId !== agentStarted.stepId
+          ) {
+            return false;
+          }
+          agentContainmentRegistered = true;
+        } else {
+          if (
+            phase !== "testplay" ||
+            testplayStarted === undefined ||
+            testplayStarted.payload.containment !== "deferred-v1" ||
+            testplayContainmentRegistered ||
+            event.payload.startedEventId !== testplayStarted.eventId
+          ) {
+            return false;
+          }
+          testplayContainmentRegistered = true;
+        }
+        break;
       case "agent.exited":
-        if (phase !== "agent") return false;
+        if (
+          phase !== "agent" ||
+          (agentStarted?.payload.containment === "deferred-v1" && !agentContainmentRegistered)
+        ) {
+          return false;
+        }
         phase = "agent-exited";
         break;
       case "agent.input-write-failed":
@@ -359,10 +396,17 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
       case "testplay.started":
         if (phase !== "agent-exited") return false;
         testplayStarted = event;
+        testplayContainmentRegistered = false;
+        testplayDrained = false;
         phase = "testplay";
         break;
       case "testplay.exited":
-        if (phase !== "testplay") return false;
+        if (
+          phase !== "testplay" ||
+          (testplayStarted?.payload.containment === "deferred-v1" && !testplayContainmentRegistered)
+        ) {
+          return false;
+        }
         phase = "testplay-exited";
         break;
       case "testplay.evidence-stored":
@@ -381,22 +425,26 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
       case "process.drain-completed":
         if (event.payload.process === "agent") {
           if (
-            phase !== "agent" ||
+            !["agent", "agent-exited"].includes(phase) ||
             agentStarted === undefined ||
+            agentDrained ||
             event.payload.startedEventId !== agentStarted.eventId ||
             event.stepId !== agentStarted.stepId
           ) {
             return false;
           }
+          agentDrained = true;
           phase = "agent-exited";
         } else {
           if (
-            phase !== "testplay" ||
+            !["testplay", "testplay-exited"].includes(phase) ||
             testplayStarted === undefined ||
+            testplayDrained ||
             event.payload.startedEventId !== testplayStarted.eventId
           ) {
             return false;
           }
+          testplayDrained = true;
           phase = "testplay-exited";
         }
         break;

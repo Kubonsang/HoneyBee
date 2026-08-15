@@ -55,5 +55,6 @@ describe("SystemUnityProcessControl", () => {
     await expect(control.drain(pid as number, identity)).rejects.toMatchObject({
       code: "process.drain-failed",
     });
+    await expect(control.drain(pid as number, identity, "safe")).resolves.toBe("missing");
   });
 });

@@ -126,12 +126,17 @@ export interface CommandResult extends AgentExitObservation {
 }
 
 interface CommandLifecycle {
-  readonly onStarted?: (pid: number) => Promise<void>;
+  readonly onStarted?: (
+    pid: number,
+    metadata?: Readonly<{ containment?: "deferred-v1" }>,
+  ) => Promise<void>;
+  readonly onRegistered?: (pid: number) => Promise<void>;
   readonly onExited?: (observation: AgentExitObservation) => Promise<void>;
 }
 
 const DEFERRED_PROCESS_LAUNCHER = String.raw`
 const { spawn } = require("node:child_process");
+let registered = false;
 let activated = false;
 let target;
 let targetClosed = false;
@@ -139,6 +144,8 @@ let targetSpawnFailed = false;
 let keepAlive;
 let stdoutBytes = 0;
 let stderrBytes = 0;
+process.stdout.on("error", () => {});
+process.stderr.on("error", () => {});
 const send = (message, callback) => {
   if (!process.connected) {
     if (callback) callback();
@@ -152,22 +159,23 @@ const finish = (code) => {
   if (process.connected) process.disconnect();
 };
 process.on("message", (message) => {
-  if (message && message.type === "ack-exit" && targetClosed) {
-    finish(message.exitCode);
+  if (message && message.type === "register" && !registered) {
+    registered = true;
+    send({ type: "registered" });
     return;
   }
-  if (!message || message.type !== "start" || activated) return;
+  if (!message || message.type !== "start" || !registered || activated) return;
   activated = true;
   try {
     target = spawn(message.command, message.args, {
       cwd: process.cwd(),
-      env: process.env,
+      env: message.targetEnvironment,
       shell: false,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
     });
   } catch {
-    send({ type: "target-error" }, () => finish(1));
+    send({ type: "target-error" });
     return;
   }
   target.stdout.on("data", (chunk) => {
@@ -180,7 +188,7 @@ process.on("message", (message) => {
   });
   target.once("error", () => {
     targetSpawnFailed = true;
-    send({ type: "target-error" }, () => finish(1));
+    send({ type: "target-error" });
   });
   const inputFailed = () => {
     send({ type: "input-error" });
@@ -191,7 +199,6 @@ process.on("message", (message) => {
   });
   target.once("spawn", () => {
     const inputWritten = () => {
-      target.stdin.removeListener("error", inputFailed);
       send({ type: "input-written" });
     };
     if (message.input === undefined) target.stdin.end(inputWritten);
@@ -205,7 +212,7 @@ process.on("message", (message) => {
   });
 });
 process.on("disconnect", () => {
-  if (!activated) process.exit(0);
+  if (!registered) finish(0);
 });
 if (!process.connected) process.exit(0);
 keepAlive = setInterval(() => {}, 1000);
@@ -213,6 +220,19 @@ keepAlive = setInterval(() => {}, 1000);
 
 const isDeferredMessage = (value: unknown): value is Record<string, unknown> =>
   isRecord(value) && typeof value.type === "string";
+
+const internalLauncherEnvironment = (): NodeJS.ProcessEnv => {
+  const environment: NodeJS.ProcessEnv = {};
+  const allowed =
+    process.platform === "win32"
+      ? ["SystemRoot", "WINDIR", "ComSpec", "TEMP", "TMP"]
+      : ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
+  for (const name of allowed) {
+    const value = process.env[name];
+    if (value !== undefined) environment[name] = value;
+  }
+  return environment;
+};
 
 const runCommand = (
   command: AgentCommand,
@@ -233,12 +253,13 @@ const runCommand = (
     const startedAt = Date.now();
     const targetArgs = [...(command.args ?? []), ...args];
     const deferred = options.deferExecutionUntilStarted === true;
+    const targetEnvironment = { ...process.env, ...command.env, ...options.environment };
     const child = spawn(
       deferred ? process.execPath : command.command,
       deferred ? ["-e", DEFERRED_PROCESS_LAUNCHER] : targetArgs,
       {
         cwd: options.cwd,
-        env: { ...process.env, ...command.env, ...options.environment },
+        env: deferred ? internalLauncherEnvironment() : targetEnvironment,
         shell: false,
         stdio: deferred ? ["ignore", "pipe", "pipe", "ipc"] : ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -259,6 +280,9 @@ const runCommand = (
     let targetExit: Pick<AgentExitObservation, "exitCode" | "signal"> | undefined;
     let activationResolve: (() => void) | undefined;
     let activationReject: ((error: unknown) => void) | undefined;
+    let registrationResolve: (() => void) | undefined;
+    let registrationReject: ((error: unknown) => void) | undefined;
+    let registrationDurable = !deferred;
     let persistedObservation: AgentExitObservation | undefined;
     let exitPersistence: Promise<void> | undefined;
     let outputProgress = (): void => undefined;
@@ -294,22 +318,29 @@ const runCommand = (
         };
         outputProgress();
       });
-    const acknowledgeExit = (exitCode: number | null): Promise<void> =>
-      new Promise((ackResolve, ackReject) => {
-        if (!child.connected || child.send === undefined) {
-          ackReject(new Error("The deferred process exited before its lifecycle was durable."));
-          return;
-        }
-        child.send({ type: "ack-exit", exitCode }, (error) => {
-          if (error === null) ackResolve();
-          else ackReject(error);
-        });
-      });
-
     if (deferred) {
       child.on("message", (message: unknown) => {
         if (!isDeferredMessage(message)) return;
-        if (message.type === "input-written") {
+        if (message.type === "registered") {
+          const resolveRegistration = registrationResolve;
+          const rejectRegistration = registrationReject;
+          registrationResolve = undefined;
+          registrationReject = undefined;
+          const pid = child.pid;
+          if (pid === undefined) {
+            rejectRegistration?.(new Error("The deferred containment process has no PID."));
+            return;
+          }
+          void Promise.resolve()
+            .then(() => options.lifecycle?.onRegistered?.(pid))
+            .then(
+              () => {
+                registrationDurable = true;
+                resolveRegistration?.();
+              },
+              (error: unknown) => rejectRegistration?.(error),
+            );
+        } else if (message.type === "input-written") {
           activationResolve?.();
           activationResolve = undefined;
           activationReject = undefined;
@@ -353,7 +384,12 @@ const runCommand = (
                 targetExit?.signal ?? null,
               );
               await options.lifecycle?.onExited?.(persistedObservation);
-              await acknowledgeExit(persistedObservation.exitCode);
+              const pid = child.pid;
+              if (pid === undefined) {
+                throw new Error("The deferred containment process has no PID.");
+              }
+              treeTermination ??= terminateProcessTree(pid);
+              await treeTermination;
             })();
           }
           void exitPersistence.catch(() => terminate("cancelled"));
@@ -411,46 +447,75 @@ const runCommand = (
     child.once("spawn", () => {
       const pid = child.pid;
       if (pid === undefined) return;
-      startBarrier = (options.lifecycle?.onStarted?.(pid) ?? Promise.resolve()).then(
-        () =>
-          new Promise<void>((writeResolve, writeReject) => {
-            if (child.exitCode !== null || child.signalCode !== null) {
-              writeResolve();
-              return;
-            }
-            if (termination !== "exited") {
-              writeResolve();
-              return;
-            }
-            if (deferred) {
-              activationResolve = writeResolve;
-              activationReject = writeReject;
-              child.send?.(
-                {
-                  type: "start",
-                  command: command.command,
-                  args: targetArgs,
-                  ...(options.input === undefined ? {} : { input: options.input }),
-                },
-                (error) => {
-                  if (error !== null) writeReject(error);
-                },
-              );
-              return;
-            }
-            const stdin = child.stdin;
-            if (stdin === null) {
-              writeReject(new Error("The process stdin pipe is unavailable."));
-              return;
-            }
-            if (options.input === undefined) {
-              stdin.end(writeResolve);
-              return;
-            }
-            stdin.once("error", writeReject);
-            stdin.end(options.input, "utf8", writeResolve);
-          }),
-      );
+      startBarrier = (
+        options.lifecycle?.onStarted?.(
+          pid,
+          deferred ? { containment: "deferred-v1" } : undefined,
+        ) ?? Promise.resolve()
+      )
+        .then(
+          () =>
+            new Promise<void>((registerResolve, registerReject) => {
+              if (!deferred) {
+                registerResolve();
+                return;
+              }
+              if (child.exitCode !== null || child.signalCode !== null) {
+                registerResolve();
+                return;
+              }
+              if (termination !== "exited") {
+                registerResolve();
+                return;
+              }
+              registrationResolve = registerResolve;
+              registrationReject = registerReject;
+              child.send?.({ type: "register" }, (error) => {
+                if (error !== null) registerReject(error);
+              });
+            }),
+        )
+        .then(
+          () =>
+            new Promise<void>((writeResolve, writeReject) => {
+              if (child.exitCode !== null || child.signalCode !== null) {
+                writeResolve();
+                return;
+              }
+              if (termination !== "exited") {
+                writeResolve();
+                return;
+              }
+              if (deferred) {
+                activationResolve = writeResolve;
+                activationReject = writeReject;
+                child.send?.(
+                  {
+                    type: "start",
+                    command: command.command,
+                    args: targetArgs,
+                    targetEnvironment,
+                    ...(options.input === undefined ? {} : { input: options.input }),
+                  },
+                  (error) => {
+                    if (error !== null) writeReject(error);
+                  },
+                );
+                return;
+              }
+              const stdin = child.stdin;
+              if (stdin === null) {
+                writeReject(new Error("The process stdin pipe is unavailable."));
+                return;
+              }
+              if (options.input === undefined) {
+                stdin.end(writeResolve);
+                return;
+              }
+              stdin.once("error", writeReject);
+              stdin.end(options.input, "utf8", writeResolve);
+            }),
+        );
       if (termination !== "exited" && options.terminateTree === true) terminate(termination);
       void startBarrier.catch(() => terminate("cancelled"));
     });
@@ -460,6 +525,7 @@ const runCommand = (
       clearTimeout(timeout);
       if (forcedTermination !== undefined) clearTimeout(forcedTermination);
       options.signal?.removeEventListener("abort", onAbort);
+      registrationReject?.(error);
       activationReject?.(error);
       reject(error);
     });
@@ -469,6 +535,7 @@ const runCommand = (
       clearTimeout(timeout);
       if (forcedTermination !== undefined) clearTimeout(forcedTermination);
       options.signal?.removeEventListener("abort", onAbort);
+      registrationReject?.(new Error("The deferred process exited before registration completed."));
       outputWaitReject?.(new Error("The deferred process closed before output was drained."));
       activationReject?.(new Error("The deferred process exited before accepting its input."));
       void (async () => {
@@ -483,7 +550,7 @@ const runCommand = (
           const finalObservation =
             persistedObservation ??
             observation(targetExit?.exitCode ?? exitCode, targetExit?.signal ?? signal);
-          if (persistedObservation === undefined) {
+          if (persistedObservation === undefined && registrationDurable) {
             await options.lifecycle?.onExited?.(finalObservation);
           }
           resolve({
@@ -1072,7 +1139,7 @@ export class TestPlayCliAdapter {
     runId: RunId,
     workspacePath: string,
     signal: AbortSignal,
-    lifecycle: Required<CommandLifecycle>,
+    lifecycle: CommandLifecycle & Required<Pick<CommandLifecycle, "onStarted" | "onExited">>,
   ): Promise<TestPlayRunResult> {
     const configPath = path.join(workspacePath, ".honeybee-testplay-" + runId + ".json");
     await createExclusiveFile(

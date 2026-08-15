@@ -348,6 +348,90 @@ describe("TestPlayCliAdapter process control", () => {
     await expect(access(marker)).rejects.toBeDefined();
   });
 
+  it("does not start TestPlay before containment registration is durable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-register-barrier-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const marker = path.join(root, "executed");
+    const script = path.join(root, "testplay.mjs");
+    await mkdir(workspace);
+    await writeFile(
+      script,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');",
+      "utf8",
+    );
+    const adapter = new TestPlayCliAdapter({
+      command: { command: process.execPath, args: [script, marker] },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 10_000,
+    });
+
+    await expect(
+      adapter.run(RunIdSchema.parse(randomUUID()), workspace, new AbortController().signal, {
+        onStarted: async () => undefined,
+        onRegistered: async () => {
+          throw new Error("injected registration journal failure");
+        },
+        onExited: async () => undefined,
+      }),
+    ).rejects.toThrow("injected registration journal failure");
+    await expect(access(marker)).rejects.toBeDefined();
+  });
+
+  it("keeps target NODE_OPTIONS out of the containment launcher", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-env-barrier-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const preloadMarker = path.join(root, "preload-ran");
+    const preload = path.join(root, "target-preload.cjs");
+    const script = path.join(root, "testplay.cjs");
+    await mkdir(workspace);
+    await writeFile(
+      preload,
+      "require('node:fs').writeFileSync(process.env.HONEYBEE_PRELOAD_MARKER, 'loaded');",
+      "utf8",
+    );
+    await writeFile(
+      script,
+      "process.stdout.write(JSON.stringify({ run_id: 'env-test', total: 1 }) + '\\n');",
+      "utf8",
+    );
+    const adapter = new TestPlayCliAdapter({
+      command: {
+        command: process.execPath,
+        args: [script],
+        env: {
+          NODE_OPTIONS: "--require=" + preload,
+          HONEYBEE_PRELOAD_MARKER: preloadMarker,
+        },
+      },
+      unityPath: path.join(root, "Unity.exe"),
+      platform: "edit_mode",
+      timeoutMs: 10_000,
+    });
+    let started = false;
+
+    const result = await adapter.run(
+      RunIdSchema.parse(randomUUID()),
+      workspace,
+      new AbortController().signal,
+      {
+        onStarted: async (_pid, metadata) => {
+          started = true;
+          expect(metadata?.containment).toBe("deferred-v1");
+          await expect(access(preloadMarker)).rejects.toBeDefined();
+        },
+        onRegistered: async () => undefined,
+        onExited: async () => undefined,
+      },
+    );
+
+    expect(started).toBe(true);
+    expect(result.command.exitCode).toBe(0);
+    expect(await readFile(preloadMarker, "utf8")).toBe("loaded");
+  });
+
   it.skipIf(process.platform !== "win32")(
     "terminates the complete TestPlay process tree before reporting cancellation",
     async () => {
@@ -378,23 +462,14 @@ describe("TestPlayCliAdapter process control", () => {
       const aborter = new AbortController();
       let parentPid: number | undefined;
       let grandchildPid: number | undefined;
-      let exitedAfterTreeDrain = false;
+      let exitPersisted = false;
       try {
         const execution = adapter.run(RunIdSchema.parse(randomUUID()), workspace, aborter.signal, {
           onStarted: async (pid) => {
             parentPid = pid;
           },
           onExited: async () => {
-            exitedAfterTreeDrain =
-              grandchildPid !== undefined &&
-              (() => {
-                try {
-                  process.kill(grandchildPid as number, 0);
-                  return false;
-                } catch {
-                  return true;
-                }
-              })();
+            exitPersisted = true;
           },
         });
         for (let attempt = 0; attempt < 100 && grandchildPid === undefined; attempt += 1) {
@@ -410,7 +485,7 @@ describe("TestPlayCliAdapter process control", () => {
         const result = await execution;
 
         expect(result.command.termination).toBe("cancelled");
-        expect(exitedAfterTreeDrain).toBe(true);
+        expect(exitPersisted).toBe(true);
         expect(() => process.kill(grandchildPid as number, 0)).toThrow();
       } finally {
         for (const pid of [grandchildPid, parentPid]) {
@@ -460,6 +535,156 @@ describe("UnityAgentProcessRunner process control", () => {
     await expect(access(marker)).rejects.toBeDefined();
   });
 
+  it("does not start the Agent before containment registration is durable", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-agent-register-barrier-"));
+    directories.push(root);
+    const marker = path.join(root, "executed");
+    const script = path.join(root, "agent.mjs");
+    await writeFile(
+      script,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');",
+      "utf8",
+    );
+
+    await expect(
+      new UnityAgentProcessRunner().run(
+        {
+          runId: RunIdSchema.parse(randomUUID()),
+          stepId: StepIdSchema.parse("unity-agent"),
+          prompt: "work",
+          command: { command: process.execPath, args: [script, marker], cwd: root },
+          timeoutMs: 10_000,
+          maxOutputBytes: 1024 * 1024,
+        },
+        {
+          onStarted: async () => undefined,
+          onRegistered: async () => {
+            throw new Error("injected registration journal failure");
+          },
+          onExited: async () => undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "agent.spawn-failed" });
+    await expect(access(marker)).rejects.toBeDefined();
+  });
+
+  it("does not report a target exit when cancellation drains an unregistered launcher", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-agent-unregistered-cancel-"));
+    directories.push(root);
+    const marker = path.join(root, "executed");
+    const script = path.join(root, "agent.mjs");
+    await writeFile(
+      script,
+      "import { writeFileSync } from 'node:fs'; writeFileSync(process.argv[2], 'ran');",
+      "utf8",
+    );
+    const aborter = new AbortController();
+    let releaseStart: (() => void) | undefined;
+    let startedResolve: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      startedResolve = resolve;
+    });
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve;
+    });
+    let registered = false;
+    let exited = false;
+    const execution = new UnityAgentProcessRunner().run(
+      {
+        runId: RunIdSchema.parse(randomUUID()),
+        stepId: StepIdSchema.parse("unity-agent"),
+        prompt: "work",
+        command: { command: process.execPath, args: [script, marker], cwd: root },
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024 * 1024,
+        signal: aborter.signal,
+      },
+      {
+        onStarted: async () => {
+          startedResolve?.();
+          await startGate;
+        },
+        onRegistered: async () => {
+          registered = true;
+        },
+        onExited: async () => {
+          exited = true;
+        },
+      },
+    );
+    await started;
+    aborter.abort();
+    releaseStart?.();
+
+    const result = await execution;
+
+    expect(result.termination).toBe("cancelled");
+    expect(registered).toBe(false);
+    expect(exited).toBe(false);
+    await expect(access(marker)).rejects.toBeDefined();
+  });
+
+  it("keeps target NODE_OPTIONS out of the containment launcher", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-agent-env-barrier-"));
+    directories.push(root);
+    const preloadMarker = path.join(root, "preload-ran");
+    const preload = path.join(root, "target-preload.cjs");
+    const script = path.join(root, "agent.cjs");
+    await writeFile(
+      preload,
+      "require('node:fs').writeFileSync(process.env.HONEYBEE_PRELOAD_MARKER, 'loaded');",
+      "utf8",
+    );
+    await writeFile(
+      script,
+      [
+        "process.stdin.resume();",
+        "process.stdin.on('end', () => {",
+        "  process.stdout.write('HONEYBEE_RESPONSE_BEGIN\\n' + JSON.stringify({",
+        "    schemaVersion: 2,",
+        "    runId: process.env.HONEYBEE_RUN_ID,",
+        "    stepId: process.env.HONEYBEE_STEP_ID,",
+        "    status: 'completed',",
+        "    outputs: { content: { mediaType: 'text/plain; charset=utf-8', content: 'done' } }",
+        "  }) + '\\nHONEYBEE_RESPONSE_END\\n');",
+        "});",
+      ].join("\n"),
+      "utf8",
+    );
+    let started = false;
+    const result = await new UnityAgentProcessRunner().run(
+      {
+        runId: RunIdSchema.parse(randomUUID()),
+        stepId: StepIdSchema.parse("unity-agent"),
+        prompt: "work",
+        command: {
+          command: process.execPath,
+          args: [script],
+          cwd: root,
+          env: {
+            NODE_OPTIONS: "--require=" + preload,
+            HONEYBEE_PRELOAD_MARKER: preloadMarker,
+          },
+        },
+        timeoutMs: 10_000,
+        maxOutputBytes: 1024 * 1024,
+      },
+      {
+        onStarted: async (_pid, metadata) => {
+          started = true;
+          expect(metadata?.containment).toBe("deferred-v1");
+          await expect(access(preloadMarker)).rejects.toBeDefined();
+        },
+        onRegistered: async () => undefined,
+        onExited: async () => undefined,
+      },
+    );
+
+    expect(started).toBe(true);
+    expect(result.exitCode).toBe(0);
+    expect(await readFile(preloadMarker, "utf8")).toBe("loaded");
+  });
+
   it.skipIf(process.platform !== "win32")(
     "terminates the complete Agent process tree before reporting cancellation",
     async () => {
@@ -482,7 +707,7 @@ describe("UnityAgentProcessRunner process control", () => {
       const aborter = new AbortController();
       let parentPid: number | undefined;
       let grandchildPid: number | undefined;
-      let exitedAfterTreeDrain = false;
+      let exitPersisted = false;
       try {
         const execution = new UnityAgentProcessRunner().run(
           {
@@ -499,16 +724,7 @@ describe("UnityAgentProcessRunner process control", () => {
               parentPid = pid;
             },
             onExited: async () => {
-              exitedAfterTreeDrain =
-                grandchildPid !== undefined &&
-                (() => {
-                  try {
-                    process.kill(grandchildPid as number, 0);
-                    return false;
-                  } catch {
-                    return true;
-                  }
-                })();
+              exitPersisted = true;
             },
           },
         );
@@ -525,7 +741,7 @@ describe("UnityAgentProcessRunner process control", () => {
         const result = await execution;
 
         expect(result.termination).toBe("cancelled");
-        expect(exitedAfterTreeDrain).toBe(true);
+        expect(exitPersisted).toBe(true);
         expect(() => process.kill(grandchildPid as number, 0)).toThrow();
       } finally {
         for (const pid of [grandchildPid, parentPid]) {
