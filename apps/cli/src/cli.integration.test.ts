@@ -17,9 +17,13 @@ import {
 } from "@honeybee/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { terminateProcessTree } from "./process-control.js";
+
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const demoAgentPath = fileURLToPath(new URL("../dist/demo-agent.js", import.meta.url));
 const directories: string[] = [];
+const activeCliProcesses = new Set<ReturnType<typeof spawn>>();
+const PROCESS_START_WAIT = { timeout: 10_000, interval: 50 } as const;
 
 const temporaryDirectory = async (): Promise<string> => {
   const directory = await mkdtemp(path.join(tmpdir(), "honeybee-cli-"));
@@ -28,7 +32,22 @@ const temporaryDirectory = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true })));
+  const active = [...activeCliProcesses];
+  await Promise.allSettled(
+    active.map(async (child) => {
+      const pid = child.pid;
+      if (pid === undefined) return;
+      await terminateProcessTree(pid).catch(() => {
+        child.kill("SIGKILL");
+      });
+    }),
+  );
+  activeCliProcesses.clear();
+  await Promise.all(
+    directories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 const runCli = (
@@ -57,6 +76,7 @@ const startCli = (args: readonly string[], cwd: string) => {
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  activeCliProcesses.add(child);
   const state = { stdout: "", stderr: "" };
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -65,7 +85,10 @@ const startCli = (args: readonly string[], cwd: string) => {
   const completed = new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(
     (resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (exitCode) => resolve({ ...state, exitCode }));
+      child.once("close", (exitCode) => {
+        activeCliProcesses.delete(child);
+        resolve({ ...state, exitCode });
+      });
     },
   );
   return { state, completed };
@@ -372,7 +395,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "approve", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("workflow.waiting-approval"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("workflow.waiting-approval"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect(
@@ -405,7 +431,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "cancel", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("workflow.waiting-approval"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("workflow.waiting-approval"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
 
@@ -456,7 +485,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "pause", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect((await runCli(["run", "pause", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
@@ -511,7 +543,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "pause", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect((await runCli(["run", "pause", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
@@ -591,7 +626,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "cancel", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect((await runCli(["run", "cancel", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
     const cancelled = await active.completed;
