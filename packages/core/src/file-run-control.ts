@@ -30,6 +30,8 @@ const processExists = (pid: number): boolean => {
 };
 
 const execFileAsync = promisify(execFile);
+const WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS = 15_000;
+const PROCESS_IDENTITY_ATTEMPTS = 3;
 
 interface ProcessObservation {
   readonly status: "alive" | "missing";
@@ -44,7 +46,7 @@ const readProcessIdentity = async (pid: number): Promise<string> => {
     const { stdout } = await execFileAsync(
       "powershell.exe",
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command],
-      { encoding: "utf8", timeout: 5_000, windowsHide: true },
+      { encoding: "utf8", timeout: WINDOWS_PROCESS_IDENTITY_TIMEOUT_MS, windowsHide: true },
     );
     const ticks = stdout.trim();
     if (!/^\d+$/u.test(ticks)) throw new Error("Invalid Windows process creation time.");
@@ -88,11 +90,44 @@ const observeProcess = async (pid: number): Promise<ProcessObservation> => {
   }
 };
 
+let currentProcessIdentity: string | undefined;
 let currentProcessObservation: Promise<ProcessObservation> | undefined;
+
+const observeCurrentProcess = async (): Promise<ProcessObservation> => {
+  if (currentProcessIdentity !== undefined) {
+    return { status: "alive", identity: currentProcessIdentity };
+  }
+  if (currentProcessObservation !== undefined) return currentProcessObservation;
+
+  const pending = (async (): Promise<ProcessObservation> => {
+    let lastObservation: ProcessObservation = { status: "alive" };
+    for (let attempt = 0; attempt < PROCESS_IDENTITY_ATTEMPTS; attempt += 1) {
+      lastObservation = await observeProcess(process.pid);
+      if (lastObservation.status === "missing" || lastObservation.identity !== undefined) {
+        if (lastObservation.identity !== undefined) {
+          currentProcessIdentity = lastObservation.identity;
+        }
+        return lastObservation;
+      }
+      if (attempt + 1 < PROCESS_IDENTITY_ATTEMPTS) {
+        await new Promise((resolve) => setTimeout(resolve, 100 * (attempt + 1)));
+      }
+    }
+    return lastObservation;
+  })();
+  currentProcessObservation = pending;
+  try {
+    return await pending;
+  } finally {
+    if (currentProcessIdentity === undefined && currentProcessObservation === pending) {
+      currentProcessObservation = undefined;
+    }
+  }
+};
+
 const observeLeaseProcess = (pid: number): Promise<ProcessObservation> => {
   if (pid !== process.pid) return observeProcess(pid);
-  currentProcessObservation ??= observeProcess(pid);
-  return currentProcessObservation;
+  return observeCurrentProcess();
 };
 
 interface LeaseObservation {

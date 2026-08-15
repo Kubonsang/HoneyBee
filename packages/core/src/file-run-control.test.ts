@@ -43,6 +43,25 @@ describe("FileRunControl", () => {
     await (await controls.acquire(runId)).release();
   });
 
+  it("shares a successfully observed process identity across concurrent Run leases", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
+    directories.push(root);
+    const repository = new FileRunRepository(root);
+    const controls = new FileRunControl(root);
+    const runIds = Array.from({ length: 12 }, () => RunIdSchema.parse(randomUUID()));
+    await Promise.all(runIds.map((runId) => repository.create(runId)));
+
+    const leases = await Promise.all(runIds.map((runId) => controls.acquire(runId)));
+    expect(await Promise.all(runIds.map((runId) => controls.executorPresent(runId)))).toEqual(
+      Array.from({ length: runIds.length }, () => true),
+    );
+
+    await Promise.all(leases.map((lease) => lease.release()));
+    expect(await Promise.all(runIds.map((runId) => controls.executorPresent(runId)))).toEqual(
+      Array.from({ length: runIds.length }, () => false),
+    );
+  });
+
   it("publishes complete control requests atomically and ignores private temporary files", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-control-"));
     directories.push(root);
