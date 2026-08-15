@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 3,
+  "mode": "unity-batch",
+  "resourceScope": "global-editor-pool-v2",
+  "maxParallelWorks": 3,
+  "transaction": {
+    "schemaVersion": 1,
+    "sourceProjectPath": "C:\\absolute\\UnityFixture",
+    "workspaceStorage": {
+      "command": { "command": "C:\\absolute\\unity-workspace-storage.exe" },
+      "contractCommit": "575c3b37896cd3dfa37a4705477837cc52ec6132",
+      "binarySha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "workspaceRoot": "D:\\honeybee-unity-workspaces",
+      "parentKey": {
+        "schemaVersion": 2,
+        "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+        "libraryKey": {
+          "schemaVersion": "1",
+          "digest": "0000000000000000000000000000000000000000000000000000000000000000",
+          "unityVersion": "6000.0.0f1",
+          "unityExecutableSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "manifestSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "packagesLockSha256": "missing",
+          "projectSettingsSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "buildTarget": "windows/amd64",
+          "scriptingBackend": "covered-by-project-settings-hash",
+          "projectIdentitySha256": "0000000000000000000000000000000000000000000000000000000000000000"
+        },
+        "provider": "vhdx-differencing",
+        "filesystem": "NTFS",
+        "virtualBytes": 68719476736,
+        "blockBytes": 2097152,
+        "sectorBytes": 4096
+      }
+    },
+    "agent": {
+      "command": {
+        "command": "C:\\absolute\\opencode.exe",
+        "args": ["run", "--pure"]
+      },
+      "harness": "stdio-framed-v2",
+      "timeoutMs": 600000,
+      "maxOutputBytes": 1048576
+    },
+    "testplay": {
+      "command": { "command": "C:\\absolute\\testplay.exe" },
+      "unityPath": "C:\\Program Files\\Unity\\Hub\\Editor\\6000.0.0f1\\Editor\\Unity.exe",
+      "platform": "edit_mode",
+      "timeoutMs": 600000
+    }
+  },
+  "editorPool": {
+    "id": "unity-editors",
+    "capacity": 2,
+    "registrationTimeoutMs": 30000,
+    "activationTimeoutMs": 120000,
+    "bridgeReadyTimeoutMs": 120000,
+    "capabilityTimeoutMs": 600000,
+    "shutdownTimeoutMs": 120000
+  },
+  "bridgeProtocolVersion": 3,
+  "works": [
+    {
+      "id": "work-a",
+      "task": "Implement and compile change A",
+      "priority": "interactive",
+      "capabilities": [{ "id": "compile", "kind": "compile" }]
+    },
+    {
+      "id": "work-b",
+      "task": "Implement and warm-test change B",
+      "priority": "validation",
+      "capabilities": [
+        { "id": "compile", "kind": "compile" },
+        { "id": "warm-test", "kind": "warm-test", "filter": "Smoke" }
+      ]
+    },
+    {
+      "id": "work-c",
+      "task": "Implement and warm-test change C",
+      "priority": "background",
+      "capabilities": [{ "id": "warm-test", "kind": "warm-test" }]
+    }
+  ]
+}

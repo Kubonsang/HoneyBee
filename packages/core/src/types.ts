@@ -10,6 +10,7 @@ import type {
   OrchestrationEventV2,
   OrchestrationEventV3,
   OrchestrationEventV4,
+  OrchestrationEventV5,
   PortName,
   RunId,
   StepId,
@@ -17,6 +18,7 @@ import type {
   TerminalWorkflowEventV2,
   TerminalWorkflowEventV3,
   TerminalWorkflowEventV4,
+  TerminalWorkflowEventV5,
   ControlRequest,
   WorkflowConfigV3,
   WorkflowStep,
@@ -166,7 +168,24 @@ export type JournalReplayV4 =
       message: string;
     }>;
 
-export type AnyVersionedJournalReplay = AnyJournalReplay | JournalReplayV3 | JournalReplayV4;
+export type JournalReplayV5 =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV5[];
+      terminal: TerminalWorkflowEventV5;
+    }>
+  | Readonly<{
+      status: "active";
+      events: readonly OrchestrationEventV5[];
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
+export type AnyVersionedJournalReplay =
+  AnyJournalReplay | JournalReplayV3 | JournalReplayV4 | JournalReplayV5;
 
 export interface VersionedOrchestrationJournal {
   append(runId: RunId, event: AnyOrchestrationEvent): Promise<void>;

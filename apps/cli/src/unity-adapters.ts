@@ -13,6 +13,8 @@ import {
   type ContentDigest,
   type RunId,
   type UnityWorkConfigV1,
+  type UnityCapability,
+  type WarmBridgeBindingV1,
   type UnityWorkspaceParentKey,
 } from "@honeybee/core";
 
@@ -125,7 +127,7 @@ export interface CommandResult extends AgentExitObservation {
   readonly termination: "exited" | "timed-out" | "output-limit" | "cancelled";
 }
 
-interface CommandLifecycle {
+export interface CommandLifecycle {
   readonly onStarted?: (
     pid: number,
     metadata?: Readonly<{ containment?: "deferred-v1" }>,
@@ -234,7 +236,7 @@ const internalLauncherEnvironment = (): NodeJS.ProcessEnv => {
   return environment;
 };
 
-const runCommand = (
+export const runCommand = (
   command: AgentCommand,
   args: readonly string[],
   options: Readonly<{
@@ -1125,6 +1127,10 @@ export interface TestPlayRunResult {
   readonly evidence: readonly TestPlayEvidenceFile[];
 }
 
+export interface UnityCapabilityRunResult extends TestPlayRunResult {
+  readonly capability: UnityCapability;
+}
+
 const evidenceMediaType = (name: string): TestPlayEvidenceFile["mediaType"] => {
   if (name.endsWith(".json")) return "application/json";
   if (name.endsWith(".xml")) return "application/xml";
@@ -1176,6 +1182,81 @@ export class TestPlayCliAdapter {
     const artifactRoot = await this.resolveArtifactRoot(workspacePath, before, response);
     const evidence = artifactRoot === undefined ? [] : await this.readEvidenceFiles(artifactRoot);
     return {
+      command,
+      ...(response === undefined ? {} : { response }),
+      ...(artifactRoot === undefined ? {} : { artifactRoot }),
+      evidence,
+    };
+  }
+
+  public async runCapability(
+    runId: RunId,
+    capability: UnityCapability,
+    binding: WarmBridgeBindingV1,
+    workspacePath: string,
+    timeoutMs: number,
+    signal: AbortSignal,
+    lifecycle: CommandLifecycle & Required<Pick<CommandLifecycle, "onStarted" | "onExited">>,
+  ): Promise<UnityCapabilityRunResult> {
+    const configPath = path.join(
+      workspacePath,
+      `.honeybee-capability-${runId}-${capability.id}.json`,
+    );
+    await createExclusiveFile(
+      configPath,
+      JSON.stringify({
+        schema_version: "1",
+        unity_path: this.config.unityPath,
+        project_path: workspacePath,
+        test_platform: "edit_mode",
+        timeout: { total_ms: timeoutMs },
+        result_dir: ".testplay/results",
+        retention: { max_runs: 0 },
+        bridge: { enabled: true },
+      }),
+    );
+    const before = await this.runDirectories(workspacePath);
+    const args = [
+      "capability",
+      capability.kind,
+      "--config",
+      configPath,
+      "--require-bridge-session",
+      binding.bridgeSessionId,
+      "--require-editor-pid",
+      String(binding.editorPid),
+      "--workspace-id",
+      binding.workspaceId,
+      "--no-fallback",
+    ];
+    if (capability.kind === "warm-test") {
+      if (capability.filter !== undefined) args.push("--filter", capability.filter);
+      if (capability.category !== undefined) args.push("--category", capability.category);
+    }
+    const command = await runCommand(this.config.command, args, {
+      cwd: workspacePath,
+      timeoutMs: timeoutMs + 10_000,
+      signal,
+      lifecycle,
+      environment: {
+        HONEYBEE_UNITY_PROJECT_PATH: workspacePath,
+        HONEYBEE_WORKSPACE_ID: binding.workspaceId,
+        HONEYBEE_EDITOR_PID: String(binding.editorPid),
+        HONEYBEE_BRIDGE_SESSION_ID: binding.bridgeSessionId,
+      },
+      terminateTree: true,
+      deferExecutionUntilStarted: true,
+    });
+    let response: unknown;
+    try {
+      response = parseOneJson(command.stdout, `testplay capability ${capability.kind}`);
+    } catch {
+      response = undefined;
+    }
+    const artifactRoot = await this.resolveArtifactRoot(workspacePath, before, response);
+    const evidence = artifactRoot === undefined ? [] : await this.readEvidenceFiles(artifactRoot);
+    return {
+      capability,
       command,
       ...(response === undefined ? {} : { response }),
       ...(artifactRoot === undefined ? {} : { artifactRoot }),

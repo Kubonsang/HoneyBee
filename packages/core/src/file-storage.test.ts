@@ -9,10 +9,12 @@ import {
   OrchestrationEventV2Schema,
   OrchestrationEventV1Schema,
   OrchestrationEventV3Schema,
+  OrchestrationEventV5Schema,
   RunIdSchema,
   type OrchestrationEventV1,
   type OrchestrationEventV2,
   type OrchestrationEventV3,
+  type OrchestrationEventV5,
 } from "@honeybee/orchestration-contracts";
 import { afterEach, describe, expect, it } from "vitest";
 
@@ -83,7 +85,67 @@ const eventV3 = (
     payload,
   });
 
+const eventV5 = (
+  runId: ReturnType<typeof RunIdSchema.parse>,
+  sequence: number,
+  type: OrchestrationEventV5["type"],
+  payload: unknown,
+): OrchestrationEventV5 =>
+  OrchestrationEventV5Schema.parse({
+    schemaVersion: 5,
+    eventId: EventIdSchema.parse(randomUUID()),
+    runId,
+    sequence,
+    timestamp: new Date(0).toISOString(),
+    type,
+    payload,
+  });
+
 describe("filesystem run persistence", () => {
+  it("replays a typed pre-acquire v0.6 failure conclusively and seals the terminal", async () => {
+    const root = await temporaryRoot();
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const store = new FileArtifactStore(root);
+    const config = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await store.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    const events = [
+      eventV5(runId, 1, "workflow.started", {
+        mode: "unity-work-v3",
+        config,
+        task,
+        linkage: {
+          workId: "unity-work",
+          poolId: "unity-editors",
+          priority: "validation",
+          capabilityCount: 1,
+        },
+      }),
+      eventV5(runId, 2, "artifact.stored", { artifact: config }),
+      eventV5(runId, 3, "artifact.stored", { artifact: task }),
+      eventV5(runId, 4, "workflow.failed", {
+        failure: { errorCode: "workspace.preflight-failed" },
+      }),
+    ];
+    for (const value of events) await journal.append(runId, value);
+    expect((await journal.replay(runId)).status).toBe("terminal");
+    await expect(
+      journal.append(runId, eventV5(runId, 5, "artifact.stored", { artifact: task })),
+    ).rejects.toMatchObject({ code: "journal.write-failed" });
+  });
   it("publishes identical concurrent content once without coupling Artifact ID to its path", async () => {
     const root = await temporaryRoot();
     const runId = RunIdSchema.parse(randomUUID());
