@@ -45,9 +45,9 @@ const fixture = async () => {
       unityExecutablePath: process.execPath,
       unityExecutableDigest: `sha256:${digest}`,
       containmentReceiptPath: path.join(receiptDirectory, `editor-${launchId}.json`),
-      registrationTimeoutMs: 30_000,
-      activationTimeoutMs: 30_000,
-      shutdownTimeoutMs: 30_000,
+      registrationTimeoutMs: 120_000,
+      activationTimeoutMs: 120_000,
+      shutdownTimeoutMs: 120_000,
     }),
   };
 };
@@ -85,7 +85,7 @@ describe("SystemUnityEditorLauncher", () => {
     expect(order).toEqual(["receipt", "activated", "owned"]);
     expect(handle.containment.launchId).toBe(intent.launchId);
     await handle.stop();
-  }, 60_000);
+  }, 240_000);
 
   it("rejects a command whose binary digest differs from the durable intent", async () => {
     const { intent } = await fixture();

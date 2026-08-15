@@ -18,6 +18,11 @@ import { SystemUnityProcessControl, type UnityProcessControl } from "./process-c
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
 
+const sameFileSystemPath = (left: string, right: string): boolean =>
+  process.platform === "win32"
+    ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
+    : left === right;
+
 const parentPidOf = async (pid: number): Promise<number | undefined> => {
   if (process.platform === "win32") {
     const script = `$p = Get-CimInstance Win32_Process -Filter 'ProcessId = ${pid}' -ErrorAction Stop; [Console]::Out.Write($p.ParentProcessId)`;
@@ -240,13 +245,16 @@ const messagePromise = <T>(
 
 const readReceipt = async (
   intent: EditorLaunchIntentV1,
+  validatedDirectory: string,
   expectedPid: number | undefined,
   expectedDigest: string | undefined,
   processes: UnityProcessControl,
 ): Promise<EditorContainmentReceiptV1> => {
-  const expectedDirectory = await realpath(path.dirname(intent.containmentReceiptPath));
   if (
-    path.dirname(path.resolve(intent.containmentReceiptPath)) !== path.resolve(expectedDirectory)
+    !sameFileSystemPath(
+      path.dirname(path.resolve(intent.containmentReceiptPath)),
+      path.resolve(validatedDirectory),
+    )
   ) {
     throw new HoneyBeeCoreError(
       "editor.receipt-invalid",
@@ -373,11 +381,7 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
     const root = path.resolve(this.trustedRoot);
     const components = [intent.ownerRunId, "control"];
     const expectedDirectory = path.join(root, ...components);
-    const samePath = (left: string, right: string): boolean =>
-      process.platform === "win32"
-        ? left.toLocaleLowerCase("en-US") === right.toLocaleLowerCase("en-US")
-        : left === right;
-    if (!samePath(path.resolve(receiptDirectory), expectedDirectory)) {
+    if (!sameFileSystemPath(path.resolve(receiptDirectory), expectedDirectory)) {
       throw new HoneyBeeCoreError(
         "editor.receipt-invalid",
         "Containment receipt path is outside its Run control directory.",
@@ -400,7 +404,7 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
       realpath(receiptDirectory),
     ]);
     const expectedPhysicalDirectory = path.join(physicalRoot, ...components);
-    if (!samePath(physicalDirectory, expectedPhysicalDirectory)) {
+    if (!sameFileSystemPath(physicalDirectory, expectedPhysicalDirectory)) {
       throw new HoneyBeeCoreError(
         "editor.receipt-invalid",
         "Containment receipt directory escaped the state root.",
@@ -434,7 +438,7 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
         "Editor launch command does not match the durable pinned intent.",
       );
     }
-    await this.#validateReceiptDirectory(intent);
+    const receiptDirectory = await this.#validateReceiptDirectory(intent);
     const launcherEnvironment = internalLauncherEnvironment();
     launcherEnvironment.HONEYBEE_EDITOR_LAUNCH_INTENT = Buffer.from(
       JSON.stringify(intent),
@@ -479,7 +483,13 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
         intent.registrationTimeoutMs,
         "Editor containment launcher did not publish its receipt in time.",
       );
-      const receipt = await readReceipt(intent, pid, ready.digest, this.processes);
+      const receipt = await readReceipt(
+        intent,
+        receiptDirectory,
+        pid,
+        ready.digest,
+        this.processes,
+      );
       await lifecycle.onContainmentReady(receipt);
       const editorStarted = messagePromise(child, (message) =>
         message.type === "editor-started" &&
@@ -561,7 +571,8 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
   ): Promise<EditorContainmentReceiptV1 | undefined> {
     const intent = EditorLaunchIntentV1Schema.parse(intentValue);
     try {
-      return await readReceipt(intent, undefined, undefined, this.processes);
+      const receiptDirectory = await this.#validateReceiptDirectory(intent);
+      return await readReceipt(intent, receiptDirectory, undefined, undefined, this.processes);
     } catch (error) {
       if (errorCodeFor(error) === "ENOENT") return undefined;
       throw error;
