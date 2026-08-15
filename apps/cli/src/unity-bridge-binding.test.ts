@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -32,13 +32,14 @@ describe("FileWarmBridgeBindingResolver", () => {
     const now = new Date();
     const editorId = randomUUID();
     const workspaceId = "hb-work";
+    const canonicalProjectPath = await realpath(projectPath);
     let identity: string | undefined = "win32:one";
     await writeFile(
       path.join(projectPath, ".testplay", "bridge", "handshake.json"),
       JSON.stringify({
         editor_pid: 42,
         workspace_id: workspaceId,
-        project_path_real: projectPath,
+        project_path_real: canonicalProjectPath,
         bridge_session_id: "session-1",
         bridge_protocol_version: 3,
         editor_state: "idle",

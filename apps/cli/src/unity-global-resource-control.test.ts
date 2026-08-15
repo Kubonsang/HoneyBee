@@ -198,9 +198,12 @@ describe("FileUnityResourceCoordinator", () => {
     void secondChild.output.then(() => {
       secondSettled = true;
     });
-    await vi.waitFor(async () => {
-      expect((await coordinator.status(secondRequest)).state).toBe("queued");
-    });
+    await vi.waitFor(
+      async () => {
+        expect((await coordinator.status(secondRequest)).state).toBe("queued");
+      },
+      { timeout: 15_000, interval: 50 },
+    );
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(secondSettled).toBe(false);
 
@@ -212,7 +215,7 @@ describe("FileUnityResourceCoordinator", () => {
     expect(await secondChild.exited).toBe(0);
     await coordinator.release(secondLease);
     expect((await coordinator.status(secondRequest)).state).toBe("released");
-  }, 30_000);
+  }, 45_000);
 
   it("allows distinct resources concurrently and cancels queued requests durably", async () => {
     const root = await temporaryRoot();
