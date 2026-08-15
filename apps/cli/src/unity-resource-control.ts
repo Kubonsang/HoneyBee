@@ -15,6 +15,8 @@ export interface UnityResourceRequest {
   readonly ownerRunId: RunId;
 }
 
+export type UnityResourceLocator = Pick<UnityResourceRequest, "resourceId" | "requestId">;
+
 export interface UnityResourceTicket extends UnityResourceRequest {
   readonly ticket: number;
 }
@@ -32,12 +34,9 @@ export type UnityResourceStatus =
 
 export interface UnityResourceCoordinator {
   enqueue(request: UnityResourceRequest): Promise<UnityResourceTicket>;
-  acquire(
-    requestId: UnityResourceRequest["requestId"],
-    signal?: AbortSignal,
-  ): Promise<UnityResourceLease>;
-  status(requestId: UnityResourceRequest["requestId"]): Promise<UnityResourceStatus>;
-  cancel(requestId: UnityResourceRequest["requestId"]): Promise<void>;
+  acquire(locator: UnityResourceLocator, signal?: AbortSignal): Promise<UnityResourceLease>;
+  status(locator: UnityResourceLocator): Promise<UnityResourceStatus>;
+  cancel(locator: UnityResourceLocator): Promise<void>;
   release(lease: UnityResourceLease): Promise<void>;
 }
 
@@ -99,17 +98,30 @@ export class BatchLocalUnityResourceCoordinator implements UnityResourceCoordina
   }
 
   public async acquire(
-    requestIdValue: UnityResourceRequest["requestId"],
+    locatorValue: UnityResourceLocator,
     signal?: AbortSignal,
   ): Promise<UnityResourceLease> {
-    const requestId = EventIdSchema.parse(requestIdValue);
+    const resourceId = ResourceIdSchema.parse(locatorValue.resourceId);
+    const requestId = EventIdSchema.parse(locatorValue.requestId);
     const current = this.#requests.get(requestId);
+    const identity =
+      current?.state === "queued" || current?.state === "cancelled"
+        ? current.ticket
+        : current?.state === "active" || current?.state === "released"
+          ? current.lease
+          : undefined;
+    if (identity !== undefined && identity.resourceId !== resourceId) {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Resource locator does not match its request.",
+      );
+    }
     if (current?.state === "active") return current.lease;
     if (current?.state !== "queued") {
       throw new HoneyBeeCoreError("validation.invalid-workflow", "Resource request is not queued.");
     }
     if (signal?.aborted === true) {
-      await this.cancel(requestId);
+      await this.cancel({ resourceId, requestId });
       throw new HoneyBeeCoreError("agent.cancelled", "Resource wait was cancelled.");
     }
     const state = this.#state(current.ticket.resourceId);
@@ -124,7 +136,7 @@ export class BatchLocalUnityResourceCoordinator implements UnityResourceCoordina
       waiter.reject = reject;
       if (signal !== undefined) {
         const abort = () => {
-          void this.cancel(requestId).catch(reject);
+          void this.cancel({ resourceId, requestId }).catch(reject);
         };
         waiter.signal = signal;
         waiter.abort = abort;
@@ -134,17 +146,35 @@ export class BatchLocalUnityResourceCoordinator implements UnityResourceCoordina
     });
   }
 
-  public async status(
-    requestIdValue: UnityResourceRequest["requestId"],
-  ): Promise<UnityResourceStatus> {
-    return this.#requests.get(EventIdSchema.parse(requestIdValue)) ?? { state: "missing" };
+  public async status(locatorValue: UnityResourceLocator): Promise<UnityResourceStatus> {
+    const resourceId = ResourceIdSchema.parse(locatorValue.resourceId);
+    const observation =
+      this.#requests.get(EventIdSchema.parse(locatorValue.requestId)) ??
+      ({ state: "missing" } as const);
+    const identity =
+      observation.state === "queued" || observation.state === "cancelled"
+        ? observation.ticket
+        : observation.state === "active" || observation.state === "released"
+          ? observation.lease
+          : undefined;
+    return identity !== undefined && identity.resourceId !== resourceId
+      ? { state: "missing" }
+      : observation;
   }
 
-  public async cancel(requestIdValue: UnityResourceRequest["requestId"]): Promise<void> {
-    const requestId = EventIdSchema.parse(requestIdValue);
+  public async cancel(locatorValue: UnityResourceLocator): Promise<void> {
+    const resourceId = ResourceIdSchema.parse(locatorValue.resourceId);
+    const requestId = EventIdSchema.parse(locatorValue.requestId);
     const current = this.#requests.get(requestId);
     if (current === undefined || current.state === "missing" || current.state === "cancelled")
       return;
+    const identity = current.state === "queued" ? current.ticket : current.lease;
+    if (identity.resourceId !== resourceId) {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Resource locator does not match its request.",
+      );
+    }
     if (current.state === "active") {
       throw new HoneyBeeCoreError(
         "validation.invalid-workflow",

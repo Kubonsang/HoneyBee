@@ -513,7 +513,8 @@ describe("UnityWorkTransaction cleanup resume", () => {
         requestId,
         ticket: ticket.ticket,
       });
-      const lease = acquireGlobally ? await coordinator.acquire(requestId) : undefined;
+      const locator = { resourceId, requestId };
+      const lease = acquireGlobally ? await coordinator.acquire(locator) : undefined;
       if (recordChildAcquire && lease !== undefined) {
         await seeded.append("resource.acquired", {
           resourceId,
@@ -551,7 +552,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
       expect(result.status).toBe("failed");
       expect(result.failure?.errorCode).toBe("transaction.interrupted");
       expect(storage.released).toBe(true);
-      expect((await coordinator.status(requestId)).state).toBe(expectedGlobal);
+      expect((await coordinator.status(locator)).state).toBe(expectedGlobal);
       const replay = await seeded.journal.replay(seeded.runId);
       expect(replay.status).toBe("terminal");
       if (replay.status === "terminal") {

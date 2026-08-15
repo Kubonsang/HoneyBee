@@ -40,7 +40,7 @@ const acquireInChild = async (
     "const request = JSON.parse(process.argv[2]);",
     "const coordinator = new FileUnityResourceCoordinator(root);",
     "await coordinator.enqueue(request);",
-    "const lease = await coordinator.acquire(request.requestId);",
+    "const lease = await coordinator.acquire(request);",
     "process.stdout.write(JSON.stringify(lease) + '\\n');",
   ].join("\n");
   const child = spawn(
@@ -85,7 +85,7 @@ describe("FileUnityResourceCoordinator", () => {
       ReturnType<FileUnityResourceCoordinator["acquire"]>
     >;
     expect(await firstChild.exited).toBe(0);
-    expect(await coordinator.status(firstRequest.requestId)).toEqual({
+    expect(await coordinator.status(firstRequest)).toEqual({
       state: "active",
       lease: firstLease,
     });
@@ -96,7 +96,7 @@ describe("FileUnityResourceCoordinator", () => {
       secondSettled = true;
     });
     await vi.waitFor(async () => {
-      expect((await coordinator.status(secondRequest.requestId)).state).toBe("queued");
+      expect((await coordinator.status(secondRequest)).state).toBe("queued");
     });
     await new Promise((resolve) => setTimeout(resolve, 150));
     expect(secondSettled).toBe(false);
@@ -108,7 +108,7 @@ describe("FileUnityResourceCoordinator", () => {
     expect(secondLease.ticket).toBe(2);
     expect(await secondChild.exited).toBe(0);
     await coordinator.release(secondLease);
-    expect((await coordinator.status(secondRequest.requestId)).state).toBe("released");
+    expect((await coordinator.status(secondRequest)).state).toBe("released");
   }, 30_000);
 
   it("allows distinct resources concurrently and cancels queued requests durably", async () => {
@@ -121,12 +121,12 @@ describe("FileUnityResourceCoordinator", () => {
     await Promise.all([first.enqueue(editor), second.enqueue(license), second.enqueue(waiting)]);
 
     const [editorLease, licenseLease] = await Promise.all([
-      first.acquire(editor.requestId),
-      second.acquire(license.requestId),
+      first.acquire(editor),
+      second.acquire(license),
     ]);
-    await second.cancel(waiting.requestId);
-    expect(await first.status(waiting.requestId)).toMatchObject({ state: "cancelled" });
-    await expect(first.acquire(waiting.requestId)).rejects.toMatchObject({
+    await second.cancel(waiting);
+    expect(await first.status(waiting)).toMatchObject({ state: "cancelled" });
+    await expect(first.acquire(waiting)).rejects.toMatchObject({
       code: "agent.cancelled",
     });
     await Promise.all([second.release(editorLease), first.release(licenseLease)]);
@@ -140,14 +140,10 @@ describe("FileUnityResourceCoordinator", () => {
     await expect(
       coordinator.enqueue({ ...original, ownerRunId: RunIdSchema.parse(randomUUID()) }),
     ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
-    await expect(
-      coordinator.enqueue({ ...original, resourceId: ResourceIdSchema.parse("unity-license") }),
-    ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
-
     const events = path.join(root, ".unity-resources", "v1", "unity-editor", "events");
     await mkdir(events, { recursive: true });
     await writeFile(path.join(events, "00000000000000000003.json"), "{}\n", "utf8");
-    await expect(coordinator.status(original.requestId)).rejects.toMatchObject({
+    await expect(coordinator.status(original)).rejects.toMatchObject({
       code: "run.indeterminate",
     });
   });

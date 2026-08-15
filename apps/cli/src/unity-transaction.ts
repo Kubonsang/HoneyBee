@@ -1405,7 +1405,8 @@ export class UnityWorkTransaction {
         requestId: ticket.requestId,
         ticket: ticket.ticket,
       });
-      const lease = await execution.resources.acquire(requestId, signal);
+      const locator = { resourceId: execution.resourceId, requestId };
+      const lease = await execution.resources.acquire(locator, signal);
       await writer.emit("resource.acquired", {
         resourceId: lease.resourceId,
         requestId: lease.requestId,
@@ -1414,9 +1415,10 @@ export class UnityWorkTransaction {
       });
       return lease;
     } catch (error) {
-      const observation = await execution.resources.status(requestId);
+      const locator = { resourceId: execution.resourceId, requestId };
+      const observation = await execution.resources.status(locator);
       if (observation.state === "queued") {
-        await execution.resources.cancel(requestId);
+        await execution.resources.cancel(locator);
       } else if (observation.state === "active") {
         await execution.resources.release(observation.lease);
       }
@@ -1460,7 +1462,11 @@ export class UnityWorkTransaction {
     if (acquired === undefined) {
       if (execution.resourceScope === "global-file-v1") {
         const queued = lastEvent(events, "resource.queued");
-        const observation = await execution.resources.status(started.payload.requestId);
+        const locator = {
+          resourceId: started.payload.resourceId,
+          requestId: started.payload.requestId,
+        };
+        const observation = await execution.resources.status(locator);
         const observedIdentity =
           observation.state === "queued" || observation.state === "cancelled"
             ? observation.ticket
@@ -1481,7 +1487,7 @@ export class UnityWorkTransaction {
           );
         }
         if (observation.state === "queued") {
-          await execution.resources.cancel(started.payload.requestId);
+          await execution.resources.cancel(locator);
         } else if (observation.state === "active") {
           await execution.resources.release(observation.lease);
         }
@@ -1507,7 +1513,10 @@ export class UnityWorkTransaction {
       await writer.emit("resource.release-started", payload);
     }
     if (execution.resourceScope === "global-file-v1") {
-      const observation = await execution.resources.status(acquired.payload.requestId);
+      const observation = await execution.resources.status({
+        resourceId: acquired.payload.resourceId,
+        requestId: acquired.payload.requestId,
+      });
       const expected = {
         ...payload,
         ownerRunId: events[0]?.runId,
