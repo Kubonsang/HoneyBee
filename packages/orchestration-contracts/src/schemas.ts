@@ -796,74 +796,126 @@ export const UnityWorkConfigV1Schema = z
   });
 export type UnityWorkConfigV1 = z.infer<typeof UnityWorkConfigV1Schema>;
 
+const UnityBatchResourcesSchema = z
+  .array(
+    z
+      .object({
+        id: ResourceIdSchema,
+        capacity: z.literal(1),
+      })
+      .strict(),
+  )
+  .min(1);
+const UnityBatchWorksSchema = z
+  .array(
+    z
+      .object({
+        id: StepIdSchema,
+        task: z.string().trim().min(1),
+        resourceRef: ResourceIdSchema,
+      })
+      .strict(),
+  )
+  .min(2);
+const validateUnityBatchConfig = (
+  config: Readonly<{
+    maxParallelWorks: number;
+    resources: readonly { id: ResourceId }[];
+    works: readonly { id: StepId; resourceRef: ResourceId }[];
+  }>,
+  context: z.RefinementCtx,
+): void => {
+  if (config.maxParallelWorks > config.works.length) {
+    context.addIssue({
+      code: "custom",
+      path: ["maxParallelWorks"],
+      message: "maxParallelWorks cannot exceed the number of Works.",
+    });
+  }
+  const resources = new Set<string>();
+  for (const [index, resource] of config.resources.entries()) {
+    if (resources.has(resource.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["resources", index, "id"],
+        message: `Duplicate resource id: ${resource.id}`,
+      });
+    }
+    resources.add(resource.id);
+  }
+  const works = new Set<string>();
+  for (const [index, work] of config.works.entries()) {
+    if (works.has(work.id)) {
+      context.addIssue({
+        code: "custom",
+        path: ["works", index, "id"],
+        message: `Duplicate Work id: ${work.id}`,
+      });
+    }
+    works.add(work.id);
+    if (!resources.has(work.resourceRef)) {
+      context.addIssue({
+        code: "custom",
+        path: ["works", index, "resourceRef"],
+        message: `Unknown resource reference: ${work.resourceRef}`,
+      });
+    }
+  }
+};
+
 export const UnityBatchConfigV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     mode: z.literal("unity-batch"),
     maxParallelWorks: z.number().int().positive(),
     transaction: UnityWorkConfigV1Schema,
-    resources: z
-      .array(
-        z
-          .object({
-            id: ResourceIdSchema,
-            capacity: z.literal(1),
-          })
-          .strict(),
-      )
-      .min(1),
-    works: z
-      .array(
-        z
-          .object({
-            id: StepIdSchema,
-            task: z.string().trim().min(1),
-            resourceRef: ResourceIdSchema,
-          })
-          .strict(),
-      )
-      .min(2),
+    resources: UnityBatchResourcesSchema,
+    works: UnityBatchWorksSchema,
   })
   .strict()
-  .superRefine((config, context) => {
-    if (config.maxParallelWorks > config.works.length) {
-      context.addIssue({
-        code: "custom",
-        path: ["maxParallelWorks"],
-        message: "maxParallelWorks cannot exceed the number of Works.",
-      });
-    }
-    const resources = new Set<string>();
-    for (const [index, resource] of config.resources.entries()) {
-      if (resources.has(resource.id)) {
-        context.addIssue({
-          code: "custom",
-          path: ["resources", index, "id"],
-          message: `Duplicate resource id: ${resource.id}`,
-        });
-      }
-      resources.add(resource.id);
-    }
-    const works = new Set<string>();
-    for (const [index, work] of config.works.entries()) {
-      if (works.has(work.id)) {
-        context.addIssue({
-          code: "custom",
-          path: ["works", index, "id"],
-          message: `Duplicate Work id: ${work.id}`,
-        });
-      }
-      works.add(work.id);
-      if (!resources.has(work.resourceRef)) {
-        context.addIssue({
-          code: "custom",
-          path: ["works", index, "resourceRef"],
-          message: `Unknown resource reference: ${work.resourceRef}`,
-        });
-      }
-    }
-  });
+  .superRefine(validateUnityBatchConfig);
 export type UnityBatchConfigV1 = z.infer<typeof UnityBatchConfigV1Schema>;
+
+export const UnityBatchConfigV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    mode: z.literal("unity-batch"),
+    resourceScope: z.literal("global-file-v1"),
+    maxParallelWorks: z.number().int().positive(),
+    transaction: UnityWorkConfigV1Schema,
+    resources: UnityBatchResourcesSchema,
+    works: UnityBatchWorksSchema,
+  })
+  .strict()
+  .superRefine(validateUnityBatchConfig);
+export type UnityBatchConfigV2 = z.infer<typeof UnityBatchConfigV2Schema>;
+export const UnityBatchConfigSchema = z.discriminatedUnion("schemaVersion", [
+  UnityBatchConfigV1Schema,
+  UnityBatchConfigV2Schema,
+]);
+export type UnityBatchConfig = z.infer<typeof UnityBatchConfigSchema>;
+
+const UnityGlobalResourceEventBaseSchema = z.object({
+  schemaVersion: z.literal(1),
+  eventId: EventIdSchema,
+  sequence: z.number().int().positive(),
+  timestamp: z.string().datetime(),
+  resourceId: ResourceIdSchema,
+  requestId: EventIdSchema,
+  ownerRunId: RunIdSchema,
+  ticket: z.number().int().positive(),
+});
+const unityGlobalResourceEvent = <Type extends string, Payload extends z.ZodRawShape>(
+  type: Type,
+  payload: Payload,
+) => UnityGlobalResourceEventBaseSchema.extend({ type: z.literal(type), ...payload }).strict();
+export const UnityGlobalResourceEventV1Schema = z.discriminatedUnion("type", [
+  unityGlobalResourceEvent("resource.queued", {}),
+  unityGlobalResourceEvent("resource.acquired", { leaseId: EventIdSchema }),
+  unityGlobalResourceEvent("resource.cancelled", {}),
+  unityGlobalResourceEvent("resource.released", { leaseId: EventIdSchema }),
+]);
+export type UnityGlobalResourceEventV1 = z.infer<typeof UnityGlobalResourceEventV1Schema>;
 
 const UnityPatchContentRefSchema = ArtifactRefSchema.superRefine((artifact, context) => {
   if (artifact.kind !== "unity-patch-content") {
@@ -1538,7 +1590,7 @@ const UnityWorkLinkageSchema = z
     parentRunId: RunIdSchema,
     workId: StepIdSchema,
     resourceId: ResourceIdSchema,
-    resourceScope: z.literal("batch-local-v1"),
+    resourceScope: z.enum(["batch-local-v1", "global-file-v1"]),
   })
   .strict();
 
@@ -1569,7 +1621,7 @@ export const OrchestrationEventV4Schema = z
             config: ArtifactRefSchema,
             workCount: z.number().int().positive(),
             maxParallelWorks: z.number().int().positive(),
-            resourceScope: z.literal("batch-local-v1"),
+            resourceScope: z.enum(["batch-local-v1", "global-file-v1"]),
           })
           .strict(),
       ]),

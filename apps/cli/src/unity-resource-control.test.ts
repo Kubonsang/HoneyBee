@@ -23,15 +23,15 @@ describe("BatchLocalUnityResourceCoordinator", () => {
       coordinator.enqueue(independent),
     ]);
 
-    const firstLease = await coordinator.acquire(first.requestId);
-    const independentLease = await coordinator.acquire(independent.requestId);
+    const firstLease = await coordinator.acquire(first);
+    const independentLease = await coordinator.acquire(independent);
     expect(firstTicket.ticket).toBe(1);
     expect(secondTicket.ticket).toBe(2);
     expect(independentTicket.ticket).toBe(1);
-    expect((await coordinator.status(second.requestId)).state).toBe("queued");
+    expect((await coordinator.status(second)).state).toBe("queued");
 
     let secondGranted = false;
-    const secondLeasePromise = coordinator.acquire(second.requestId).then((lease) => {
+    const secondLeasePromise = coordinator.acquire(second).then((lease) => {
       secondGranted = true;
       return lease;
     });
@@ -43,7 +43,7 @@ describe("BatchLocalUnityResourceCoordinator", () => {
 
     await coordinator.release(secondLease);
     await coordinator.release(independentLease);
-    expect((await coordinator.status(second.requestId)).state).toBe("released");
+    expect((await coordinator.status(second)).state).toBe("released");
   });
 
   it("cancels a queued request without disturbing the active lease", async () => {
@@ -52,13 +52,13 @@ describe("BatchLocalUnityResourceCoordinator", () => {
     const second = request("unity-editor");
     await coordinator.enqueue(first);
     await coordinator.enqueue(second);
-    const lease = await coordinator.acquire(first.requestId);
+    const lease = await coordinator.acquire(first);
 
-    const waiting = coordinator.acquire(second.requestId);
-    await coordinator.cancel(second.requestId);
-    expect((await coordinator.status(second.requestId)).state).toBe("cancelled");
+    const waiting = coordinator.acquire(second);
+    await coordinator.cancel(second);
+    expect((await coordinator.status(second)).state).toBe("cancelled");
     await expect(waiting).rejects.toMatchObject({ code: "agent.cancelled" });
-    await expect(coordinator.acquire(second.requestId)).rejects.toMatchObject({
+    await expect(coordinator.acquire(second)).rejects.toMatchObject({
       code: "validation.invalid-workflow",
     });
     await coordinator.release(lease);
@@ -71,6 +71,9 @@ describe("BatchLocalUnityResourceCoordinator", () => {
 
     await expect(
       coordinator.enqueue({ ...original, ownerRunId: RunIdSchema.parse(randomUUID()) }),
+    ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
+    await expect(
+      coordinator.acquire({ ...original, resourceId: ResourceIdSchema.parse("unity-license") }),
     ).rejects.toMatchObject({ code: "validation.invalid-workflow" });
   });
 });

@@ -75,7 +75,7 @@ export interface UnityWorkV4Execution {
   readonly parentRunId: RunId;
   readonly workId: StepId;
   readonly resourceId: ResourceId;
-  readonly resourceScope: "batch-local-v1";
+  readonly resourceScope: "batch-local-v1" | "global-file-v1";
   readonly resources: UnityResourceCoordinator;
   readonly patchBuilder: UnityPatchBuilder;
 }
@@ -660,7 +660,7 @@ export class UnityWorkTransaction {
     }
     if (execution !== undefined) {
       try {
-        await this.#recoverBatchLocalResource(events, writer);
+        await this.#recoverResource(events, writer, execution);
       } catch (error) {
         return {
           runId,
@@ -1405,7 +1405,8 @@ export class UnityWorkTransaction {
         requestId: ticket.requestId,
         ticket: ticket.ticket,
       });
-      const lease = await execution.resources.acquire(requestId, signal);
+      const locator = { resourceId: execution.resourceId, requestId };
+      const lease = await execution.resources.acquire(locator, signal);
       await writer.emit("resource.acquired", {
         resourceId: lease.resourceId,
         requestId: lease.requestId,
@@ -1414,9 +1415,10 @@ export class UnityWorkTransaction {
       });
       return lease;
     } catch (error) {
-      const observation = await execution.resources.status(requestId);
+      const locator = { resourceId: execution.resourceId, requestId };
+      const observation = await execution.resources.status(locator);
       if (observation.state === "queued") {
-        await execution.resources.cancel(requestId);
+        await execution.resources.cancel(locator);
       } else if (observation.state === "active") {
         await execution.resources.release(observation.lease);
       }
@@ -1442,9 +1444,10 @@ export class UnityWorkTransaction {
     }
   }
 
-  async #recoverBatchLocalResource(
+  async #recoverResource(
     events: readonly UnityEvent[],
     writer: UnityEventWriter,
+    execution: UnityWorkV4Execution,
   ): Promise<void> {
     const started = lastEvent(events, "resource.acquire-started");
     if (started === undefined) return;
@@ -1457,6 +1460,38 @@ export class UnityWorkTransaction {
     }
     const acquired = lastEvent(events, "resource.acquired");
     if (acquired === undefined) {
+      if (execution.resourceScope === "global-file-v1") {
+        const queued = lastEvent(events, "resource.queued");
+        const locator = {
+          resourceId: started.payload.resourceId,
+          requestId: started.payload.requestId,
+        };
+        const observation = await execution.resources.status(locator);
+        const observedIdentity =
+          observation.state === "queued" || observation.state === "cancelled"
+            ? observation.ticket
+            : observation.state === "active" || observation.state === "released"
+              ? observation.lease
+              : undefined;
+        if (
+          (observation.state === "missing" && queued !== undefined) ||
+          (observedIdentity !== undefined &&
+            (observedIdentity.resourceId !== started.payload.resourceId ||
+              observedIdentity.requestId !== started.payload.requestId ||
+              observedIdentity.ownerRunId !== events[0]?.runId ||
+              (queued !== undefined && observedIdentity.ticket !== queued.payload.ticket)))
+        ) {
+          throw new HoneyBeeCoreError(
+            "resource.release-failed",
+            "Recovered global resource history does not match the child Journal.",
+          );
+        }
+        if (observation.state === "queued") {
+          await execution.resources.cancel(locator);
+        } else if (observation.state === "active") {
+          await execution.resources.release(observation.lease);
+        }
+      }
       await writer.emit("resource.acquire-cancelled", {
         resourceId: started.payload.resourceId,
         requestId: started.payload.requestId,
@@ -1476,6 +1511,32 @@ export class UnityWorkTransaction {
       (releaseFailed !== undefined && releaseFailed.sequence > releaseStarted.sequence)
     ) {
       await writer.emit("resource.release-started", payload);
+    }
+    if (execution.resourceScope === "global-file-v1") {
+      const observation = await execution.resources.status({
+        resourceId: acquired.payload.resourceId,
+        requestId: acquired.payload.requestId,
+      });
+      const expected = {
+        ...payload,
+        ownerRunId: events[0]?.runId,
+      };
+      const matches =
+        (observation.state === "active" || observation.state === "released") &&
+        observation.lease.resourceId === expected.resourceId &&
+        observation.lease.requestId === expected.requestId &&
+        observation.lease.ownerRunId === expected.ownerRunId &&
+        observation.lease.ticket === expected.ticket &&
+        observation.lease.leaseId === expected.leaseId;
+      if (!matches) {
+        throw new HoneyBeeCoreError(
+          "resource.release-failed",
+          "Recovered global resource lease does not match the child Journal.",
+        );
+      }
+      if (observation.state === "active") {
+        await execution.resources.release(observation.lease);
+      }
     }
     await writer.emit("resource.released", payload);
   }

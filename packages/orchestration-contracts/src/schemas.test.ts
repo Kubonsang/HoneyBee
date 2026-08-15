@@ -12,6 +12,9 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityPatchManifestV1Schema,
+  UnityBatchConfigV1Schema,
+  UnityBatchConfigV2Schema,
+  UnityGlobalResourceEventV1Schema,
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
   type ArtifactKind,
@@ -366,5 +369,105 @@ describe("orchestration contracts", () => {
         },
       }).success,
     ).toBe(true);
+    expect(
+      OrchestrationEventV4Schema.safeParse({
+        ...base,
+        payload: {
+          mode: "unity-work-v2",
+          config: artifactOf("workflow-config", "application/json"),
+          task: artifactOf("task", "text/plain; charset=utf-8"),
+          linkage: {
+            parentRunId: randomUUID(),
+            workId: "work-a",
+            resourceId: "unity-editor",
+            resourceScope: "global-file-v1",
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("keeps batch v1 local and makes global coordination explicit in strict batch v2", () => {
+    const transaction = {
+      schemaVersion: 1,
+      sourceProjectPath: "C:\\source",
+      workspaceStorage: {
+        command: { command: "storage" },
+        contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+        binarySha256: "b".repeat(64),
+        workspaceRoot: "C:\\workspaces",
+        parentKey: {
+          schemaVersion: 2,
+          digest: "c".repeat(64),
+          libraryKey: {
+            schemaVersion: "1",
+            digest: "d".repeat(64),
+            unityVersion: "6000",
+            unityExecutableSha256: "e".repeat(64),
+            manifestSha256: "f".repeat(64),
+            packagesLockSha256: "missing",
+            projectSettingsSha256: "0".repeat(64),
+            buildTarget: "windows/amd64",
+            scriptingBackend: "Mono",
+            projectIdentitySha256: "1".repeat(64),
+          },
+          provider: "vhdx-differencing",
+          filesystem: "NTFS",
+          virtualBytes: 1024,
+          blockBytes: 512,
+          sectorBytes: 512,
+        },
+      },
+      agent: { command: { command: "agent" }, harness: "stdio-framed-v2" },
+      testplay: {
+        command: { command: "testplay" },
+        unityPath: "C:\\Unity.exe",
+        platform: "edit_mode",
+        timeoutMs: 1000,
+      },
+    } as const;
+    const common = {
+      mode: "unity-batch",
+      maxParallelWorks: 2,
+      transaction,
+      resources: [{ id: "unity-editor", capacity: 1 }],
+      works: [
+        { id: "work-a", task: "A", resourceRef: "unity-editor" },
+        { id: "work-b", task: "B", resourceRef: "unity-editor" },
+      ],
+    } as const;
+    expect(UnityBatchConfigV1Schema.safeParse({ schemaVersion: 1, ...common }).success).toBe(true);
+    expect(
+      UnityBatchConfigV2Schema.safeParse({
+        schemaVersion: 2,
+        resourceScope: "global-file-v1",
+        ...common,
+      }).success,
+    ).toBe(true);
+    expect(UnityBatchConfigV2Schema.safeParse({ schemaVersion: 2, ...common }).success).toBe(false);
+    expect(
+      UnityBatchConfigV2Schema.safeParse({
+        schemaVersion: 2,
+        resourceScope: "global-file-v1",
+        typo: true,
+        ...common,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("strictly validates immutable global resource events", () => {
+    const value = {
+      schemaVersion: 1,
+      eventId: randomUUID(),
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: "resource.queued",
+      resourceId: "unity-editor",
+      requestId: randomUUID(),
+      ownerRunId: randomUUID(),
+      ticket: 1,
+    } as const;
+    expect(UnityGlobalResourceEventV1Schema.safeParse(value).success).toBe(true);
+    expect(UnityGlobalResourceEventV1Schema.safeParse({ ...value, pid: 123 }).success).toBe(false);
   });
 });

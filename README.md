@@ -2,7 +2,7 @@
 
 HoneyBee is a CLI-first orchestration kernel for durable Agent work and isolated Unity validation.
 
-Version 0.4 adds one deliberately sequential Unity work transaction while preserving the v0.3 DAG kernel:
+Version 0.5 runs isolated Unity Work Transactions in parallel while durable capacity-1 resource leases serialize TestPlay across HoneyBee processes that share one state root. The v0.4 sequential transaction and v0.3 DAG kernel remain compatible.
 
 ```text
 prepare → acquire → one Agent → TestPlay → Evidence → release → residual 0
@@ -65,9 +65,9 @@ corepack pnpm exec vitest run apps/cli/src/unity-real.e2e.test.ts
 
 The gated test requires the transaction source configured for the fixture to be disposable and the broker store to be isolated; it asserts the terminal event order and all four child/pending/quarantine residual counters are zero.
 
-## Unity parallel batch v0.5 development
+## Unity parallel batch v0.5
 
-PR 1 of the v0.5 work adds a process-local parallel batch without changing the accepted v0.4 transaction:
+The batch command does not change the accepted v0.4 transaction:
 
 ```powershell
 corepack pnpm honeybee unity batch run --config unity-batch.json --json
@@ -76,11 +76,15 @@ corepack pnpm honeybee run cancel <parent-run-id>
 corepack pnpm honeybee run resume <parent-run-id>
 ```
 
-Start from [the batch config example](examples/unity-batch.v1.example.json). Every Work receives a separate child Run, physical shell, and storage lease. Agent phases run up to `maxParallelWorks`; Works sharing a capacity-1 resource use a FIFO lease around TestPlay only. Parent and child lifecycle events use Journal schema v4, while the v0.4 single transaction remains on schema v3.
+Start from [the global batch config example](examples/unity-batch.v2.example.json). Every Work receives a separate child Run, physical shell, and storage lease. Agent phases run up to `maxParallelWorks`; Works sharing a capacity-1 resource use a FIFO lease around TestPlay only. Parent and child lifecycle events use Journal schema v4, while the v0.4 single transaction remains on schema v3.
+
+Batch config schema 2 requires `resourceScope: "global-file-v1"`. Resource queue events are immutable files under `<state-root>/.unity-resources/v1/<resource-id>/events`, protected by short cross-process metadata leases. FIFO order and the active lease therefore survive a HoneyBee process exit. An active resource lease is never stolen merely because its owner process disappeared: parent `run resume` first drains any recorded Agent/TestPlay process tree, then explicitly releases or cancels the matching durable resource identity before workspace cleanup. A missing or mismatched global history leaves the child and parent `cleanup-pending`.
+
+Batch config schema 1 remains accepted with its original process-local queue for compatibility; [the v1 example](examples/unity-batch.v1.example.json) does not coordinate with another HoneyBee process. Global coordination is limited to processes on one host that use the same HoneyBee state root. The resource event journal is operational coordination state, not workflow authority; child and parent JSONL Journals remain authoritative for Run outcomes.
 
 A completed child stores a `unity-verified-patch` manifest before workspace release. Added and modified file bodies are separate `unity-patch-content` binary Artifacts in the existing content-addressed store; the manifest contains only Artifact references and delete metadata. HoneyBee verifies the patch against a clean source copy, and the original project remains unchanged.
 
-This first slice is deliberately process-local. Cross-process/global resource durability is PR 2. Git Worktree integration, distributed scheduling, GUI, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md).
+Git Worktree integration, distributed scheduling, GUI, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md) and [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md).
 
 ## Workflow config v3
 
@@ -195,7 +199,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-HoneyBee remains a local CLI kernel. v0.5 development permits process-local parallel Unity batches, but cross-process/global resource durability, Git Worktree integration, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, warm-editor bridge integration, and TestPlay shadow/scenario orchestration are out of scope for PR 1. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), and [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md).
+HoneyBee remains a local CLI kernel. v0.5 permits parallel Unity batches and same-host, same-state-root resource coordination, but Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, warm-editor bridge integration, and TestPlay shadow/scenario orchestration are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), and [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md).
 
 ## License
 

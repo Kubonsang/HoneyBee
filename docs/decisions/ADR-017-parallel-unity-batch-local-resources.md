@@ -2,7 +2,7 @@
 
 ## 상태
 
-Proposed for HoneyBee v0.5 PR 1. Cross-process/global resource durability is deferred to PR 2.
+Accepted for HoneyBee v0.5 PR 1. Cross-process/global resource durability is specified separately by ADR-018.
 
 ## 배경
 

@@ -9,12 +9,12 @@ import {
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
   UnityWorkConfigV1Schema,
-  UnityBatchConfigV1Schema,
+  UnityBatchConfigSchema,
   type AgentCommand,
   type AgentDefinition,
   type WorkflowConfigV3,
   type UnityWorkConfigV1,
-  type UnityBatchConfigV1,
+  type UnityBatchConfig,
 } from "@honeybee/orchestration-contracts";
 
 import { physicalPathsOverlap } from "./path-safety.js";
@@ -273,14 +273,14 @@ export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWork
   return normalizeUnityWorkConfig(original.data, path.dirname(absolutePath));
 };
 
-export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBatchConfigV1> => {
+export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBatchConfig> => {
   const absolutePath = path.resolve(configPath);
   const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
-  const original = UnityBatchConfigV1Schema.safeParse(parsed);
+  const original = UnityBatchConfigSchema.safeParse(parsed);
   if (!original.success) {
-    throw new Error("Invalid Unity batch schemaVersion 1 config: " + original.error.message);
+    throw new Error("Invalid Unity batch schemaVersion 1 or 2 config: " + original.error.message);
   }
-  return UnityBatchConfigV1Schema.parse({
+  return UnityBatchConfigSchema.parse({
     ...original.data,
     transaction: await normalizeUnityWorkConfig(
       original.data.transaction,

@@ -13,7 +13,10 @@ import {
   FileRunRepository,
   HoneyBeeCoreError,
   OrchestrationEventV3Schema,
+  OrchestrationEventV4Schema,
+  ResourceIdSchema,
   RunIdSchema,
+  StepIdSchema,
   UnityWorkConfigV1Schema,
   type AgentProcessResult,
   type AgentProcessRunner,
@@ -31,7 +34,9 @@ import {
   type WorkspaceReleaseReceipt,
 } from "./unity-adapters.js";
 import type { UnityProcessControl } from "./process-control.js";
-import { UnityWorkTransaction } from "./unity-transaction.js";
+import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
+import { UnityPatchBuilder } from "./unity-patch.js";
+import { UnityWorkTransaction, type UnityWorkV4Execution } from "./unity-transaction.js";
 
 const directories: string[] = [];
 
@@ -319,7 +324,17 @@ const resumeConfig = (root: string) => {
 const seedAcquiredRun = async (
   root: string,
   started: "agent" | "testplay" | undefined,
-  options: Readonly<{ deferred?: boolean; registered?: boolean; exited?: boolean }> = {},
+  options: Readonly<{
+    deferred?: boolean;
+    registered?: boolean;
+    exited?: boolean;
+    linkage?: Readonly<{
+      parentRunId: ReturnType<typeof RunIdSchema.parse>;
+      workId: ReturnType<typeof StepIdSchema.parse>;
+      resourceId: ReturnType<typeof ResourceIdSchema.parse>;
+      resourceScope: "global-file-v1";
+    }>;
+  }> = {},
 ) => {
   const runRoot = path.join(root, "runs");
   const runId = RunIdSchema.parse(randomUUID());
@@ -348,8 +363,8 @@ const seedAcquiredRun = async (
   const journal = new FileOrchestrationJournal(runRoot);
   let sequence = 0;
   const append = async (type: string, payload: unknown, stepId?: string) => {
-    const event = OrchestrationEventV3Schema.parse({
-      schemaVersion: 3,
+    const value = {
+      schemaVersion: options.linkage === undefined ? 3 : 4,
       eventId: EventIdSchema.parse(randomUUID()),
       runId,
       sequence: ++sequence,
@@ -357,15 +372,29 @@ const seedAcquiredRun = async (
       type,
       ...(stepId === undefined ? {} : { stepId }),
       payload,
-    });
+    };
+    const event =
+      options.linkage === undefined
+        ? OrchestrationEventV3Schema.parse(value)
+        : OrchestrationEventV4Schema.parse(value);
     await journal.append(runId, event);
     return event;
   };
-  await append("workflow.started", {
-    mode: "unity-work-v1",
-    config: configArtifact,
-    task: taskArtifact,
-  });
+  await append(
+    "workflow.started",
+    options.linkage === undefined
+      ? {
+          mode: "unity-work-v1",
+          config: configArtifact,
+          task: taskArtifact,
+        }
+      : {
+          mode: "unity-work-v2",
+          config: configArtifact,
+          task: taskArtifact,
+          linkage: options.linkage,
+        },
+  );
   await append("source.baselined", { manifest: sourceArtifact });
   await append("workspace.prepared", {
     workspaceId: "hb-" + runId,
@@ -450,6 +479,139 @@ const seedAcquiredRun = async (
 };
 
 describe("UnityWorkTransaction cleanup resume", () => {
+  it.each([
+    ["queued", false, false, "cancelled", "resource.acquire-cancelled"],
+    ["active-before-child-marker", true, false, "released", "resource.acquire-cancelled"],
+    ["active-after-child-marker", true, true, "released", "resource.released"],
+  ] as const)(
+    "recovers a durable global resource request after %s crash window",
+    async (_stage, acquireGlobally, recordChildAcquire, expectedGlobal, expectedChildEvent) => {
+      const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-global-recovery-"));
+      directories.push(root);
+      const parentRunId = RunIdSchema.parse(randomUUID());
+      const workId = StepIdSchema.parse("work-a");
+      const resourceId = ResourceIdSchema.parse("unity-editor");
+      const seeded = await seedAcquiredRun(root, "agent", {
+        exited: true,
+        linkage: {
+          parentRunId,
+          workId,
+          resourceId,
+          resourceScope: "global-file-v1",
+        },
+      });
+      const coordinator = new FileUnityResourceCoordinator(seeded.runRoot);
+      const requestId = EventIdSchema.parse(randomUUID());
+      await seeded.append("resource.acquire-started", { resourceId, requestId });
+      const ticket = await coordinator.enqueue({
+        resourceId,
+        requestId,
+        ownerRunId: seeded.runId,
+      });
+      await seeded.append("resource.queued", {
+        resourceId,
+        requestId,
+        ticket: ticket.ticket,
+      });
+      const locator = { resourceId, requestId };
+      const lease = acquireGlobally ? await coordinator.acquire(locator) : undefined;
+      if (recordChildAcquire && lease !== undefined) {
+        await seeded.append("resource.acquired", {
+          resourceId,
+          requestId,
+          ticket: lease.ticket,
+          leaseId: lease.leaseId,
+        });
+      }
+      const storage = new ResumeStorage();
+      const bootstrap = new ResumeBootstrap();
+      const execution: UnityWorkV4Execution = {
+        parentRunId,
+        workId,
+        resourceId,
+        resourceScope: "global-file-v1",
+        resources: coordinator,
+        patchBuilder: new UnityPatchBuilder(
+          seeded.artifacts,
+          bootstrap,
+          path.join(root, "scratch"),
+        ),
+      };
+      const transaction = new UnityWorkTransaction(
+        new CompletedRunner(),
+        seeded.artifacts,
+        seeded.journal,
+        new FileRunControl(seeded.runRoot),
+        bootstrap,
+        storage,
+        new TestPlayCliAdapter(seeded.config.testplay),
+      );
+
+      const result = await transaction.resume(seeded.runId, seeded.config, execution);
+
+      expect(result.status).toBe("failed");
+      expect(result.failure?.errorCode).toBe("transaction.interrupted");
+      expect(storage.released).toBe(true);
+      expect((await coordinator.status(locator)).state).toBe(expectedGlobal);
+      const replay = await seeded.journal.replay(seeded.runId);
+      expect(replay.status).toBe("terminal");
+      if (replay.status === "terminal") {
+        const types = replay.events.map((event) => event.type);
+        expect(types).toContain(expectedChildEvent);
+        expect(types.indexOf(expectedChildEvent)).toBeLessThan(
+          types.indexOf("workspace.release-started"),
+        );
+      }
+    },
+  );
+
+  it("keeps cleanup pending when a child queue marker has no global resource history", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-global-missing-"));
+    directories.push(root);
+    const parentRunId = RunIdSchema.parse(randomUUID());
+    const workId = StepIdSchema.parse("work-a");
+    const resourceId = ResourceIdSchema.parse("unity-editor");
+    const seeded = await seedAcquiredRun(root, "agent", {
+      exited: true,
+      linkage: {
+        parentRunId,
+        workId,
+        resourceId,
+        resourceScope: "global-file-v1",
+      },
+    });
+    const requestId = EventIdSchema.parse(randomUUID());
+    await seeded.append("resource.acquire-started", { resourceId, requestId });
+    await seeded.append("resource.queued", { resourceId, requestId, ticket: 1 });
+    const resources = new FileUnityResourceCoordinator(seeded.runRoot);
+    const storage = new ResumeStorage();
+    const bootstrap = new ResumeBootstrap();
+    const execution: UnityWorkV4Execution = {
+      parentRunId,
+      workId,
+      resourceId,
+      resourceScope: "global-file-v1",
+      resources,
+      patchBuilder: new UnityPatchBuilder(seeded.artifacts, bootstrap, path.join(root, "scratch")),
+    };
+    const transaction = new UnityWorkTransaction(
+      new CompletedRunner(),
+      seeded.artifacts,
+      seeded.journal,
+      new FileRunControl(seeded.runRoot),
+      bootstrap,
+      storage,
+      new TestPlayCliAdapter(seeded.config.testplay),
+    );
+
+    const result = await transaction.resume(seeded.runId, seeded.config, execution);
+
+    expect(result.status).toBe("cleanup-pending");
+    expect(result.failure?.errorCode).toBe("resource.release-failed");
+    expect(storage.released).toBe(false);
+    expect((await seeded.journal.replay(seeded.runId)).status).toBe("active");
+  });
+
   it("recovers a returned lease when receipt persistence fails after acquire", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-acquire-persistence-"));
     directories.push(root);
