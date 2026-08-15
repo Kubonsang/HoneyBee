@@ -21,6 +21,21 @@ export type HoneyBeeCoreErrorCode =
   | "control.read-failed"
   | "journal.write-failed"
   | "workflow.step-failed"
+  | "workspace.invalid-project"
+  | "workspace.already-exists"
+  | "workspace.cleanup-unsafe"
+  | "workspace.residual-detected"
+  | "workspace.command-failed"
+  | "workspace.command-ambiguous"
+  | "workspace.protocol-invalid"
+  | "workspace.release-failed"
+  | "testplay.failed"
+  | "source.modified"
+  | "source.check-failed"
+  | "transaction.interrupted"
+  | "process.identity-failed"
+  | "process.registration-failed"
+  | "process.drain-failed"
   | "run.already-exists"
   | "run.not-found"
   | "run.invalid-path"
@@ -28,7 +43,8 @@ export type HoneyBeeCoreErrorCode =
   | "run.not-resumable"
   | "run.lease-failed"
   | "run.already-running"
-  | "run.terminal";
+  | "run.terminal"
+  | "run.cleanup-pending";
 
 export class HoneyBeeCoreError extends Error {
   public override readonly name = "HoneyBeeCoreError";

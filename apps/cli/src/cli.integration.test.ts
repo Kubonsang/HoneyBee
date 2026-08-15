@@ -1,16 +1,29 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { appendFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { FileRunControl } from "@honeybee/core";
-import { RunIdSchema } from "@honeybee/orchestration-contracts";
+import {
+  ArtifactIdSchema,
+  EventIdSchema,
+  FileArtifactStore,
+  FileOrchestrationJournal,
+  FileRunControl,
+  FileRunRepository,
+  OrchestrationEventV3Schema,
+  RunIdSchema,
+} from "@honeybee/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+
+import { terminateProcessTree } from "./process-control.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const demoAgentPath = fileURLToPath(new URL("../dist/demo-agent.js", import.meta.url));
 const directories: string[] = [];
+const activeCliProcesses = new Set<ReturnType<typeof spawn>>();
+const PROCESS_START_WAIT = { timeout: 10_000, interval: 50 } as const;
 
 const temporaryDirectory = async (): Promise<string> => {
   const directory = await mkdtemp(path.join(tmpdir(), "honeybee-cli-"));
@@ -19,7 +32,22 @@ const temporaryDirectory = async (): Promise<string> => {
 };
 
 afterEach(async () => {
-  await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true })));
+  const active = [...activeCliProcesses];
+  await Promise.allSettled(
+    active.map(async (child) => {
+      const pid = child.pid;
+      if (pid === undefined) return;
+      await terminateProcessTree(pid).catch(() => {
+        child.kill("SIGKILL");
+      });
+    }),
+  );
+  activeCliProcesses.clear();
+  await Promise.all(
+    directories
+      .splice(0)
+      .map((directory) => rm(directory, { recursive: true, maxRetries: 5, retryDelay: 100 })),
+  );
 });
 
 const runCli = (
@@ -48,6 +76,7 @@ const startCli = (args: readonly string[], cwd: string) => {
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  activeCliProcesses.add(child);
   const state = { stdout: "", stderr: "" };
   child.stdout.setEncoding("utf8");
   child.stderr.setEncoding("utf8");
@@ -56,7 +85,10 @@ const startCli = (args: readonly string[], cwd: string) => {
   const completed = new Promise<{ stdout: string; stderr: string; exitCode: number | null }>(
     (resolve, reject) => {
       child.once("error", reject);
-      child.once("close", (exitCode) => resolve({ ...state, exitCode }));
+      child.once("close", (exitCode) => {
+        activeCliProcesses.delete(child);
+        resolve({ ...state, exitCode });
+      });
     },
   );
   return { state, completed };
@@ -154,6 +186,73 @@ describe("HoneyBee CLI sequential orchestration", () => {
     const deleted = await runCli(["run", "delete", output.runId, "--yes", "--json"], cwd);
     expect(deleted.exitCode).toBe(0);
     await expect(readFile(output.journalPath, "utf8")).rejects.toBeDefined();
+  }, 20_000);
+
+  it("refuses to delete an active Unity Run before durable workspace release", async () => {
+    const cwd = await temporaryDirectory();
+    const root = path.join(cwd, ".honeybee", "runs");
+    const runId = RunIdSchema.parse(randomUUID());
+    await new FileRunRepository(root).create(runId);
+    const artifacts = new FileArtifactStore(root);
+    const config = await artifacts.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const task = await artifacts.put({
+      runId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "task",
+      mediaType: "text/plain; charset=utf-8",
+      content: "task",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    await journal.append(
+      runId,
+      OrchestrationEventV3Schema.parse({
+        schemaVersion: 3,
+        eventId: EventIdSchema.parse(randomUUID()),
+        runId,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: "workflow.started",
+        payload: { mode: "unity-work-v1", config, task },
+      }),
+    );
+
+    const deletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+
+    expect(deletion.exitCode).toBe(1);
+    expect(JSON.parse(deletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect((await journal.replay(runId)).status).toBe("active");
+
+    await appendFile(path.join(root, runId, "events.jsonl"), '{"torn":', "utf8");
+    expect((await journal.replay(runId)).status).toBe("indeterminate");
+    const indeterminateDeletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+    expect(indeterminateDeletion.exitCode).toBe(1);
+    expect(JSON.parse(indeterminateDeletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toContain(
+      '"type":"workflow.started"',
+    );
+
+    await writeFile(path.join(root, runId, "events.jsonl"), '{"unidentifiable":', "utf8");
+    const unidentifiedDeletion = await runCli(["run", "delete", runId, "--yes", "--json"], cwd);
+    expect(unidentifiedDeletion.exitCode).toBe(1);
+    expect(JSON.parse(unidentifiedDeletion.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+    expect(await readFile(path.join(root, runId, "events.jsonl"), "utf8")).toBe(
+      '{"unidentifiable":',
+    );
   }, 20_000);
 
   it("returns runId and journalPath when an Agent fails", async () => {
@@ -296,7 +395,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "approve", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("workflow.waiting-approval"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("workflow.waiting-approval"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect(
@@ -329,7 +431,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "cancel", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("workflow.waiting-approval"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("workflow.waiting-approval"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
 
@@ -380,7 +485,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "pause", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect((await runCli(["run", "pause", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
@@ -435,7 +543,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "pause", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect(runId).toBeDefined();
     expect((await runCli(["run", "pause", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
@@ -515,7 +626,10 @@ describe("HoneyBee CLI sequential orchestration", () => {
       "utf8",
     );
     const active = startCli(["run", "--config", configPath, "--task", "cancel", "--json"], cwd);
-    await vi.waitFor(() => expect(active.state.stderr).toContain("[slow] agent started"));
+    await vi.waitFor(
+      () => expect(active.state.stderr).toContain("[slow] agent started"),
+      PROCESS_START_WAIT,
+    );
     const runId = active.state.stderr.match(/run=([0-9a-f-]{36})/u)?.[1];
     expect((await runCli(["run", "cancel", runId ?? "", "--json"], cwd)).exitCode).toBe(0);
     const cancelled = await active.completed;

@@ -7,6 +7,7 @@ import {
   AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
+  OrchestrationEventV3Schema,
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV2Schema,
@@ -30,6 +31,66 @@ describe("orchestration contracts", () => {
     expect(StepIdSchema.safeParse("Review").success).toBe(false);
     expect(StepIdSchema.safeParse(`a${"b".repeat(64)}`).success).toBe(false);
   });
+
+  it("scopes durable process drain markers to their started process kind", () => {
+    const base = {
+      schemaVersion: 3,
+      eventId: randomUUID(),
+      runId: randomUUID(),
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: "process.drain-completed",
+      payload: { process: "agent", startedEventId: randomUUID() },
+    } as const;
+    expect(OrchestrationEventV3Schema.safeParse(base).success).toBe(false);
+    expect(OrchestrationEventV3Schema.safeParse({ ...base, stepId: "unity-agent" }).success).toBe(
+      true,
+    );
+    expect(
+      OrchestrationEventV3Schema.safeParse({
+        ...base,
+        stepId: undefined,
+        payload: { ...base.payload, process: "testplay" },
+      }).success,
+    ).toBe(true);
+  });
+
+  it.each([
+    ["agent.started", "agent", "unity-agent"],
+    ["testplay.started", "testplay", undefined],
+  ] as const)(
+    "strictly validates deferred containment lifecycle for %s",
+    (type, process, stepId) => {
+      const runId = randomUUID();
+      const startedEventId = randomUUID();
+      const started = {
+        schemaVersion: 3,
+        eventId: startedEventId,
+        runId,
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type,
+        ...(stepId === undefined ? {} : { stepId }),
+        payload: { pid: 42, containment: "deferred-v1" },
+      } as const;
+      expect(OrchestrationEventV3Schema.safeParse(started).success).toBe(true);
+      expect(
+        OrchestrationEventV3Schema.safeParse({
+          ...started,
+          payload: { ...started.payload, containment: "other" },
+        }).success,
+      ).toBe(false);
+      expect(
+        OrchestrationEventV3Schema.safeParse({
+          ...started,
+          eventId: randomUUID(),
+          sequence: 2,
+          type: "process.containment-registered",
+          payload: { process, startedEventId },
+        }).success,
+      ).toBe(true);
+    },
+  );
 
   it("rejects duplicate workflow step IDs", () => {
     expect(

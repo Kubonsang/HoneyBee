@@ -18,7 +18,14 @@ const mergedEnvironment = (
 const digest = (hash: ReturnType<typeof createHash>) =>
   ContentDigestSchema.parse(`sha256:${hash.digest("hex")}`);
 
+export interface ChildProcessTreeTermination {
+  readonly detached: boolean;
+  terminate(pid: number): Promise<void>;
+}
+
 export class ChildProcessAgentRunner implements AgentProcessRunner {
+  public constructor(private readonly processTree?: ChildProcessTreeTermination) {}
+
   public run(
     request: AgentProcessRequest,
     lifecycle: Parameters<AgentProcessRunner["run"]>[1],
@@ -45,6 +52,7 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
+        detached: this.processTree?.detached ?? false,
       });
       const stdoutChunks: Buffer[] = [];
       const stderrChunks: Buffer[] = [];
@@ -58,6 +66,7 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       let startBarrier: Promise<void> = Promise.resolve();
       let inputFailure: HoneyBeeCoreError | undefined;
       let timeout: ReturnType<typeof setTimeout> | undefined;
+      let treeTermination: Promise<void> | undefined;
 
       const rememberInputFailure = (error?: Error): HoneyBeeCoreError => {
         inputFailure ??= new HoneyBeeCoreError(
@@ -73,6 +82,20 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
       const terminate = (reason: "timed-out" | "output-limit" | "cancelled"): void => {
         if (termination === "exited") termination = reason;
         if (child.exitCode === null && child.signalCode === null) {
+          if (this.processTree !== undefined) {
+            const pid = child.pid;
+            if (pid !== undefined && treeTermination === undefined) {
+              treeTermination = this.processTree.terminate(pid);
+              void treeTermination.catch((error: unknown) => {
+                if (settled) return;
+                settled = true;
+                if (timeout !== undefined) clearTimeout(timeout);
+                request.signal?.removeEventListener("abort", onAbort);
+                reject(error);
+              });
+            }
+            return;
+          }
           child.kill();
           const graceMs = request.cancelGraceMs ?? 5_000;
           forcedTermination ??= setTimeout(() => {
@@ -142,15 +165,14 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
               await writeInput();
             } catch (error) {
               inputFailure = error instanceof HoneyBeeCoreError ? error : rememberInputFailure();
-              if (child.exitCode === null && child.signalCode === null) child.kill();
+              terminate("cancelled");
             }
           } else {
             inputFailure = rememberInputFailure();
           }
         });
-        void startBarrier.catch(() => {
-          if (child.exitCode === null && child.signalCode === null) child.kill();
-        });
+        if (termination !== "exited" && this.processTree !== undefined) terminate(termination);
+        void startBarrier.catch(() => terminate("cancelled"));
       });
 
       child.once("error", (error) => {
@@ -177,7 +199,12 @@ export class ChildProcessAgentRunner implements AgentProcessRunner {
         request.signal?.removeEventListener("abort", onAbort);
         void (async () => {
           try {
-            await startBarrier;
+            const [startResult, treeResult] = await Promise.allSettled([
+              startBarrier,
+              treeTermination ?? Promise.resolve(),
+            ]);
+            if (treeResult.status === "rejected") throw treeResult.reason;
+            if (startResult.status === "rejected") throw startResult.reason;
             const observation: AgentExitObservation = {
               pid: child.pid ?? -1,
               exitCode,
