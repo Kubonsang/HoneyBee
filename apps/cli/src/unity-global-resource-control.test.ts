@@ -74,6 +74,37 @@ const acquireInChild = async (
 };
 
 describe("FileUnityResourceCoordinator", () => {
+  it("retries a missing request after releasing the resource lock", async () => {
+    const root = await temporaryRoot();
+    const writer = new FileUnityResourceCoordinator(root);
+    let resolveFirstRead: (() => void) | undefined;
+    const firstRead = new Promise<void>((resolve) => {
+      resolveFirstRead = resolve;
+    });
+    let observedFirstRead = false;
+    const observer = new FileUnityResourceCoordinator(
+      root,
+      () => new Date(),
+      randomUUID,
+      async (directory) => {
+        const entries = await readdir(directory, { withFileTypes: true });
+        if (!observedFirstRead) {
+          observedFirstRead = true;
+          resolveFirstRead?.();
+        }
+        return entries;
+      },
+    );
+    const queued = request("unity-editor");
+
+    const pendingStatus = observer.status(queued);
+    await firstRead;
+    await writer.enqueue(queued);
+
+    expect(await pendingStatus).toMatchObject({ state: "queued" });
+    await writer.cancel(queued);
+  });
+
   it("retries a directory snapshot that omits an event published by the same coordinator", async () => {
     const root = await temporaryRoot();
     let hidPublishedSnapshot = false;

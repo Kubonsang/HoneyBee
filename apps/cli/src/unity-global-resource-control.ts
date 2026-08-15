@@ -85,6 +85,10 @@ interface ResourceSnapshot {
   readonly nextTicket: number;
 }
 
+type VisibleResourceStatus = Exclude<UnityResourceStatus, { state: "missing" }>;
+
+type VisibleRequestResult<T> = Readonly<{ found: false }> | Readonly<{ found: true; value: T }>;
+
 const ensureRealDirectoryPath = async (
   rootDirectory: string,
   components: readonly string[],
@@ -208,17 +212,15 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
         await this.cancel(locator);
         throw new HoneyBeeCoreError("agent.cancelled", "Global resource wait was cancelled.");
       }
-      const lease = await this.#withLock(locator.resourceId, async () => {
-        const snapshot = await this.#read(locator.resourceId);
-        const current = snapshot.requests.get(locator.requestId);
-        if (current?.state === "active") {
+      const result = await this.#withVisibleRequest(locator, async (snapshot, current) => {
+        if (current.state === "active") {
           throw new HoneyBeeCoreError(
             "resource.acquire-failed",
             "Global resource lease is already active and requires recovery.",
           );
         }
-        if (current?.state !== "queued") {
-          if (current?.state === "cancelled") {
+        if (current.state !== "queued") {
+          if (current.state === "cancelled") {
             throw new HoneyBeeCoreError("agent.cancelled", "Global resource wait was cancelled.");
           }
           throw new HoneyBeeCoreError(
@@ -257,7 +259,13 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
         await this.#appendEvent(locator.resourceId, acquired);
         return leaseFrom(acquired);
       });
-      if (lease !== undefined) return lease;
+      if (!result.found) {
+        throw new HoneyBeeCoreError(
+          "validation.invalid-workflow",
+          "Global resource request is not queued.",
+        );
+      }
+      if (result.value !== undefined) return result.value;
       await delay(ACQUIRE_POLL_MS);
     }
   }
@@ -267,10 +275,8 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       resourceId: ResourceIdSchema.parse(locatorValue.resourceId),
       requestId: EventIdSchema.parse(locatorValue.requestId),
     };
-    return this.#withLock(locator.resourceId, async () => {
-      const snapshot = await this.#read(locator.resourceId);
-      return snapshot.requests.get(locator.requestId) ?? { state: "missing" };
-    });
+    const result = await this.#withVisibleRequest(locator, (_snapshot, current) => current);
+    return result.found ? result.value : { state: "missing" };
   }
 
   public async cancel(locatorValue: UnityResourceLocator): Promise<void> {
@@ -278,11 +284,8 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       resourceId: ResourceIdSchema.parse(locatorValue.resourceId),
       requestId: EventIdSchema.parse(locatorValue.requestId),
     };
-    await this.#withLock(locator.resourceId, async () => {
-      const snapshot = await this.#read(locator.resourceId);
-      const current = snapshot.requests.get(locator.requestId);
-      if (current === undefined || current.state === "missing" || current.state === "cancelled")
-        return;
+    await this.#withVisibleRequest(locator, async (snapshot, current) => {
+      if (current.state === "cancelled") return;
       if (current.state === "active") {
         throw new HoneyBeeCoreError(
           "validation.invalid-workflow",
@@ -305,11 +308,9 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       ticket: leaseValue.ticket,
       leaseId: EventIdSchema.parse(leaseValue.leaseId),
     };
-    await this.#withLock(lease.resourceId, async () => {
-      const snapshot = await this.#read(lease.resourceId);
-      const current = snapshot.requests.get(lease.requestId);
-      if (current?.state === "released" && sameLease(current.lease, lease)) return;
-      if (current?.state !== "active" || !sameLease(current.lease, lease)) {
+    const result = await this.#withVisibleRequest(lease, async (snapshot, current) => {
+      if (current.state === "released" && sameLease(current.lease, lease)) return;
+      if (current.state !== "active" || !sameLease(current.lease, lease)) {
         throw new HoneyBeeCoreError(
           "resource.release-failed",
           "Global resource lease ownership does not match.",
@@ -320,6 +321,12 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
         ...lease,
       });
     });
+    if (!result.found) {
+      throw new HoneyBeeCoreError(
+        "resource.release-failed",
+        "Global resource lease ownership does not match.",
+      );
+    }
   }
 
   async #withLock<T>(resourceIdValue: ResourceId, operation: () => Promise<T>): Promise<T> {
@@ -339,6 +346,28 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
         if (errorCode(error) !== "run.already-running" || Date.now() >= deadline) throw error;
         await delay(LOCK_POLL_MS);
       }
+    }
+  }
+
+  async #withVisibleRequest<T>(
+    locatorValue: UnityResourceLocator,
+    operation: (snapshot: ResourceSnapshot, current: VisibleResourceStatus) => Promise<T> | T,
+  ): Promise<VisibleRequestResult<T>> {
+    const locator = {
+      resourceId: ResourceIdSchema.parse(locatorValue.resourceId),
+      requestId: EventIdSchema.parse(locatorValue.requestId),
+    };
+    for (let attempt = 0; ; attempt += 1) {
+      const result = await this.#withLock(locator.resourceId, async () => {
+        const snapshot = await this.#read(locator.resourceId);
+        const current = snapshot.requests.get(locator.requestId);
+        if (current === undefined || current.state === "missing") {
+          return { found: false } as const;
+        }
+        return { found: true, value: await operation(snapshot, current) } as const;
+      });
+      if (result.found || attempt + 1 >= PUBLISHED_READ_ATTEMPTS) return result;
+      await delay(10 * (attempt + 1));
     }
   }
 
