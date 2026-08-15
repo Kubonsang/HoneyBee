@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -74,6 +74,32 @@ const acquireInChild = async (
 };
 
 describe("FileUnityResourceCoordinator", () => {
+  it("retries a directory snapshot that omits an event published by the same coordinator", async () => {
+    const root = await temporaryRoot();
+    let hidPublishedSnapshot = false;
+    const coordinator = new FileUnityResourceCoordinator(
+      root,
+      () => new Date(),
+      randomUUID,
+      async (directory) => {
+        const entries = await readdir(directory, { withFileTypes: true });
+        if (!hidPublishedSnapshot && entries.length > 0) {
+          hidPublishedSnapshot = true;
+          return [];
+        }
+        return entries;
+      },
+    );
+    const original = request("unity-editor");
+
+    await coordinator.enqueue(original);
+    const lease = await coordinator.acquire(original);
+
+    expect(hidPublishedSnapshot).toBe(true);
+    expect(lease.requestId).toBe(original.requestId);
+    await coordinator.release(lease);
+  });
+
   it.skipIf(process.platform !== "win32")(
     "retries a transient Windows sharing violation when reading an immutable event",
     async () => {

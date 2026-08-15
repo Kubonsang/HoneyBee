@@ -29,6 +29,17 @@ const EVENT_NAME = /^(\d{20})\.json$/u;
 const PUBLISHED_READ_ATTEMPTS = 16;
 const TRANSIENT_READ_ERRORS = new Set(["EACCES", "EBUSY", "ENOENT", "EPERM"]);
 
+interface EventDirectoryEntry {
+  readonly name: string;
+  isFile(): boolean;
+  isSymbolicLink(): boolean;
+}
+
+type ReadEventDirectory = (directory: string) => Promise<readonly EventDirectoryEntry[]>;
+
+const readEventDirectory: ReadEventDirectory = (directory) =>
+  readdir(directory, { withFileTypes: true });
+
 const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
     ? error.code
@@ -105,11 +116,13 @@ const sameLease = (left: UnityResourceLease, right: UnityResourceLease): boolean
 export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
   readonly #resourceRoot: string;
   readonly #locks: FileRunControl;
+  readonly #observedSequences = new Map<ResourceId, number>();
 
   public constructor(
     rootDirectory: string,
     private readonly now: () => Date = () => new Date(),
     private readonly randomId: () => string = randomUUID,
+    private readonly readDirectory: ReadEventDirectory = readEventDirectory,
   ) {
     const root = path.resolve(rootDirectory);
     this.#resourceRoot = path.join(root, ".unity-resources", "v1");
@@ -303,7 +316,19 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
     await ensureRealDirectory(directory);
     await ensureRealDirectory(eventsDirectory);
     await ensureRealDirectory(path.join(directory, "tmp"));
-    const entries = await readdir(eventsDirectory, { withFileTypes: true });
+    const minimumSequence = this.#observedSequences.get(resourceId) ?? 0;
+    let entries: readonly EventDirectoryEntry[];
+    for (let attempt = 0; ; attempt += 1) {
+      entries = await this.readDirectory(eventsDirectory);
+      if (entries.length >= minimumSequence) break;
+      if (attempt + 1 >= PUBLISHED_READ_ATTEMPTS) {
+        throw new HoneyBeeCoreError(
+          "run.indeterminate",
+          "Global resource journal visibility regressed.",
+        );
+      }
+      await delay(10 * (attempt + 1));
+    }
     const numbered = entries
       .map((entry) => ({
         name: entry.name,
@@ -341,6 +366,7 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       }
       events.push(event.data);
     }
+    this.#observedSequences.set(resourceId, events.length);
     return this.#replay(events);
   }
 
@@ -453,6 +479,10 @@ export class FileUnityResourceCoordinator implements UnityResourceCoordinator {
       if (!Buffer.from(await readPublishedFile(finalPath)).equals(bytes)) {
         throw new HoneyBeeCoreError("run.indeterminate", "Global resource publish was corrupted.");
       }
+      this.#observedSequences.set(
+        resourceId,
+        Math.max(this.#observedSequences.get(resourceId) ?? 0, event.sequence),
+      );
     } catch (error) {
       if (error instanceof HoneyBeeCoreError) throw error;
       if (errorCode(error) === "EEXIST") {
