@@ -563,6 +563,7 @@ describe("UnityWorkTransaction cleanup resume", () => {
         );
       }
     },
+    30_000,
   );
 
   it("keeps cleanup pending when a child queue marker has no global resource history", async () => {

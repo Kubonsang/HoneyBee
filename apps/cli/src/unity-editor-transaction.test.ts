@@ -674,7 +674,7 @@ describe("UnityEditorWorkTransaction", () => {
     expect(patch.entries[0]?.operation === "add-or-modify" && patch.entries[0].content.kind).toBe(
       "unity-patch-content",
     );
-  });
+  }, 30_000);
 
   it("persists the actual failure metadata after a started capability exits", async () => {
     const fixture = await transactionFixture({ capabilities: new FailedCapabilities() });

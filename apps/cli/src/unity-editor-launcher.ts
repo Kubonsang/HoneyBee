@@ -448,6 +448,20 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
       windowsHide: true,
       detached: process.platform !== "win32",
     });
+    // The launcher can publish its receipt immediately after spawn. Register the
+    // IPC listener before yielding for the spawn event so a fast child cannot
+    // publish `ready` into the gap and leave the durable handshake waiting.
+    const readyMessage = messagePromise(child, (message) =>
+      message.type === "ready" &&
+      message.receiptPath === intent.containmentReceiptPath &&
+      typeof message.digest === "string"
+        ? { digest: message.digest }
+        : undefined,
+    );
+    // A spawn failure can reject both promises before the function awaits the
+    // ready message. Keep that early rejection observed while preserving it for
+    // the awaited handshake below.
+    void readyMessage.catch(() => undefined);
     const pid = await withTimeout(
       new Promise<number>((resolve, reject) => {
         child.once("spawn", () => {
@@ -461,13 +475,7 @@ export class SystemUnityEditorLauncher implements UnityEditorLauncher {
     );
     try {
       const ready = await withTimeout(
-        messagePromise(child, (message) =>
-          message.type === "ready" &&
-          message.receiptPath === intent.containmentReceiptPath &&
-          typeof message.digest === "string"
-            ? { digest: message.digest }
-            : undefined,
-        ),
+        readyMessage,
         intent.registrationTimeoutMs,
         "Editor containment launcher did not publish its receipt in time.",
       );
