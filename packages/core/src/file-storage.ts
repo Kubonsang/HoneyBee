@@ -10,27 +10,32 @@ import {
   ContentDigestSchema,
   OrchestrationEventV2Schema,
   OrchestrationEventV3Schema,
+  OrchestrationEventV4Schema,
   OrchestrationEventV1Schema,
   RunIdSchema,
   TERMINAL_WORKFLOW_EVENT_TYPES,
   TERMINAL_WORKFLOW_EVENT_V2_TYPES,
   TERMINAL_WORKFLOW_EVENT_V3_TYPES,
+  TERMINAL_WORKFLOW_EVENT_V4_TYPES,
   type AnyOrchestrationEvent,
   type ArtifactRef,
   type FailureMetadata,
   type OrchestrationEventV1,
   type OrchestrationEventV2,
   type OrchestrationEventV3,
+  type OrchestrationEventV4,
   type RunId,
   type TerminalWorkflowEvent,
   type TerminalWorkflowEventV2,
   type TerminalWorkflowEventV3,
+  type TerminalWorkflowEventV4,
 } from "@honeybee/orchestration-contracts";
 
 import { HoneyBeeCoreError } from "./errors.js";
 import type {
   ArtifactGetRequest,
   ArtifactPutRequest,
+  ArtifactPutBytesRequest,
   ArtifactStore,
   JournalReplay,
   AnyVersionedJournalReplay,
@@ -126,11 +131,15 @@ export class FileArtifactStore extends FileRunScopedStore implements ArtifactSto
   }
 
   public async put(request: ArtifactPutRequest): Promise<ArtifactRef> {
+    return this.putBytes({ ...request, content: Buffer.from(request.content, "utf8") });
+  }
+
+  public async putBytes(request: ArtifactPutBytesRequest): Promise<ArtifactRef> {
     const runId = RunIdSchema.parse(request.runId);
     const artifactId = ArtifactIdSchema.parse(request.artifactId);
     const kind = ArtifactKindSchema.parse(request.kind);
     const mediaType = ArtifactMediaTypeSchema.parse(request.mediaType);
-    const bytes = Buffer.from(request.content, "utf8");
+    const bytes = Buffer.from(request.content);
     const contentDigest = digest(bytes);
     const artifact = ArtifactRefSchema.parse({
       artifactId,
@@ -179,13 +188,17 @@ export class FileArtifactStore extends FileRunScopedStore implements ArtifactSto
   }
 
   public async get(request: ArtifactGetRequest): Promise<string> {
+    return Buffer.from(await this.getBytes(request)).toString("utf8");
+  }
+
+  public async getBytes(request: ArtifactGetRequest): Promise<Uint8Array> {
     const runId = RunIdSchema.parse(request.runId);
     const artifact = ArtifactRefSchema.parse(request.artifact);
     try {
       const runDirectory = await this.requireRunDirectory(runId);
       const blob = this.blobPath(runDirectory, artifact.contentDigest);
       const bytes = await this.verifyFile(blob, artifact);
-      return bytes.toString("utf8");
+      return bytes;
     } catch (error) {
       if (error instanceof HoneyBeeCoreError) throw error;
       throw new HoneyBeeCoreError("artifact.read-failed", "The Artifact could not be read.");
@@ -231,7 +244,9 @@ const parseEvent = (value: unknown): AnyOrchestrationEvent | undefined => {
         ? OrchestrationEventV2Schema.safeParse(value)
         : version === 3
           ? OrchestrationEventV3Schema.safeParse(value)
-          : undefined;
+          : version === 4
+            ? OrchestrationEventV4Schema.safeParse(value)
+            : undefined;
   return parsed?.success === true ? parsed.data : undefined;
 };
 
@@ -240,7 +255,9 @@ const isTerminal = (event: AnyOrchestrationEvent): boolean =>
     ? TERMINAL_WORKFLOW_EVENT_TYPES.has(event.type as TerminalWorkflowEvent["type"])
     : event.schemaVersion === 2
       ? TERMINAL_WORKFLOW_EVENT_V2_TYPES.has(event.type as TerminalWorkflowEventV2["type"])
-      : TERMINAL_WORKFLOW_EVENT_V3_TYPES.has(event.type as TerminalWorkflowEventV3["type"]);
+      : event.schemaVersion === 3
+        ? TERMINAL_WORKFLOW_EVENT_V3_TYPES.has(event.type as TerminalWorkflowEventV3["type"])
+        : TERMINAL_WORKFLOW_EVENT_V4_TYPES.has(event.type as TerminalWorkflowEventV4["type"]);
 
 const sameArtifactRef = (left: ArtifactRef | undefined, right: ArtifactRef | undefined): boolean =>
   left === undefined || right === undefined
@@ -557,6 +574,336 @@ const validV3Transitions = (events: readonly OrchestrationEventV3[]): boolean =>
   return true;
 };
 
+const validV4BatchTransitions = (events: readonly OrchestrationEventV4[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started" || start.payload.mode !== "unity-batch-v1") return false;
+  const registered = new Map<string, { childRunId: RunId; resourceId: string }>();
+  const finished = new Map<
+    string,
+    Extract<OrchestrationEventV4, { type: "work.finished" }>["payload"]
+  >();
+  let cancelRequestId: string | undefined;
+  let cancelling = false;
+
+  const summary = () => {
+    const values = [...finished.values()];
+    return {
+      total: values.length,
+      completed: values.filter((value) => value.status === "completed").length,
+      failed: values.filter((value) => value.status === "failed").length,
+      cancelled: values.filter((value) => value.status === "cancelled").length,
+    };
+  };
+  const sameSummary = (value: {
+    total: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+  }) => {
+    const expected = summary();
+    return (
+      value.total === expected.total &&
+      value.completed === expected.completed &&
+      value.failed === expected.failed &&
+      value.cancelled === expected.cancelled
+    );
+  };
+
+  for (const event of events.slice(1)) {
+    switch (event.type) {
+      case "artifact.stored":
+        break;
+      case "work.registered":
+        if (
+          registered.size >= start.payload.workCount ||
+          registered.has(event.payload.workId) ||
+          [...registered.values()].some((value) => value.childRunId === event.payload.childRunId)
+        ) {
+          return false;
+        }
+        registered.set(event.payload.workId, {
+          childRunId: event.payload.childRunId,
+          resourceId: event.payload.resourceId,
+        });
+        break;
+      case "work.finished": {
+        const registration = registered.get(event.payload.workId);
+        if (
+          registration === undefined ||
+          registration.childRunId !== event.payload.childRunId ||
+          finished.has(event.payload.workId)
+        ) {
+          return false;
+        }
+        finished.set(event.payload.workId, event.payload);
+        break;
+      }
+      case "control.accepted":
+        if (cancelRequestId !== undefined) return false;
+        cancelRequestId = event.payload.requestId;
+        break;
+      case "workflow.cancelling":
+        if (
+          cancelRequestId === undefined ||
+          event.payload.requestId !== cancelRequestId ||
+          cancelling
+        ) {
+          return false;
+        }
+        cancelling = true;
+        break;
+      case "workflow.completed":
+        if (
+          !("summary" in event.payload) ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          event.payload.summary.completed !== event.payload.summary.total
+        ) {
+          return false;
+        }
+        break;
+      case "workflow.failed":
+        if (
+          !("summary" in event.payload) ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          event.payload.summary.failed === 0
+        ) {
+          return false;
+        }
+        break;
+      case "workflow.cancelled":
+        if (
+          !("summary" in event.payload) ||
+          !cancelling ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          event.payload.summary.failed !== 0
+        ) {
+          return false;
+        }
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+};
+
+const childV4AsV3 = (
+  events: readonly OrchestrationEventV4[],
+): readonly OrchestrationEventV3[] | undefined => {
+  const values: unknown[] = [];
+  for (const event of events) {
+    if (
+      event.type.startsWith("resource.") ||
+      event.type === "patch.verified" ||
+      event.type === "work.registered" ||
+      event.type === "work.finished" ||
+      event.type === "workflow.cancelling"
+    ) {
+      continue;
+    }
+    if (event.type === "workflow.started") {
+      if (event.payload.mode !== "unity-work-v2") return undefined;
+      values.push({
+        ...event,
+        schemaVersion: 3,
+        payload: { mode: "unity-work-v1", config: event.payload.config, task: event.payload.task },
+      });
+      continue;
+    }
+    if (event.type === "workflow.completed") {
+      if (!("patch" in event.payload)) return undefined;
+      values.push({
+        ...event,
+        schemaVersion: 3,
+        payload: {
+          evidence: event.payload.evidence,
+          release: event.payload.release,
+          sourceAfter: event.payload.sourceAfter,
+        },
+      });
+      continue;
+    }
+    if (event.type === "workflow.failed") {
+      if ("summary" in event.payload) return undefined;
+      values.push({ ...event, schemaVersion: 3 });
+      continue;
+    }
+    if (event.type === "workflow.cancelled") {
+      if ("summary" in event.payload) return undefined;
+      values.push({ ...event, schemaVersion: 3 });
+      continue;
+    }
+    values.push({ ...event, schemaVersion: 3 });
+  }
+  const parsed: OrchestrationEventV3[] = [];
+  for (const value of values) {
+    const result = OrchestrationEventV3Schema.safeParse(value);
+    if (!result.success) return undefined;
+    parsed.push(result.data);
+  }
+  return parsed;
+};
+
+const validV4ChildTransitions = (events: readonly OrchestrationEventV4[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started" || start.payload.mode !== "unity-work-v2") return false;
+  const asV3 = childV4AsV3(events);
+  if (asV3 === undefined || !validV3Transitions(asV3)) return false;
+
+  type ResourcePhase =
+    "none" | "starting" | "queued" | "acquired" | "releasing" | "failed" | "cancelled" | "released";
+  let resourcePhase: ResourcePhase = "none";
+  let requestId: string | undefined;
+  let resourceId: string | undefined;
+  let ticket: number | undefined;
+  let leaseId: string | undefined;
+  let agentExited = false;
+  let testplayStarted = false;
+  let testplayStopped = false;
+  let sourceChecked = false;
+  let decisionRecorded = false;
+  const baseline = events.find((event) => event.type === "source.baselined");
+  let patch: Extract<OrchestrationEventV4, { type: "patch.verified" }>["payload"] | undefined;
+
+  const sameLease = (payload: {
+    resourceId: string;
+    requestId: string;
+    ticket: number;
+    leaseId: string;
+  }) =>
+    payload.resourceId === resourceId &&
+    payload.requestId === requestId &&
+    payload.ticket === ticket &&
+    payload.leaseId === leaseId;
+
+  for (const event of events.slice(1)) {
+    switch (event.type) {
+      case "agent.exited":
+        agentExited = true;
+        break;
+      case "resource.acquire-started":
+        if (!agentExited || resourcePhase !== "none") return false;
+        if (event.payload.resourceId !== start.payload.linkage.resourceId) return false;
+        resourceId = event.payload.resourceId;
+        requestId = event.payload.requestId;
+        resourcePhase = "starting";
+        break;
+      case "resource.queued":
+        if (
+          resourcePhase !== "starting" ||
+          event.payload.resourceId !== resourceId ||
+          event.payload.requestId !== requestId
+        )
+          return false;
+        ticket = event.payload.ticket;
+        resourcePhase = "queued";
+        break;
+      case "resource.acquire-failed":
+        if (
+          !["starting", "queued"].includes(resourcePhase) ||
+          event.payload.resourceId !== resourceId ||
+          event.payload.requestId !== requestId
+        )
+          return false;
+        resourcePhase = "failed";
+        break;
+      case "resource.acquired":
+        if (
+          resourcePhase !== "queued" ||
+          event.payload.resourceId !== resourceId ||
+          event.payload.requestId !== requestId ||
+          event.payload.ticket !== ticket
+        )
+          return false;
+        leaseId = event.payload.leaseId;
+        resourcePhase = "acquired";
+        break;
+      case "resource.acquire-cancelled":
+        if (
+          !["starting", "queued"].includes(resourcePhase) ||
+          event.payload.resourceId !== resourceId ||
+          event.payload.requestId !== requestId
+        )
+          return false;
+        resourcePhase = "cancelled";
+        break;
+      case "testplay.started":
+        if (resourcePhase !== "acquired" || testplayStarted) return false;
+        testplayStarted = true;
+        break;
+      case "testplay.exited":
+        testplayStopped = true;
+        break;
+      case "process.drain-completed":
+        if (event.payload.process === "testplay") testplayStopped = true;
+        break;
+      case "resource.release-started":
+        if (
+          resourcePhase !== "acquired" ||
+          (testplayStarted && !testplayStopped) ||
+          !sameLease(event.payload)
+        )
+          return false;
+        resourcePhase = "releasing";
+        break;
+      case "resource.release-failed":
+        if (resourcePhase !== "releasing" || !sameLease(event.payload)) return false;
+        resourcePhase = "acquired";
+        break;
+      case "resource.released":
+        if (resourcePhase !== "releasing" || !sameLease(event.payload)) return false;
+        resourcePhase = "released";
+        break;
+      case "source.checked":
+        if (["starting", "queued", "acquired", "releasing"].includes(resourcePhase)) return false;
+        sourceChecked = event.payload.unchanged;
+        break;
+      case "patch.verified":
+        if (
+          !sourceChecked ||
+          resourcePhase !== "released" ||
+          patch !== undefined ||
+          decisionRecorded ||
+          baseline?.type !== "source.baselined" ||
+          !sameArtifactRef(event.payload.baseManifest, baseline.payload.manifest)
+        )
+          return false;
+        patch = event.payload;
+        break;
+      case "transaction.outcome-decided":
+        if (event.payload.outcome === "completed" && patch === undefined) return false;
+        decisionRecorded = true;
+        break;
+      case "workflow.completed":
+        if (
+          !("patch" in event.payload) ||
+          patch === undefined ||
+          !sameArtifactRef(event.payload.patch, patch.patch) ||
+          !sameArtifactRef(event.payload.resultManifest, patch.resultManifest)
+        )
+          return false;
+        break;
+      default:
+        break;
+    }
+  }
+  return true;
+};
+
+const validV4Transitions = (events: readonly OrchestrationEventV4[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started") return false;
+  return start.payload.mode === "unity-batch-v1"
+    ? validV4BatchTransitions(events)
+    : validV4ChildTransitions(events);
+};
+
 const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean => {
   const phases = new Map<string, string>();
   const attempts = new Map<string, number>();
@@ -778,6 +1125,15 @@ export class FileOrchestrationJournal
           "Unity transaction Journal transition invariants failed.",
         );
       }
+      if (
+        validatedEvent.schemaVersion === 4 &&
+        !validV4Transitions([...(existing as OrchestrationEventV4[]), validatedEvent])
+      ) {
+        throw new HoneyBeeCoreError(
+          "journal.write-failed",
+          "Unity v0.5 Journal transition invariants failed.",
+        );
+      }
       const handle = await open(journalPath, "a");
       try {
         await handle.writeFile(`${JSON.stringify(validatedEvent)}\n`, "utf8");
@@ -851,14 +1207,25 @@ export class FileOrchestrationJournal
         terminal: terminal as TerminalWorkflowEventV2,
       };
     }
-    if (!validV3Transitions(events as OrchestrationEventV3[])) return indeterminate();
+    if (events[0].schemaVersion === 3) {
+      if (!validV3Transitions(events as OrchestrationEventV3[])) return indeterminate();
+      if (terminal === undefined) {
+        return { status: "active", events: events as OrchestrationEventV3[] };
+      }
+      return {
+        status: "terminal",
+        events: events as OrchestrationEventV3[],
+        terminal: terminal as TerminalWorkflowEventV3,
+      };
+    }
+    if (!validV4Transitions(events as OrchestrationEventV4[])) return indeterminate();
     if (terminal === undefined) {
-      return { status: "active", events: events as OrchestrationEventV3[] };
+      return { status: "active", events: events as OrchestrationEventV4[] };
     }
     return {
       status: "terminal",
-      events: events as OrchestrationEventV3[],
-      terminal: terminal as TerminalWorkflowEventV3,
+      events: events as OrchestrationEventV4[],
+      terminal: terminal as TerminalWorkflowEventV4,
     };
   }
 

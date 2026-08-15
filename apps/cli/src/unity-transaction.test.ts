@@ -10,7 +10,11 @@ import {
   FileOrchestrationJournal,
   FileRunControl,
   FileRunRepository,
+  ArtifactIdSchema,
+  ResourceIdSchema,
   RunIdSchema,
+  StepIdSchema,
+  UnityPatchManifestV1Schema,
   UnityWorkConfigV1Schema,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -21,6 +25,8 @@ import {
   UnityWorkspaceStorageCliAdapter,
 } from "./unity-adapters.js";
 import { UnityWorkTransaction } from "./unity-transaction.js";
+import { UnityPatchBuilder } from "./unity-patch.js";
+import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js";
 
 const directories: string[] = [];
 
@@ -275,6 +281,86 @@ describe("UnityWorkTransaction", () => {
       expect(replay.terminal.type).toBe("workflow.completed");
       expect(replay.events.at(-2)?.type).toBe("workspace.released");
     }
+
+    const childRunId = RunIdSchema.parse(randomUUID());
+    const childArtifacts = new FileArtifactStore(runRoot);
+    const childBootstrap = new UnityProjectBootstrap();
+    const childControls = new FileRunControl(runRoot);
+    const childJournal = new FileOrchestrationJournal(runRoot);
+    let durableChildPatch:
+      NonNullable<Awaited<ReturnType<UnityWorkTransaction["run"]>>["patch"]> | undefined;
+    await new FileRunRepository(runRoot).create(childRunId);
+    const childLease = await childControls.acquire(childRunId);
+    try {
+      const child = await new UnityWorkTransaction(
+        new ChildProcessAgentRunner(),
+        childArtifacts,
+        childJournal,
+        childControls,
+        childBootstrap,
+        new UnityWorkspaceStorageCliAdapter(
+          config.workspaceStorage.command,
+          config.workspaceStorage.parentKey.provider,
+          config.workspaceStorage.binarySha256,
+          executeStorage,
+        ),
+        new TestPlayCliAdapter(config.testplay),
+      ).run(childRunId, "Create a durable verified patch.", config, {
+        parentRunId: RunIdSchema.parse(randomUUID()),
+        workId: StepIdSchema.parse("work-a"),
+        resourceId: ResourceIdSchema.parse("unity-editor"),
+        resourceScope: "batch-local-v1",
+        resources: new BatchLocalUnityResourceCoordinator(),
+        patchBuilder: new UnityPatchBuilder(
+          childArtifacts,
+          childBootstrap,
+          path.join(runRoot, ".patch-verification"),
+        ),
+      });
+      expect(child.status).toBe("completed");
+      expect(child.patch?.kind).toBe("unity-verified-patch");
+      expect(child.resultManifest?.kind).toBe("unity-workspace-manifest");
+      if (child.patch === undefined) throw new Error("missing patch");
+      durableChildPatch = child.patch;
+      const patch = UnityPatchManifestV1Schema.parse(
+        JSON.parse(
+          await childArtifacts.get({ runId: childRunId, artifact: child.patch }),
+        ) as unknown,
+      );
+      expect(patch.entries.map((entry) => entry.path)).toContain("Assets/agent-created.txt");
+      expect(JSON.stringify(patch)).not.toContain("contentBase64");
+    } finally {
+      await childLease.release();
+    }
+    await expect(access(path.join(workspaceRoot, "hb-" + childRunId))).rejects.toBeDefined();
+    const childReplay = await childJournal.replay(childRunId);
+    expect(childReplay.status).toBe("terminal");
+    if (childReplay.status === "terminal") {
+      expect(childReplay.terminal.schemaVersion).toBe(4);
+      const types = childReplay.events.map((event) => event.type);
+      expect(types.indexOf("resource.acquired")).toBeLessThan(types.indexOf("testplay.started"));
+      expect(types.indexOf("resource.released")).toBeGreaterThan(types.indexOf("testplay.exited"));
+      expect(types.indexOf("patch.verified")).toBeGreaterThan(types.indexOf("source.checked"));
+    }
+    if (durableChildPatch === undefined) throw new Error("missing durable child patch");
+    const unrelatedPatch = await childArtifacts.put({
+      runId: childRunId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "unity-verified-patch",
+      mediaType: "application/vnd.honeybee.unity-patch+json",
+      content: "{}",
+    });
+    const childJournalPath = path.join(runRoot, childRunId, "events.jsonl");
+    const childLines = (await readFile(childJournalPath, "utf8")).trim().split("\n");
+    const childTerminal = JSON.parse(childLines.at(-1) ?? "{}") as {
+      payload: Record<string, unknown>;
+    };
+    childTerminal.payload.patch = unrelatedPatch;
+    childLines[childLines.length - 1] = JSON.stringify(childTerminal);
+    await writeFile(childJournalPath, childLines.join("\n") + "\n", "utf8");
+    expect((await new FileOrchestrationJournal(runRoot).replay(childRunId)).status).toBe(
+      "indeterminate",
+    );
 
     const failedRunId = RunIdSchema.parse(randomUUID());
     const failedConfig = UnityWorkConfigV1Schema.parse({

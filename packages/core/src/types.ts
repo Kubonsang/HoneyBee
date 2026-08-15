@@ -9,12 +9,14 @@ import type {
   OrchestrationEventV1,
   OrchestrationEventV2,
   OrchestrationEventV3,
+  OrchestrationEventV4,
   PortName,
   RunId,
   StepId,
   TerminalWorkflowEvent,
   TerminalWorkflowEventV2,
   TerminalWorkflowEventV3,
+  TerminalWorkflowEventV4,
   ControlRequest,
   WorkflowConfigV3,
   WorkflowStep,
@@ -76,9 +78,15 @@ export interface ArtifactGetRequest {
   readonly artifact: ArtifactRef;
 }
 
+export interface ArtifactPutBytesRequest extends Omit<ArtifactPutRequest, "content"> {
+  readonly content: Uint8Array;
+}
+
 export interface ArtifactStore {
   put(request: ArtifactPutRequest): Promise<ArtifactRef>;
   get(request: ArtifactGetRequest): Promise<string>;
+  putBytes(request: ArtifactPutBytesRequest): Promise<ArtifactRef>;
+  getBytes(request: ArtifactGetRequest): Promise<Uint8Array>;
 }
 
 export interface RunRecord {
@@ -142,7 +150,23 @@ export type JournalReplayV3 =
       message: string;
     }>;
 
-export type AnyVersionedJournalReplay = AnyJournalReplay | JournalReplayV3;
+export type JournalReplayV4 =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV4[];
+      terminal: TerminalWorkflowEventV4;
+    }>
+  | Readonly<{
+      status: "active";
+      events: readonly OrchestrationEventV4[];
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
+export type AnyVersionedJournalReplay = AnyJournalReplay | JournalReplayV3 | JournalReplayV4;
 
 export interface VersionedOrchestrationJournal {
   append(runId: RunId, event: AnyOrchestrationEvent): Promise<void>;

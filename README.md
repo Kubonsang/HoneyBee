@@ -65,6 +65,23 @@ corepack pnpm exec vitest run apps/cli/src/unity-real.e2e.test.ts
 
 The gated test requires the transaction source configured for the fixture to be disposable and the broker store to be isolated; it asserts the terminal event order and all four child/pending/quarantine residual counters are zero.
 
+## Unity parallel batch v0.5 development
+
+PR 1 of the v0.5 work adds a process-local parallel batch without changing the accepted v0.4 transaction:
+
+```powershell
+corepack pnpm honeybee unity batch run --config unity-batch.json --json
+corepack pnpm honeybee run show <parent-run-id> --json
+corepack pnpm honeybee run cancel <parent-run-id>
+corepack pnpm honeybee run resume <parent-run-id>
+```
+
+Start from [the batch config example](examples/unity-batch.v1.example.json). Every Work receives a separate child Run, physical shell, and storage lease. Agent phases run up to `maxParallelWorks`; Works sharing a capacity-1 resource use a FIFO lease around TestPlay only. Parent and child lifecycle events use Journal schema v4, while the v0.4 single transaction remains on schema v3.
+
+A completed child stores a `unity-verified-patch` manifest before workspace release. Added and modified file bodies are separate `unity-patch-content` binary Artifacts in the existing content-addressed store; the manifest contains only Artifact references and delete metadata. HoneyBee verifies the patch against a clean source copy, and the original project remains unchanged.
+
+This first slice is deliberately process-local. Cross-process/global resource durability is PR 2. Git Worktree integration, distributed scheduling, GUI, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md).
+
 ## Workflow config v3
 
 Agents define executable programs. Harnesses define how HoneyBee communicates with them. Steps reference both by strict IDs and connect named Artifact ports.
@@ -178,7 +195,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-v0.4 remains a local CLI kernel. Its Unity path is exactly one transaction and one Agent. Multiple Unity Agents, parallel Unity execution, a scheduler, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, warm-editor bridge integration, and TestPlay shadow/scenario orchestration are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), and [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md).
+HoneyBee remains a local CLI kernel. v0.5 development permits process-local parallel Unity batches, but cross-process/global resource durability, Git Worktree integration, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, warm-editor bridge integration, and TestPlay shadow/scenario orchestration are out of scope for PR 1. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), and [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md).
 
 ## License
 

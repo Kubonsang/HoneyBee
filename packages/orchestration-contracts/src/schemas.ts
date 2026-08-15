@@ -26,6 +26,9 @@ export type HarnessId = z.infer<typeof HarnessIdSchema>;
 export const PortNameSchema = NamedIdSchema.brand<"PortName">();
 export type PortName = z.infer<typeof PortNameSchema>;
 
+export const ResourceIdSchema = NamedIdSchema.brand<"ResourceId">();
+export type ResourceId = z.infer<typeof ResourceIdSchema>;
+
 export const ContentDigestSchema = z
   .string()
   .regex(/^sha256:[0-9a-f]{64}$/u)
@@ -85,6 +88,9 @@ export const ArtifactKindSchema = z.enum([
   "workspace-acquire-receipt",
   "testplay-evidence",
   "workspace-release-receipt",
+  "unity-workspace-manifest",
+  "unity-patch-content",
+  "unity-verified-patch",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
@@ -93,6 +99,8 @@ export const ArtifactMediaTypeSchema = z.enum([
   "application/json",
   "application/xml",
   "application/x-ndjson",
+  "application/octet-stream",
+  "application/vnd.honeybee.unity-patch+json",
 ]);
 export type ArtifactMediaType = z.infer<typeof ArtifactMediaTypeSchema>;
 const AgentArtifactMediaTypeSchema = z.enum(["text/plain; charset=utf-8", "application/json"]);
@@ -788,6 +796,194 @@ export const UnityWorkConfigV1Schema = z
   });
 export type UnityWorkConfigV1 = z.infer<typeof UnityWorkConfigV1Schema>;
 
+export const UnityBatchConfigV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    mode: z.literal("unity-batch"),
+    maxParallelWorks: z.number().int().positive(),
+    transaction: UnityWorkConfigV1Schema,
+    resources: z
+      .array(
+        z
+          .object({
+            id: ResourceIdSchema,
+            capacity: z.literal(1),
+          })
+          .strict(),
+      )
+      .min(1),
+    works: z
+      .array(
+        z
+          .object({
+            id: StepIdSchema,
+            task: z.string().trim().min(1),
+            resourceRef: ResourceIdSchema,
+          })
+          .strict(),
+      )
+      .min(2),
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.maxParallelWorks > config.works.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+    const resources = new Set<string>();
+    for (const [index, resource] of config.resources.entries()) {
+      if (resources.has(resource.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["resources", index, "id"],
+          message: `Duplicate resource id: ${resource.id}`,
+        });
+      }
+      resources.add(resource.id);
+    }
+    const works = new Set<string>();
+    for (const [index, work] of config.works.entries()) {
+      if (works.has(work.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "id"],
+          message: `Duplicate Work id: ${work.id}`,
+        });
+      }
+      works.add(work.id);
+      if (!resources.has(work.resourceRef)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "resourceRef"],
+          message: `Unknown resource reference: ${work.resourceRef}`,
+        });
+      }
+    }
+  });
+export type UnityBatchConfigV1 = z.infer<typeof UnityBatchConfigV1Schema>;
+
+const UnityPatchContentRefSchema = ArtifactRefSchema.superRefine((artifact, context) => {
+  if (artifact.kind !== "unity-patch-content") {
+    context.addIssue({ code: "custom", path: ["kind"], message: "Expected patch content." });
+  }
+  if (artifact.mediaType !== "application/octet-stream") {
+    context.addIssue({
+      code: "custom",
+      path: ["mediaType"],
+      message: "Patch content must contain raw bytes.",
+    });
+  }
+});
+
+const unsafeWindowsPathSegment = (segment: string): boolean =>
+  /[<>:"|?*]/u.test(segment) ||
+  [...segment].some((character) => (character.codePointAt(0) ?? 0) < 0x20);
+
+const UnityPatchPathSchema = z
+  .string()
+  .min(1)
+  .refine((value) => {
+    const segments = value.split("/");
+    return (
+      !value.includes("\\") &&
+      !value.startsWith("/") &&
+      segments.every(
+        (segment) =>
+          segment.length > 0 &&
+          segment !== "." &&
+          segment !== ".." &&
+          !unsafeWindowsPathSegment(segment) &&
+          !/[. ]$/u.test(segment) &&
+          !/^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/iu.test(segment),
+      ) &&
+      ["Assets", "Packages", "ProjectSettings"].includes(segments[0] ?? "")
+    );
+  }, "Patch paths must be safe Unity project-relative paths.");
+
+export const UnityPatchManifestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    baseManifest: ArtifactRefSchema,
+    resultManifest: ArtifactRefSchema,
+    entries: z.array(
+      z.discriminatedUnion("operation", [
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("add-or-modify"),
+            content: UnityPatchContentRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("delete"),
+            baseContentDigest: ContentDigestSchema,
+          })
+          .strict(),
+      ]),
+    ),
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    if (manifest.baseManifest.kind !== "unity-source-manifest") {
+      context.addIssue({
+        code: "custom",
+        path: ["baseManifest", "kind"],
+        message: "Patch base must be a Unity source manifest.",
+      });
+    }
+    if (manifest.baseManifest.mediaType !== "application/json") {
+      context.addIssue({
+        code: "custom",
+        path: ["baseManifest", "mediaType"],
+        message: "Patch base manifest must be JSON.",
+      });
+    }
+    if (manifest.resultManifest.kind !== "unity-workspace-manifest") {
+      context.addIssue({
+        code: "custom",
+        path: ["resultManifest", "kind"],
+        message: "Patch result must be a Unity workspace manifest.",
+      });
+    }
+    if (manifest.resultManifest.mediaType !== "application/json") {
+      context.addIssue({
+        code: "custom",
+        path: ["resultManifest", "mediaType"],
+        message: "Patch result manifest must be JSON.",
+      });
+    }
+    let previous: string | undefined;
+    const caseInsensitive = new Set<string>();
+    for (const [index, entry] of manifest.entries.entries()) {
+      if (
+        previous !== undefined &&
+        Buffer.compare(Buffer.from(previous), Buffer.from(entry.path)) >= 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch entries must be unique and sorted by UTF-8 path bytes.",
+        });
+      }
+      const folded = entry.path.toLocaleLowerCase("en-US");
+      if (caseInsensitive.has(folded)) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch paths cannot collide case-insensitively.",
+        });
+      }
+      previous = entry.path;
+      caseInsensitive.add(folded);
+    }
+  });
+export type UnityPatchManifestV1 = z.infer<typeof UnityPatchManifestV1Schema>;
+
 export const AgentInputEnvelopeV2Schema = z
   .object({
     schemaVersion: z.literal(2),
@@ -1314,5 +1510,371 @@ export const TERMINAL_WORKFLOW_EVENT_V3_TYPES = new Set<TerminalWorkflowEventV3[
   "workflow.cancelled",
 ]);
 
+const EventV4BaseSchema = z.object({
+  schemaVersion: z.literal(4),
+  eventId: EventIdSchema,
+  runId: RunIdSchema,
+  sequence: z.number().int().positive(),
+  timestamp: z.string().datetime(),
+  stepId: StepIdSchema.optional(),
+});
+const eventV4 = <Type extends string, Payload extends z.ZodType>(type: Type, payload: Payload) =>
+  EventV4BaseSchema.extend({ type: z.literal(type), payload }).strict();
+
+const UnityBatchSummarySchema = z
+  .object({
+    total: z.number().int().nonnegative(),
+    completed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    cancelled: z.number().int().nonnegative(),
+  })
+  .strict()
+  .refine((summary) => summary.total === summary.completed + summary.failed + summary.cancelled, {
+    message: "Batch summary counts must add up to the total.",
+  });
+
+const UnityWorkLinkageSchema = z
+  .object({
+    parentRunId: RunIdSchema,
+    workId: StepIdSchema,
+    resourceId: ResourceIdSchema,
+    resourceScope: z.literal("batch-local-v1"),
+  })
+  .strict();
+
+const ResourceRequestPayloadSchema = z
+  .object({ resourceId: ResourceIdSchema, requestId: EventIdSchema })
+  .strict();
+const ResourceLeasePayloadSchema = ResourceRequestPayloadSchema.extend({
+  ticket: z.number().int().positive(),
+  leaseId: EventIdSchema,
+}).strict();
+
+export const OrchestrationEventV4Schema = z
+  .discriminatedUnion("type", [
+    eventV4(
+      "workflow.started",
+      z.discriminatedUnion("mode", [
+        z
+          .object({
+            mode: z.literal("unity-work-v2"),
+            config: ArtifactRefSchema,
+            task: ArtifactRefSchema,
+            linkage: UnityWorkLinkageSchema,
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("unity-batch-v1"),
+            config: ArtifactRefSchema,
+            workCount: z.number().int().positive(),
+            maxParallelWorks: z.number().int().positive(),
+            resourceScope: z.literal("batch-local-v1"),
+          })
+          .strict(),
+      ]),
+    ),
+    eventV4("artifact.stored", z.object({ artifact: ArtifactRefSchema }).strict()),
+    eventV4("source.baselined", z.object({ manifest: ArtifactRefSchema }).strict()),
+    eventV4(
+      "workspace.prepared",
+      z.object({ workspaceId: z.string().min(1), sourceManifest: ArtifactRefSchema }).strict(),
+    ),
+    eventV4(
+      "workspace.acquire-started",
+      z.object({ request: ArtifactRefSchema, requestId: z.string().min(1) }).strict(),
+    ),
+    eventV4("workspace.acquire-failed", z.object({ failure: FailureMetadataSchema }).strict()),
+    eventV4(
+      "workspace.acquired",
+      z
+        .object({
+          workspaceId: z.string().min(1),
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV4(
+      "agent.started",
+      z
+        .object({
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512).optional(),
+          containment: z.literal("deferred-v1").optional(),
+        })
+        .strict(),
+    ),
+    eventV4("agent.exited", ProcessMetadataSchema),
+    eventV4("agent.input-write-failed", FailureMetadataSchema),
+    eventV4("resource.acquire-started", ResourceRequestPayloadSchema),
+    eventV4(
+      "resource.queued",
+      ResourceRequestPayloadSchema.extend({ ticket: z.number().int().positive() }).strict(),
+    ),
+    eventV4(
+      "resource.acquire-failed",
+      ResourceRequestPayloadSchema.extend({ failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV4("resource.acquired", ResourceLeasePayloadSchema),
+    eventV4("resource.acquire-cancelled", ResourceRequestPayloadSchema),
+    eventV4("resource.release-started", ResourceLeasePayloadSchema),
+    eventV4(
+      "resource.release-failed",
+      ResourceLeasePayloadSchema.extend({ failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV4("resource.released", ResourceLeasePayloadSchema),
+    eventV4(
+      "testplay.started",
+      z
+        .object({
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512).optional(),
+          containment: z.literal("deferred-v1").optional(),
+        })
+        .strict(),
+    ),
+    eventV4(
+      "process.containment-registered",
+      z
+        .object({
+          process: z.enum(["agent", "testplay"]),
+          startedEventId: EventIdSchema,
+        })
+        .strict(),
+    ),
+    eventV4("testplay.exited", ProcessMetadataSchema),
+    eventV4(
+      "process.drain-completed",
+      z
+        .object({
+          process: z.enum(["agent", "testplay"]),
+          startedEventId: EventIdSchema,
+        })
+        .strict(),
+    ),
+    eventV4("testplay.evidence-stored", z.object({ evidence: ArtifactRefSchema }).strict()),
+    eventV4("testplay.verified", z.object({ evidence: ArtifactRefSchema }).strict()),
+    eventV4(
+      "source.checked",
+      z
+        .object({
+          before: ArtifactRefSchema,
+          after: ArtifactRefSchema,
+          unchanged: z.boolean(),
+        })
+        .strict(),
+    ),
+    eventV4(
+      "patch.verified",
+      z
+        .object({
+          patch: ArtifactRefSchema,
+          baseManifest: ArtifactRefSchema,
+          resultManifest: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV4("transaction.outcome-decided", UnityTransactionDecisionSchema),
+    eventV4(
+      "control.accepted",
+      z.object({ requestId: EventIdSchema, action: z.literal("cancel") }).strict(),
+    ),
+    eventV4(
+      "workspace.release-started",
+      z.object({ leaseId: z.string().min(1), requestId: z.string().min(1) }).strict(),
+    ),
+    eventV4(
+      "workspace.release-failed",
+      z.object({ leaseId: z.string().min(1), failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV4(
+      "workspace.released",
+      z
+        .object({
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+          cleanupState: z.literal("released"),
+        })
+        .strict(),
+    ),
+    eventV4(
+      "work.registered",
+      z
+        .object({
+          workId: StepIdSchema,
+          childRunId: RunIdSchema,
+          resourceId: ResourceIdSchema,
+        })
+        .strict(),
+    ),
+    eventV4(
+      "work.finished",
+      z.discriminatedUnion("status", [
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("completed"),
+            patch: ArtifactRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("failed"),
+            failure: FailureMetadataSchema,
+          })
+          .strict(),
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("cancelled"),
+            started: z.boolean(),
+          })
+          .strict(),
+      ]),
+    ),
+    eventV4("workflow.cancelling", z.object({ requestId: EventIdSchema }).strict()),
+    eventV4(
+      "workflow.completed",
+      z.union([
+        z
+          .object({
+            evidence: ArtifactRefSchema,
+            patch: ArtifactRefSchema,
+            resultManifest: ArtifactRefSchema,
+            release: ArtifactRefSchema,
+            sourceAfter: ArtifactRefSchema,
+          })
+          .strict(),
+        z.object({ summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+    eventV4(
+      "workflow.failed",
+      z.union([
+        z
+          .object({
+            failure: FailureMetadataSchema,
+            release: ArtifactRefSchema.optional(),
+            sourceAfter: ArtifactRefSchema.optional(),
+          })
+          .strict(),
+        z.object({ failure: FailureMetadataSchema, summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+    eventV4(
+      "workflow.cancelled",
+      z.union([
+        z
+          .object({
+            release: ArtifactRefSchema.optional(),
+            sourceAfter: ArtifactRefSchema.optional(),
+          })
+          .strict(),
+        z.object({ summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+  ])
+  .superRefine((event, context) => {
+    const requireKind = (artifact: ArtifactRef, kind: ArtifactKind, path: string[]): void => {
+      if (artifact.kind !== kind) {
+        context.addIssue({ code: "custom", path, message: `Expected Artifact kind ${kind}.` });
+      }
+    };
+    const requireMediaType = (
+      artifact: ArtifactRef,
+      mediaType: ArtifactMediaType,
+      path: string[],
+    ): void => {
+      if (artifact.mediaType !== mediaType) {
+        context.addIssue({ code: "custom", path, message: `Expected media type ${mediaType}.` });
+      }
+    };
+    if (event.type === "workflow.started") {
+      requireKind(event.payload.config, "workflow-config", ["payload", "config", "kind"]);
+      if (event.payload.mode === "unity-work-v2") {
+        requireKind(event.payload.task, "task", ["payload", "task", "kind"]);
+      }
+    } else if (event.type === "source.baselined") {
+      requireKind(event.payload.manifest, "unity-source-manifest", ["payload", "manifest", "kind"]);
+    } else if (event.type === "workspace.acquire-started") {
+      requireKind(event.payload.request, "workspace-acquire-request", [
+        "payload",
+        "request",
+        "kind",
+      ]);
+    } else if (event.type === "workspace.acquired") {
+      requireKind(event.payload.receipt, "workspace-acquire-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "testplay.evidence-stored" || event.type === "testplay.verified") {
+      requireKind(event.payload.evidence, "testplay-evidence", ["payload", "evidence", "kind"]);
+    } else if (event.type === "source.checked") {
+      requireKind(event.payload.before, "unity-source-manifest", ["payload", "before", "kind"]);
+      requireKind(event.payload.after, "unity-source-manifest", ["payload", "after", "kind"]);
+    } else if (event.type === "patch.verified") {
+      requireKind(event.payload.patch, "unity-verified-patch", ["payload", "patch", "kind"]);
+      requireMediaType(event.payload.patch, "application/vnd.honeybee.unity-patch+json", [
+        "payload",
+        "patch",
+        "mediaType",
+      ]);
+      requireKind(event.payload.baseManifest, "unity-source-manifest", [
+        "payload",
+        "baseManifest",
+        "kind",
+      ]);
+      requireKind(event.payload.resultManifest, "unity-workspace-manifest", [
+        "payload",
+        "resultManifest",
+        "kind",
+      ]);
+    } else if (event.type === "workspace.released") {
+      requireKind(event.payload.receipt, "workspace-release-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "work.finished" && event.payload.status === "completed") {
+      requireKind(event.payload.patch, "unity-verified-patch", ["payload", "patch", "kind"]);
+      requireMediaType(event.payload.patch, "application/vnd.honeybee.unity-patch+json", [
+        "payload",
+        "patch",
+        "mediaType",
+      ]);
+    }
+    const agentScoped =
+      event.type === "agent.started" ||
+      event.type === "agent.exited" ||
+      event.type === "agent.input-write-failed";
+    if (agentScoped && event.stepId === undefined) {
+      context.addIssue({ code: "custom", path: ["stepId"], message: "Agent event needs stepId." });
+    }
+    if (event.type.startsWith("workflow.") && event.stepId !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Workflow event cannot have stepId.",
+      });
+    }
+  });
+export type OrchestrationEventV4 = z.infer<typeof OrchestrationEventV4Schema>;
+
+export type TerminalWorkflowEventV4 = Extract<
+  OrchestrationEventV4,
+  { type: "workflow.completed" | "workflow.failed" | "workflow.cancelled" }
+>;
+export const TERMINAL_WORKFLOW_EVENT_V4_TYPES = new Set<TerminalWorkflowEventV4["type"]>([
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+]);
+
 export type AnyOrchestrationEvent =
-  OrchestrationEventV1 | OrchestrationEventV2 | OrchestrationEventV3;
+  OrchestrationEventV1 | OrchestrationEventV2 | OrchestrationEventV3 | OrchestrationEventV4;

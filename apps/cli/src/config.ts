@@ -9,10 +9,12 @@ import {
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
   UnityWorkConfigV1Schema,
+  UnityBatchConfigV1Schema,
   type AgentCommand,
   type AgentDefinition,
   type WorkflowConfigV3,
   type UnityWorkConfigV1,
+  type UnityBatchConfigV1,
 } from "@honeybee/orchestration-contracts";
 
 import { physicalPathsOverlap } from "./path-safety.js";
@@ -217,16 +219,12 @@ const absoluteExpandedPath = (value: string, name: string): string => {
   return path.normalize(expanded);
 };
 
-export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfigV1> => {
-  const absolutePath = path.resolve(configPath);
-  const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
-  const original = UnityWorkConfigV1Schema.safeParse(parsed);
-  if (!original.success) {
-    throw new Error("Invalid Unity work schemaVersion 1 config: " + original.error.message);
-  }
-  const directory = path.dirname(absolutePath);
+const normalizeUnityWorkConfig = async (
+  original: UnityWorkConfigV1,
+  directory: string,
+): Promise<UnityWorkConfigV1> => {
   const workspaceCommand = readAgentCommand(
-    original.data.workspaceStorage.command,
+    original.workspaceStorage.command,
     "workspaceStorage.command",
     directory,
   );
@@ -234,24 +232,24 @@ export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWork
     throw new Error("workspaceStorage.command.command must be an absolute path.");
   }
   const normalized = UnityWorkConfigV1Schema.parse({
-    ...original.data,
-    sourceProjectPath: absoluteExpandedPath(original.data.sourceProjectPath, "sourceProjectPath"),
+    ...original,
+    sourceProjectPath: absoluteExpandedPath(original.sourceProjectPath, "sourceProjectPath"),
     workspaceStorage: {
-      ...original.data.workspaceStorage,
+      ...original.workspaceStorage,
       command: { ...workspaceCommand, command: path.normalize(workspaceCommand.command) },
       workspaceRoot: absoluteExpandedPath(
-        original.data.workspaceStorage.workspaceRoot,
+        original.workspaceStorage.workspaceRoot,
         "workspaceStorage.workspaceRoot",
       ),
     },
     agent: {
-      ...original.data.agent,
-      command: readAgentCommand(original.data.agent.command, "agent.command", directory),
+      ...original.agent,
+      command: readAgentCommand(original.agent.command, "agent.command", directory),
     },
     testplay: {
-      ...original.data.testplay,
-      command: readAgentCommand(original.data.testplay.command, "testplay.command", directory),
-      unityPath: absoluteExpandedPath(original.data.testplay.unityPath, "testplay.unityPath"),
+      ...original.testplay,
+      command: readAgentCommand(original.testplay.command, "testplay.command", directory),
+      unityPath: absoluteExpandedPath(original.testplay.unityPath, "testplay.unityPath"),
     },
   });
   if (
@@ -263,4 +261,30 @@ export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWork
     throw new Error("sourceProjectPath and workspaceStorage.workspaceRoot must be disjoint.");
   }
   return normalized;
+};
+
+export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfigV1> => {
+  const absolutePath = path.resolve(configPath);
+  const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
+  const original = UnityWorkConfigV1Schema.safeParse(parsed);
+  if (!original.success) {
+    throw new Error("Invalid Unity work schemaVersion 1 config: " + original.error.message);
+  }
+  return normalizeUnityWorkConfig(original.data, path.dirname(absolutePath));
+};
+
+export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBatchConfigV1> => {
+  const absolutePath = path.resolve(configPath);
+  const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
+  const original = UnityBatchConfigV1Schema.safeParse(parsed);
+  if (!original.success) {
+    throw new Error("Invalid Unity batch schemaVersion 1 config: " + original.error.message);
+  }
+  return UnityBatchConfigV1Schema.parse({
+    ...original.data,
+    transaction: await normalizeUnityWorkConfig(
+      original.data.transaction,
+      path.dirname(absolutePath),
+    ),
+  });
 };

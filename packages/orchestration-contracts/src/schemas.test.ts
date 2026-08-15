@@ -7,11 +7,15 @@ import {
   AgentInputEnvelopeV2Schema,
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
+  OrchestrationEventV4Schema,
   OrchestrationEventV3Schema,
   RunIdSchema,
   StepIdSchema,
+  UnityPatchManifestV1Schema,
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
+  type ArtifactKind,
+  type ArtifactMediaType,
 } from "./schemas.js";
 
 const artifact = (kind: "task" | "step-content") =>
@@ -21,6 +25,15 @@ const artifact = (kind: "task" | "step-content") =>
     mediaType: "text/plain; charset=utf-8",
     byteLength: 4,
     contentDigest: `sha256:${"a".repeat(64)}`,
+  });
+
+const artifactOf = (kind: ArtifactKind, mediaType: ArtifactMediaType) =>
+  ArtifactRefSchema.parse({
+    artifactId: randomUUID(),
+    kind,
+    mediaType,
+    byteLength: 4,
+    contentDigest: `sha256:${"b".repeat(64)}`,
   });
 
 describe("orchestration contracts", () => {
@@ -277,5 +290,81 @@ describe("orchestration contracts", () => {
         ],
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps verified patch manifests reference-only and path ordered", () => {
+    const base = artifactOf("unity-source-manifest", "application/json");
+    const result = artifactOf("unity-workspace-manifest", "application/json");
+    const content = artifactOf("unity-patch-content", "application/octet-stream");
+    const valid = {
+      schemaVersion: 1,
+      baseManifest: base,
+      resultManifest: result,
+      entries: [
+        { path: "Assets/added.bin", operation: "add-or-modify", content },
+        {
+          path: "ProjectSettings/removed.asset",
+          operation: "delete",
+          baseContentDigest: `sha256:${"c".repeat(64)}`,
+        },
+      ],
+    } as const;
+    expect(UnityPatchManifestV1Schema.safeParse(valid).success).toBe(true);
+    expect(
+      UnityPatchManifestV1Schema.safeParse({
+        ...valid,
+        entries: [{ ...valid.entries[0], contentBase64: "AA==" }],
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityPatchManifestV1Schema.safeParse({ ...valid, entries: [...valid.entries].reverse() })
+        .success,
+    ).toBe(false);
+    expect(
+      UnityPatchManifestV1Schema.safeParse({
+        ...valid,
+        entries: [{ ...valid.entries[0], path: "Assets/file.txt:stream" }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it("uses schema v4 for both batch parents and resource-managed children", () => {
+    const runId = randomUUID();
+    const base = {
+      schemaVersion: 4,
+      eventId: randomUUID(),
+      runId,
+      sequence: 1,
+      timestamp: new Date(0).toISOString(),
+      type: "workflow.started",
+    } as const;
+    expect(
+      OrchestrationEventV4Schema.safeParse({
+        ...base,
+        payload: {
+          mode: "unity-batch-v1",
+          config: artifactOf("workflow-config", "application/json"),
+          workCount: 3,
+          maxParallelWorks: 2,
+          resourceScope: "batch-local-v1",
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      OrchestrationEventV4Schema.safeParse({
+        ...base,
+        payload: {
+          mode: "unity-work-v2",
+          config: artifactOf("workflow-config", "application/json"),
+          task: artifactOf("task", "text/plain; charset=utf-8"),
+          linkage: {
+            parentRunId: randomUUID(),
+            workId: "work-a",
+            resourceId: "unity-editor",
+            resourceScope: "batch-local-v1",
+          },
+        },
+      }).success,
+    ).toBe(true);
   });
 });
