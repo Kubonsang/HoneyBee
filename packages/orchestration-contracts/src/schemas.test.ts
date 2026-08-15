@@ -8,12 +8,16 @@ import {
   AgentResponseEnvelopeV1Schema,
   ArtifactRefSchema,
   OrchestrationEventV4Schema,
+  OrchestrationEventV5Schema,
   OrchestrationEventV3Schema,
   RunIdSchema,
   StepIdSchema,
   UnityPatchManifestV1Schema,
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
+  UnityBatchConfigV3Schema,
+  UnityEditorObservationV1Schema,
+  UnityWorkConfigV2Schema,
   UnityGlobalResourceEventV1Schema,
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
@@ -469,5 +473,158 @@ describe("orchestration contracts", () => {
     } as const;
     expect(UnityGlobalResourceEventV1Schema.safeParse(value).success).toBe(true);
     expect(UnityGlobalResourceEventV1Schema.safeParse({ ...value, pid: 123 }).success).toBe(false);
+  });
+
+  it("strictly contracts v0.6 config-driven capabilities and schema v5 linkage", () => {
+    const transaction = {
+      schemaVersion: 1,
+      sourceProjectPath: "C:\\source",
+      workspaceStorage: {
+        command: { command: "storage.exe" },
+        contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+        binarySha256: "b".repeat(64),
+        workspaceRoot: "C:\\workspaces",
+        parentKey: {
+          schemaVersion: 2,
+          digest: "c".repeat(64),
+          libraryKey: {
+            schemaVersion: "1",
+            digest: "d".repeat(64),
+            unityVersion: "6000",
+            unityExecutableSha256: "e".repeat(64),
+            manifestSha256: "f".repeat(64),
+            packagesLockSha256: "missing",
+            projectSettingsSha256: "0".repeat(64),
+            buildTarget: "windows/amd64",
+            scriptingBackend: "Mono",
+            projectIdentitySha256: "1".repeat(64),
+          },
+          provider: "vhdx-differencing",
+          filesystem: "NTFS",
+          virtualBytes: 1024,
+          blockBytes: 512,
+          sectorBytes: 512,
+        },
+      },
+      agent: { command: { command: "agent" }, harness: "stdio-framed-v2" },
+      testplay: {
+        command: { command: "testplay" },
+        unityPath: "C:\\Unity.exe",
+        platform: "edit_mode",
+        timeoutMs: 1000,
+      },
+    } as const;
+    const editorPool = {
+      id: "unity-editor-pool",
+      capacity: 2,
+      registrationTimeoutMs: 1000,
+      activationTimeoutMs: 1000,
+      bridgeReadyTimeoutMs: 1000,
+      capabilityTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+    } as const;
+    const config = {
+      schemaVersion: 3,
+      mode: "unity-batch",
+      resourceScope: "global-editor-pool-v2",
+      maxParallelWorks: 2,
+      transaction,
+      editorPool,
+      bridgeProtocolVersion: 3,
+      works: [
+        {
+          id: "work-a",
+          task: "A",
+          priority: "interactive",
+          capabilities: [{ id: "compile-a", kind: "compile" }],
+        },
+        {
+          id: "work-b",
+          task: "B",
+          priority: "background",
+          capabilities: [{ id: "test-b", kind: "warm-test" }],
+        },
+      ],
+    } as const;
+    expect(UnityBatchConfigV3Schema.safeParse(config).success).toBe(true);
+    expect(UnityBatchConfigV3Schema.safeParse({ ...config, typo: true }).success).toBe(false);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...config,
+        transaction: {
+          ...transaction,
+          workspaceStorage: {
+            ...transaction.workspaceStorage,
+            command: { command: "node", args: ["storage.js"] },
+          },
+        },
+      }).success,
+    ).toBe(false);
+
+    const single = {
+      ...transaction,
+      schemaVersion: 2,
+      testplay: { ...transaction.testplay, bridgeProtocolVersion: 3 },
+      editorPool,
+      priority: "validation",
+      capabilities: [{ id: "compile", kind: "compile" }],
+    } as const;
+    expect(UnityWorkConfigV2Schema.safeParse(single).success).toBe(true);
+    expect(
+      UnityWorkConfigV2Schema.safeParse({
+        ...single,
+        capabilities: [
+          { id: "compile", kind: "compile" },
+          { id: "compile", kind: "compile" },
+        ],
+      }).success,
+    ).toBe(false);
+
+    expect(
+      OrchestrationEventV5Schema.safeParse({
+        schemaVersion: 5,
+        eventId: randomUUID(),
+        runId: randomUUID(),
+        sequence: 1,
+        timestamp: new Date(0).toISOString(),
+        type: "workflow.started",
+        payload: {
+          mode: "unity-work-v3",
+          config: artifactOf("workflow-config", "application/json"),
+          task: artifactOf("task", "text/plain; charset=utf-8"),
+          linkage: {
+            workId: "work-a",
+            poolId: "unity-editor-pool",
+            priority: "interactive",
+            capabilityCount: 1,
+          },
+        },
+      }).success,
+    ).toBe(true);
+  });
+
+  it("never gives user or path-unknown Editor observations ownership linkage", () => {
+    const base = {
+      schemaVersion: 1,
+      editorId: randomUUID(),
+      pid: 42,
+      processIdentity: "win32:123",
+      ownership: "unknown",
+      state: "alive",
+      pathObservation: "unavailable",
+      observedAt: new Date(0).toISOString(),
+    } as const;
+    expect(UnityEditorObservationV1Schema.safeParse(base).success).toBe(true);
+    expect(
+      UnityEditorObservationV1Schema.safeParse({ ...base, ownerRunId: randomUUID() }).success,
+    ).toBe(false);
+    expect(
+      UnityEditorObservationV1Schema.safeParse({
+        ...base,
+        ownership: "user",
+        projectPath: "C:\\project",
+        ownerWorkId: "work-a",
+      }).success,
+    ).toBe(false);
   });
 });

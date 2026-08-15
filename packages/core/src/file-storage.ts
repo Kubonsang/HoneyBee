@@ -11,12 +11,14 @@ import {
   OrchestrationEventV2Schema,
   OrchestrationEventV3Schema,
   OrchestrationEventV4Schema,
+  OrchestrationEventV5Schema,
   OrchestrationEventV1Schema,
   RunIdSchema,
   TERMINAL_WORKFLOW_EVENT_TYPES,
   TERMINAL_WORKFLOW_EVENT_V2_TYPES,
   TERMINAL_WORKFLOW_EVENT_V3_TYPES,
   TERMINAL_WORKFLOW_EVENT_V4_TYPES,
+  TERMINAL_WORKFLOW_EVENT_V5_TYPES,
   type AnyOrchestrationEvent,
   type ArtifactRef,
   type FailureMetadata,
@@ -24,11 +26,13 @@ import {
   type OrchestrationEventV2,
   type OrchestrationEventV3,
   type OrchestrationEventV4,
+  type OrchestrationEventV5,
   type RunId,
   type TerminalWorkflowEvent,
   type TerminalWorkflowEventV2,
   type TerminalWorkflowEventV3,
   type TerminalWorkflowEventV4,
+  type TerminalWorkflowEventV5,
 } from "@honeybee/orchestration-contracts";
 
 import { HoneyBeeCoreError } from "./errors.js";
@@ -246,7 +250,9 @@ const parseEvent = (value: unknown): AnyOrchestrationEvent | undefined => {
           ? OrchestrationEventV3Schema.safeParse(value)
           : version === 4
             ? OrchestrationEventV4Schema.safeParse(value)
-            : undefined;
+            : version === 5
+              ? OrchestrationEventV5Schema.safeParse(value)
+              : undefined;
   return parsed?.success === true ? parsed.data : undefined;
 };
 
@@ -257,7 +263,9 @@ const isTerminal = (event: AnyOrchestrationEvent): boolean =>
       ? TERMINAL_WORKFLOW_EVENT_V2_TYPES.has(event.type as TerminalWorkflowEventV2["type"])
       : event.schemaVersion === 3
         ? TERMINAL_WORKFLOW_EVENT_V3_TYPES.has(event.type as TerminalWorkflowEventV3["type"])
-        : TERMINAL_WORKFLOW_EVENT_V4_TYPES.has(event.type as TerminalWorkflowEventV4["type"]);
+        : event.schemaVersion === 4
+          ? TERMINAL_WORKFLOW_EVENT_V4_TYPES.has(event.type as TerminalWorkflowEventV4["type"])
+          : TERMINAL_WORKFLOW_EVENT_V5_TYPES.has(event.type as TerminalWorkflowEventV5["type"]);
 
 const sameArtifactRef = (left: ArtifactRef | undefined, right: ArtifactRef | undefined): boolean =>
   left === undefined || right === undefined
@@ -905,6 +913,592 @@ const validV4Transitions = (events: readonly OrchestrationEventV4[]): boolean =>
     : validV4ChildTransitions(events);
 };
 
+const validV5BatchTransitions = (events: readonly OrchestrationEventV5[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started" || start.payload.mode !== "unity-batch-v2") return false;
+  const registered = new Map<
+    string,
+    Readonly<{ childRunId: RunId; priority: string; capabilityCount: number }>
+  >();
+  const finished = new Map<
+    string,
+    Extract<OrchestrationEventV5, { type: "work.finished" }>["payload"]
+  >();
+  let cancelRequestId: string | undefined;
+  let cancelling = false;
+
+  const expectedSummary = () => {
+    const values = [...finished.values()];
+    return {
+      total: values.length,
+      completed: values.filter((value) => value.status === "completed").length,
+      failed: values.filter((value) => value.status === "failed").length,
+      cancelled: values.filter((value) => value.status === "cancelled").length,
+    };
+  };
+  const sameSummary = (value: {
+    total: number;
+    completed: number;
+    failed: number;
+    cancelled: number;
+  }) => {
+    const expected = expectedSummary();
+    return (
+      value.total === expected.total &&
+      value.completed === expected.completed &&
+      value.failed === expected.failed &&
+      value.cancelled === expected.cancelled
+    );
+  };
+
+  for (const event of events.slice(1)) {
+    switch (event.type) {
+      case "artifact.stored":
+        break;
+      case "work.registered":
+        if (
+          registered.size >= start.payload.workCount ||
+          registered.has(event.payload.workId) ||
+          [...registered.values()].some((value) => value.childRunId === event.payload.childRunId)
+        ) {
+          return false;
+        }
+        registered.set(event.payload.workId, {
+          childRunId: event.payload.childRunId,
+          priority: event.payload.priority,
+          capabilityCount: event.payload.capabilityCount,
+        });
+        break;
+      case "work.finished": {
+        const registration = registered.get(event.payload.workId);
+        if (
+          registration === undefined ||
+          registration.childRunId !== event.payload.childRunId ||
+          finished.has(event.payload.workId)
+        ) {
+          return false;
+        }
+        finished.set(event.payload.workId, event.payload);
+        break;
+      }
+      case "control.accepted":
+        if (cancelRequestId !== undefined) return false;
+        cancelRequestId = event.payload.requestId;
+        break;
+      case "workflow.cancelling":
+        if (cancelRequestId !== event.payload.requestId || cancelling) return false;
+        cancelling = true;
+        break;
+      case "workflow.completed":
+        if (
+          !("summary" in event.payload) ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          event.payload.summary.completed !== event.payload.summary.total
+        ) {
+          return false;
+        }
+        break;
+      case "workflow.failed":
+        if (
+          !("summary" in event.payload) ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          (event.payload.summary.failed === 0 && event.payload.summary.cancelled === 0)
+        ) {
+          return false;
+        }
+        break;
+      case "workflow.cancelled":
+        if (
+          !("summary" in event.payload) ||
+          !cancelling ||
+          registered.size !== start.payload.workCount ||
+          finished.size !== registered.size ||
+          !sameSummary(event.payload.summary) ||
+          event.payload.summary.failed !== 0
+        ) {
+          return false;
+        }
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+};
+
+const validV5ChildTransitions = (events: readonly OrchestrationEventV5[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started" || start.payload.mode !== "unity-work-v3") return false;
+  const linkage = start.payload.linkage;
+  const stored = new Set<string>();
+  let sourceBaseline: ArtifactRef | undefined;
+  let sourceAfter: ArtifactRef | undefined;
+  let workspacePhase:
+    "none" | "prepared" | "acquiring" | "acquire-failed" | "acquired" | "releasing" | "released" =
+    "none";
+  let workspaceLeaseId: string | undefined;
+  let workspaceRelease: ArtifactRef | undefined;
+  let agentPhase: "none" | "started" | "exited" = "none";
+  let agentStartedEventId: string | undefined;
+  let agentRegistered = false;
+  let agentDrained = false;
+  let poolPhase:
+    | "none"
+    | "requested"
+    | "queued"
+    | "acquired"
+    | "cancelled"
+    | "failed"
+    | "releasing"
+    | "released" = "none";
+  let poolRequestId: string | undefined;
+  let poolTicket: number | undefined;
+  let poolLeaseId: string | undefined;
+  let poolSlotId: string | undefined;
+  let launchPhase:
+    | "none"
+    | "intended"
+    | "contained"
+    | "activated"
+    | "owned"
+    | "bound"
+    | "stopping"
+    | "exited"
+    | "drained" = "none";
+  let launchId: string | undefined;
+  let editorId: string | undefined;
+  let containmentReceipt: ArtifactRef | undefined;
+  let nextCapability = 0;
+  let activeCapability:
+    | Readonly<{
+        id: string;
+        index: number;
+        kind: "compile" | "warm-test";
+        processEventId?: string;
+        processRegistered?: boolean;
+        processDone?: boolean;
+      }>
+    | undefined;
+  let capabilityFailed = false;
+  const evidence: ArtifactRef[] = [];
+  let sourceUnchanged = false;
+  let patch: Extract<OrchestrationEventV5, { type: "patch.verified" }>["payload"] | undefined;
+  let decision:
+    Extract<OrchestrationEventV5, { type: "transaction.outcome-decided" }>["payload"] | undefined;
+
+  const artifactStored = (artifact: ArtifactRef): boolean => stored.has(artifact.artifactId);
+  const samePoolRequest = (payload: { poolId: string; requestId: string; priority: string }) =>
+    payload.poolId === linkage.poolId &&
+    payload.requestId === poolRequestId &&
+    payload.priority === linkage.priority;
+  const samePoolLease = (payload: {
+    poolId: string;
+    requestId: string;
+    priority: string;
+    ticket: number;
+    leaseId: string;
+    slotId: string;
+  }) =>
+    samePoolRequest(payload) &&
+    payload.ticket === poolTicket &&
+    payload.leaseId === poolLeaseId &&
+    payload.slotId === poolSlotId;
+  const sameCapability = (payload: { capabilityId: string; index: number; kind: string }) =>
+    activeCapability !== undefined &&
+    payload.capabilityId === activeCapability.id &&
+    payload.index === activeCapability.index &&
+    payload.kind === activeCapability.kind;
+
+  for (const event of events.slice(1)) {
+    switch (event.type) {
+      case "artifact.stored":
+        stored.add(event.payload.artifact.artifactId);
+        break;
+      case "source.baselined":
+        if (sourceBaseline !== undefined || !artifactStored(event.payload.manifest)) return false;
+        sourceBaseline = event.payload.manifest;
+        break;
+      case "workspace.prepared":
+        if (
+          workspacePhase !== "none" ||
+          sourceBaseline === undefined ||
+          !sameArtifactRef(event.payload.sourceManifest, sourceBaseline)
+        )
+          return false;
+        workspacePhase = "prepared";
+        break;
+      case "workspace.acquire-started":
+        if (workspacePhase !== "prepared" || !artifactStored(event.payload.request)) return false;
+        workspacePhase = "acquiring";
+        break;
+      case "workspace.acquire-failed":
+        if (workspacePhase !== "acquiring") return false;
+        workspacePhase = "acquire-failed";
+        break;
+      case "workspace.acquired":
+        if (workspacePhase !== "acquiring" || !artifactStored(event.payload.receipt)) return false;
+        workspacePhase = "acquired";
+        workspaceLeaseId = event.payload.leaseId;
+        break;
+      case "agent.started":
+        if (workspacePhase !== "acquired" || agentPhase !== "none") return false;
+        agentPhase = "started";
+        agentStartedEventId = event.eventId;
+        break;
+      case "process.containment-registered":
+        if (
+          agentPhase !== "started" ||
+          agentRegistered ||
+          event.payload.startedEventId !== agentStartedEventId
+        )
+          return false;
+        agentRegistered = true;
+        break;
+      case "agent.exited":
+        if (agentPhase !== "started" || !agentRegistered) return false;
+        agentPhase = "exited";
+        break;
+      case "agent.input-write-failed":
+        if (agentPhase !== "started" && agentPhase !== "exited") return false;
+        break;
+      case "process.drain-completed":
+        if (
+          agentStartedEventId === undefined ||
+          event.payload.startedEventId !== agentStartedEventId ||
+          agentDrained
+        )
+          return false;
+        agentDrained = true;
+        agentPhase = "exited";
+        break;
+      case "editor.pool-requested":
+        if (agentPhase !== "exited" || poolPhase !== "none") return false;
+        if (event.payload.poolId !== linkage.poolId || event.payload.priority !== linkage.priority)
+          return false;
+        poolRequestId = event.payload.requestId;
+        poolPhase = "requested";
+        break;
+      case "editor.pool-queued":
+        if (poolPhase !== "requested" || !samePoolRequest(event.payload)) return false;
+        poolTicket = event.payload.ticket;
+        poolPhase = "queued";
+        break;
+      case "editor.pool-acquire-failed":
+        if (!["requested", "queued"].includes(poolPhase) || !samePoolRequest(event.payload))
+          return false;
+        poolPhase = "failed";
+        break;
+      case "editor.pool-cancelled":
+        if (!["requested", "queued"].includes(poolPhase) || !samePoolRequest(event.payload))
+          return false;
+        poolPhase = "cancelled";
+        break;
+      case "editor.pool-acquired":
+        if (
+          poolPhase !== "queued" ||
+          !samePoolRequest(event.payload) ||
+          event.payload.ticket !== poolTicket
+        )
+          return false;
+        poolLeaseId = event.payload.leaseId;
+        poolSlotId = event.payload.slotId;
+        poolPhase = "acquired";
+        break;
+      case "editor.launch-intended":
+        if (
+          poolPhase !== "acquired" ||
+          launchPhase !== "none" ||
+          event.payload.leaseId !== poolLeaseId ||
+          event.payload.slotId !== poolSlotId ||
+          !artifactStored(event.payload.intent)
+        )
+          return false;
+        launchId = event.payload.launchId;
+        launchPhase = "intended";
+        break;
+      case "editor.containment-registered":
+        if (
+          launchPhase !== "intended" ||
+          event.payload.launchId !== launchId ||
+          !artifactStored(event.payload.receipt)
+        )
+          return false;
+        containmentReceipt = event.payload.receipt;
+        launchPhase = "contained";
+        break;
+      case "editor.launch-abandoned":
+        if (launchPhase !== "intended" || event.payload.launchId !== launchId) return false;
+        launchPhase = "drained";
+        break;
+      case "editor.activated":
+        if (launchPhase !== "contained" || event.payload.launchId !== launchId) return false;
+        launchPhase = "activated";
+        break;
+      case "editor.ownership-established":
+        if (
+          launchPhase !== "activated" ||
+          event.payload.launchId !== launchId ||
+          event.payload.slotId !== poolSlotId ||
+          !artifactStored(event.payload.receipt)
+        )
+          return false;
+        editorId = event.payload.editorId;
+        launchPhase = "owned";
+        break;
+      case "editor.bridge-bound":
+        if (
+          launchPhase !== "owned" ||
+          event.payload.editorId !== editorId ||
+          !artifactStored(event.payload.binding)
+        )
+          return false;
+        launchPhase = "bound";
+        break;
+      case "capability.started":
+        if (
+          launchPhase !== "bound" ||
+          activeCapability !== undefined ||
+          capabilityFailed ||
+          event.payload.index !== nextCapability ||
+          event.payload.index >= linkage.capabilityCount
+        )
+          return false;
+        activeCapability = {
+          id: event.payload.capabilityId,
+          index: event.payload.index,
+          kind: event.payload.kind,
+        };
+        break;
+      case "capability.process-started":
+        if (!sameCapability(event.payload) || activeCapability?.processEventId !== undefined)
+          return false;
+        if (activeCapability === undefined) return false;
+        activeCapability = {
+          ...activeCapability,
+          processEventId: event.eventId,
+          processRegistered: false,
+          processDone: false,
+        };
+        break;
+      case "capability.process-registered":
+        if (
+          !sameCapability(event.payload) ||
+          activeCapability?.processEventId === undefined ||
+          activeCapability.processRegistered === true ||
+          event.payload.startedEventId !== activeCapability.processEventId
+        )
+          return false;
+        activeCapability = { ...activeCapability, processRegistered: true };
+        break;
+      case "capability.process-exited":
+        if (
+          !sameCapability(event.payload) ||
+          activeCapability?.processEventId === undefined ||
+          activeCapability.processRegistered !== true
+        )
+          return false;
+        activeCapability = { ...activeCapability, processDone: true };
+        break;
+      case "capability.process-drained":
+        if (
+          !sameCapability(event.payload) ||
+          activeCapability?.processEventId === undefined ||
+          event.payload.startedEventId !== activeCapability.processEventId
+        )
+          return false;
+        activeCapability = { ...activeCapability, processDone: true };
+        break;
+      case "capability.completed":
+        if (
+          !sameCapability(event.payload) ||
+          (activeCapability?.processEventId !== undefined &&
+            activeCapability.processDone !== true) ||
+          !artifactStored(event.payload.evidence)
+        )
+          return false;
+        evidence.push(event.payload.evidence);
+        nextCapability += 1;
+        activeCapability = undefined;
+        break;
+      case "capability.failed":
+        if (
+          !sameCapability(event.payload) ||
+          (activeCapability?.processEventId !== undefined && activeCapability.processDone !== true)
+        )
+          return false;
+        capabilityFailed = true;
+        activeCapability = undefined;
+        break;
+      case "editor.stop-started":
+        if (
+          !["owned", "bound"].includes(launchPhase) ||
+          activeCapability !== undefined ||
+          event.payload.editorId !== editorId ||
+          event.payload.launchId !== launchId
+        )
+          return false;
+        launchPhase = "stopping";
+        break;
+      case "editor.exited":
+        if (
+          launchPhase !== "stopping" ||
+          event.payload.editorId !== editorId ||
+          event.payload.launchId !== launchId
+        )
+          return false;
+        launchPhase = "exited";
+        break;
+      case "editor.containment-drained":
+        if (
+          !["contained", "activated", "exited"].includes(launchPhase) ||
+          event.payload.launchId !== launchId ||
+          containmentReceipt === undefined ||
+          !sameArtifactRef(event.payload.receipt, containmentReceipt)
+        )
+          return false;
+        launchPhase = "drained";
+        break;
+      case "editor.pool-release-started":
+        if (
+          poolPhase !== "acquired" ||
+          (launchPhase !== "none" && launchPhase !== "drained") ||
+          !samePoolLease(event.payload)
+        )
+          return false;
+        poolPhase = "releasing";
+        break;
+      case "editor.pool-release-failed":
+        if (poolPhase !== "releasing" || !samePoolLease(event.payload)) return false;
+        poolPhase = "acquired";
+        break;
+      case "editor.pool-released":
+        if (poolPhase !== "releasing" || !samePoolLease(event.payload)) return false;
+        poolPhase = "released";
+        break;
+      case "source.checked":
+        if (
+          sourceBaseline === undefined ||
+          !sameArtifactRef(event.payload.before, sourceBaseline) ||
+          !artifactStored(event.payload.after) ||
+          ["requested", "queued", "acquired", "releasing"].includes(poolPhase)
+        )
+          return false;
+        sourceAfter = event.payload.after;
+        sourceUnchanged = event.payload.unchanged;
+        break;
+      case "patch.verified":
+        if (
+          !sourceUnchanged ||
+          sourceAfter === undefined ||
+          poolPhase !== "released" ||
+          nextCapability !== linkage.capabilityCount ||
+          capabilityFailed ||
+          patch !== undefined ||
+          !artifactStored(event.payload.patch) ||
+          !artifactStored(event.payload.resultManifest) ||
+          !sameArtifactRef(event.payload.baseManifest, sourceBaseline)
+        )
+          return false;
+        patch = event.payload;
+        break;
+      case "transaction.outcome-decided":
+        if (
+          decision !== undefined ||
+          workspacePhase !== "acquired" ||
+          sourceAfter === undefined ||
+          (event.payload.outcome === "completed" && patch === undefined)
+        )
+          return false;
+        decision = event.payload;
+        break;
+      case "control.accepted":
+        if (workspacePhase !== "acquired" || decision !== undefined) return false;
+        break;
+      case "workspace.release-started":
+        if (
+          workspacePhase !== "acquired" ||
+          decision === undefined ||
+          event.payload.leaseId !== workspaceLeaseId
+        )
+          return false;
+        workspacePhase = "releasing";
+        break;
+      case "workspace.release-failed":
+        if (workspacePhase !== "releasing" || event.payload.leaseId !== workspaceLeaseId)
+          return false;
+        workspacePhase = "acquired";
+        break;
+      case "workspace.released":
+        if (
+          workspacePhase !== "releasing" ||
+          event.payload.leaseId !== workspaceLeaseId ||
+          !artifactStored(event.payload.receipt)
+        )
+          return false;
+        workspaceRelease = event.payload.receipt;
+        workspacePhase = "released";
+        break;
+      case "workflow.completed":
+        if (
+          !("patch" in event.payload) ||
+          decision?.outcome !== "completed" ||
+          workspacePhase !== "released" ||
+          evidence.length === 0 ||
+          patch === undefined ||
+          !sameArtifactRef(event.payload.evidence, evidence.at(-1)) ||
+          !sameArtifactRef(event.payload.patch, patch.patch) ||
+          !sameArtifactRef(event.payload.resultManifest, patch.resultManifest) ||
+          !sameArtifactRef(event.payload.release, workspaceRelease) ||
+          !sameArtifactRef(event.payload.sourceAfter, sourceAfter)
+        )
+          return false;
+        break;
+      case "workflow.failed":
+        if ("summary" in event.payload) return false;
+        if (
+          ["none", "prepared", "acquire-failed"].includes(workspacePhase) &&
+          decision === undefined
+        ) {
+          if (event.payload.release !== undefined || event.payload.sourceAfter !== undefined)
+            return false;
+        } else if (
+          decision?.outcome !== "failed" ||
+          workspacePhase !== "released" ||
+          !sameFailureMetadata(event.payload.failure, decision.failure) ||
+          !sameArtifactRef(event.payload.release, workspaceRelease) ||
+          !sameArtifactRef(event.payload.sourceAfter, sourceAfter)
+        )
+          return false;
+        break;
+      case "workflow.cancelled":
+        if (
+          "summary" in event.payload ||
+          decision?.outcome !== "cancelled" ||
+          workspacePhase !== "released" ||
+          !sameArtifactRef(event.payload.release, workspaceRelease) ||
+          !sameArtifactRef(event.payload.sourceAfter, sourceAfter)
+        )
+          return false;
+        break;
+      default:
+        return false;
+    }
+  }
+  return true;
+};
+
+const validV5Transitions = (events: readonly OrchestrationEventV5[]): boolean => {
+  const start = events[0];
+  if (start?.type !== "workflow.started") return false;
+  return start.payload.mode === "unity-batch-v2"
+    ? validV5BatchTransitions(events)
+    : validV5ChildTransitions(events);
+};
+
 const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean => {
   const phases = new Map<string, string>();
   const attempts = new Map<string, number>();
@@ -1135,6 +1729,15 @@ export class FileOrchestrationJournal
           "Unity v0.5 Journal transition invariants failed.",
         );
       }
+      if (
+        validatedEvent.schemaVersion === 5 &&
+        !validV5Transitions([...(existing as OrchestrationEventV5[]), validatedEvent])
+      ) {
+        throw new HoneyBeeCoreError(
+          "journal.write-failed",
+          "Unity v0.6 Journal transition invariants failed.",
+        );
+      }
       const handle = await open(journalPath, "a");
       try {
         await handle.writeFile(`${JSON.stringify(validatedEvent)}\n`, "utf8");
@@ -1219,14 +1822,25 @@ export class FileOrchestrationJournal
         terminal: terminal as TerminalWorkflowEventV3,
       };
     }
-    if (!validV4Transitions(events as OrchestrationEventV4[])) return indeterminate();
+    if (events[0].schemaVersion === 4) {
+      if (!validV4Transitions(events as OrchestrationEventV4[])) return indeterminate();
+      if (terminal === undefined) {
+        return { status: "active", events: events as OrchestrationEventV4[] };
+      }
+      return {
+        status: "terminal",
+        events: events as OrchestrationEventV4[],
+        terminal: terminal as TerminalWorkflowEventV4,
+      };
+    }
+    if (!validV5Transitions(events as OrchestrationEventV5[])) return indeterminate();
     if (terminal === undefined) {
-      return { status: "active", events: events as OrchestrationEventV4[] };
+      return { status: "active", events: events as OrchestrationEventV5[] };
     }
     return {
       status: "terminal",
-      events: events as OrchestrationEventV4[],
-      terminal: terminal as TerminalWorkflowEventV4,
+      events: events as OrchestrationEventV5[],
+      terminal: terminal as TerminalWorkflowEventV5,
     };
   }
 

@@ -8,12 +8,14 @@ import {
   StepIdSchema,
   WorkflowConfigV2Schema,
   WorkflowConfigV3Schema,
-  UnityWorkConfigV1Schema,
+  UnityWorkConfigSchema,
   UnityBatchConfigSchema,
   type AgentCommand,
   type AgentDefinition,
   type WorkflowConfigV3,
   type UnityWorkConfigV1,
+  type UnityWorkConfigV2,
+  type UnityWorkConfig,
   type UnityBatchConfig,
 } from "@honeybee/orchestration-contracts";
 
@@ -219,10 +221,18 @@ const absoluteExpandedPath = (value: string, name: string): string => {
   return path.normalize(expanded);
 };
 
-const normalizeUnityWorkConfig = async (
+function normalizeUnityWorkConfig(
   original: UnityWorkConfigV1,
   directory: string,
-): Promise<UnityWorkConfigV1> => {
+): Promise<UnityWorkConfigV1>;
+function normalizeUnityWorkConfig(
+  original: UnityWorkConfigV2,
+  directory: string,
+): Promise<UnityWorkConfigV2>;
+async function normalizeUnityWorkConfig(
+  original: UnityWorkConfig,
+  directory: string,
+): Promise<UnityWorkConfig> {
   const workspaceCommand = readAgentCommand(
     original.workspaceStorage.command,
     "workspaceStorage.command",
@@ -231,7 +241,7 @@ const normalizeUnityWorkConfig = async (
   if (!path.isAbsolute(workspaceCommand.command)) {
     throw new Error("workspaceStorage.command.command must be an absolute path.");
   }
-  const normalized = UnityWorkConfigV1Schema.parse({
+  const normalized = UnityWorkConfigSchema.parse({
     ...original,
     sourceProjectPath: absoluteExpandedPath(original.sourceProjectPath, "sourceProjectPath"),
     workspaceStorage: {
@@ -261,16 +271,18 @@ const normalizeUnityWorkConfig = async (
     throw new Error("sourceProjectPath and workspaceStorage.workspaceRoot must be disjoint.");
   }
   return normalized;
-};
+}
 
-export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfigV1> => {
+export const loadUnityWorkConfig = async (configPath: string): Promise<UnityWorkConfig> => {
   const absolutePath = path.resolve(configPath);
   const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
-  const original = UnityWorkConfigV1Schema.safeParse(parsed);
+  const original = UnityWorkConfigSchema.safeParse(parsed);
   if (!original.success) {
-    throw new Error("Invalid Unity work schemaVersion 1 config: " + original.error.message);
+    throw new Error("Invalid Unity work schemaVersion 1 or 2 config: " + original.error.message);
   }
-  return normalizeUnityWorkConfig(original.data, path.dirname(absolutePath));
+  return original.data.schemaVersion === 1
+    ? normalizeUnityWorkConfig(original.data, path.dirname(absolutePath))
+    : normalizeUnityWorkConfig(original.data, path.dirname(absolutePath));
 };
 
 export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBatchConfig> => {
@@ -278,7 +290,9 @@ export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBat
   const parsed = JSON.parse(await readFile(absolutePath, "utf8")) as unknown;
   const original = UnityBatchConfigSchema.safeParse(parsed);
   if (!original.success) {
-    throw new Error("Invalid Unity batch schemaVersion 1 or 2 config: " + original.error.message);
+    throw new Error(
+      "Invalid Unity batch schemaVersion 1, 2, or 3 config: " + original.error.message,
+    );
   }
   return UnityBatchConfigSchema.parse({
     ...original.data,

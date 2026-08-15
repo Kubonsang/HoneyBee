@@ -91,6 +91,11 @@ export const ArtifactKindSchema = z.enum([
   "unity-workspace-manifest",
   "unity-patch-content",
   "unity-verified-patch",
+  "editor-launch-intent",
+  "editor-containment-receipt",
+  "editor-ownership-receipt",
+  "warm-bridge-binding",
+  "unity-capability-evidence",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
@@ -796,6 +801,124 @@ export const UnityWorkConfigV1Schema = z
   });
 export type UnityWorkConfigV1 = z.infer<typeof UnityWorkConfigV1Schema>;
 
+export const UnityWorkPrioritySchema = z.enum(["interactive", "validation", "background"]);
+export type UnityWorkPriority = z.infer<typeof UnityWorkPrioritySchema>;
+
+export const UnityCapabilitySchema = z.discriminatedUnion("kind", [
+  z.object({ id: StepIdSchema, kind: z.literal("compile") }).strict(),
+  z
+    .object({
+      id: StepIdSchema,
+      kind: z.literal("warm-test"),
+      filter: z.string().trim().min(1).optional(),
+      category: z.string().trim().min(1).optional(),
+    })
+    .strict(),
+]);
+export type UnityCapability = z.infer<typeof UnityCapabilitySchema>;
+
+const UnityCapabilityListSchema = z
+  .array(UnityCapabilitySchema)
+  .min(1)
+  .max(16)
+  .superRefine((capabilities, context) => {
+    const ids = new Set<string>();
+    for (const [index, capability] of capabilities.entries()) {
+      if (ids.has(capability.id)) {
+        context.addIssue({
+          code: "custom",
+          path: [index, "id"],
+          message: `Duplicate capability id: ${capability.id}`,
+        });
+      }
+      ids.add(capability.id);
+    }
+  });
+
+export const UnityEditorPoolConfigSchema = z
+  .object({
+    id: ResourceIdSchema,
+    capacity: z.number().int().min(1).max(32),
+    registrationTimeoutMs: z.number().int().positive(),
+    activationTimeoutMs: z.number().int().positive(),
+    bridgeReadyTimeoutMs: z.number().int().positive(),
+    capabilityTimeoutMs: z.number().int().positive(),
+    shutdownTimeoutMs: z.number().int().positive(),
+  })
+  .strict();
+export type UnityEditorPoolConfig = z.infer<typeof UnityEditorPoolConfigSchema>;
+
+const UnityWorkConfigV2BaseSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    sourceProjectPath: z.string().min(1),
+    workspaceStorage: z
+      .object({
+        command: AgentCommandSchema.superRefine((command, context) => {
+          if ((command.args?.length ?? 0) > 0) {
+            context.addIssue({
+              code: "custom",
+              path: ["args"],
+              message: "Workspace storage must be one pinned executable without arguments.",
+            });
+          }
+          if (command.env !== undefined) {
+            context.addIssue({
+              code: "custom",
+              path: ["env"],
+              message: "Workspace storage cannot inject an unpinned execution environment.",
+            });
+          }
+        }),
+        contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
+        binarySha256: Sha256HexSchema,
+        workspaceRoot: z.string().min(1),
+        parentKey: UnityWorkspaceParentKeySchema,
+        storeMaxAllocatedBytes: z.number().int().positive().optional(),
+        minimumHostFreeBytes: z.number().int().nonnegative().optional(),
+      })
+      .strict(),
+    agent: z
+      .object({
+        command: AgentCommandSchema,
+        harness: z.literal("stdio-framed-v2"),
+        timeoutMs: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().optional(),
+      })
+      .strict(),
+    testplay: z
+      .object({
+        command: AgentCommandSchema,
+        unityPath: z.string().min(1),
+        platform: z.literal("edit_mode"),
+        timeoutMs: z.number().int().positive(),
+        bridgeProtocolVersion: z.literal(3),
+      })
+      .strict(),
+    editorPool: UnityEditorPoolConfigSchema,
+    priority: UnityWorkPrioritySchema.default("validation"),
+    capabilities: UnityCapabilityListSchema,
+  })
+  .strict();
+
+export const UnityWorkConfigV2Schema = UnityWorkConfigV2BaseSchema.superRefine(
+  (config, context) => {
+    if (config.workspaceStorage.parentKey.localPackagesDigest !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["workspaceStorage", "parentKey", "localPackagesDigest"],
+        message: "Unity work v0.6 does not stage external local packages.",
+      });
+    }
+  },
+);
+export type UnityWorkConfigV2 = z.infer<typeof UnityWorkConfigV2Schema>;
+export const UnityWorkConfigSchema = z.discriminatedUnion("schemaVersion", [
+  UnityWorkConfigV1Schema,
+  UnityWorkConfigV2Schema,
+]);
+export type UnityWorkConfig = z.infer<typeof UnityWorkConfigSchema>;
+
 const UnityBatchResourcesSchema = z
   .array(
     z
@@ -889,9 +1012,71 @@ export const UnityBatchConfigV2Schema = z
   .strict()
   .superRefine(validateUnityBatchConfig);
 export type UnityBatchConfigV2 = z.infer<typeof UnityBatchConfigV2Schema>;
+
+const UnityBatchWorksV3Schema = z
+  .array(
+    z
+      .object({
+        id: StepIdSchema,
+        task: z.string().trim().min(1),
+        priority: UnityWorkPrioritySchema.default("validation"),
+        capabilities: UnityCapabilityListSchema,
+      })
+      .strict(),
+  )
+  .min(2);
+
+export const UnityBatchConfigV3Schema = z
+  .object({
+    schemaVersion: z.literal(3),
+    mode: z.literal("unity-batch"),
+    resourceScope: z.literal("global-editor-pool-v2"),
+    maxParallelWorks: z.number().int().positive(),
+    transaction: UnityWorkConfigV1Schema,
+    editorPool: UnityEditorPoolConfigSchema,
+    bridgeProtocolVersion: z.literal(3),
+    works: UnityBatchWorksV3Schema,
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.maxParallelWorks > config.works.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+    const works = new Set<string>();
+    for (const [index, work] of config.works.entries()) {
+      if (works.has(work.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "id"],
+          message: `Duplicate Work id: ${work.id}`,
+        });
+      }
+      works.add(work.id);
+    }
+    if ((config.transaction.workspaceStorage.command.args?.length ?? 0) > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "args"],
+        message: "Workspace storage must be one pinned executable without arguments.",
+      });
+    }
+    if (config.transaction.workspaceStorage.command.env !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "env"],
+        message: "Workspace storage cannot inject an unpinned execution environment.",
+      });
+    }
+  });
+export type UnityBatchConfigV3 = z.infer<typeof UnityBatchConfigV3Schema>;
 export const UnityBatchConfigSchema = z.discriminatedUnion("schemaVersion", [
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
+  UnityBatchConfigV3Schema,
 ]);
 export type UnityBatchConfig = z.infer<typeof UnityBatchConfigSchema>;
 
@@ -916,6 +1101,193 @@ export const UnityGlobalResourceEventV1Schema = z.discriminatedUnion("type", [
   unityGlobalResourceEvent("resource.released", { leaseId: EventIdSchema }),
 ]);
 export type UnityGlobalResourceEventV1 = z.infer<typeof UnityGlobalResourceEventV1Schema>;
+
+export const UnityEditorSlotIdSchema = z
+  .string()
+  .regex(/^editor-[1-9][0-9]*$/u)
+  .brand<"UnityEditorSlotId">();
+export type UnityEditorSlotId = z.infer<typeof UnityEditorSlotIdSchema>;
+
+const UnityEditorPoolEventV2BaseSchema = z.object({
+  schemaVersion: z.literal(2),
+  eventId: EventIdSchema,
+  sequence: z.number().int().positive(),
+  timestamp: z.string().datetime(),
+  poolId: ResourceIdSchema,
+});
+const editorPoolEventV2 = <Type extends string, Payload extends z.ZodRawShape>(
+  type: Type,
+  payload: Payload,
+) => UnityEditorPoolEventV2BaseSchema.extend({ type: z.literal(type), ...payload }).strict();
+const EditorPoolRequestFields = {
+  requestId: EventIdSchema,
+  ownerRunId: RunIdSchema,
+  ownerWorkId: StepIdSchema,
+  priority: UnityWorkPrioritySchema,
+  ticket: z.number().int().positive(),
+};
+export const UnityEditorPoolEventV2Schema = z.discriminatedUnion("type", [
+  editorPoolEventV2("editor-pool.declared", {
+    capacity: z.number().int().min(1).max(32),
+  }),
+  editorPoolEventV2("editor-pool.queued", EditorPoolRequestFields),
+  editorPoolEventV2("editor-pool.acquired", {
+    ...EditorPoolRequestFields,
+    leaseId: EventIdSchema,
+    slotId: UnityEditorSlotIdSchema,
+  }),
+  editorPoolEventV2("editor-pool.cancelled", EditorPoolRequestFields),
+  editorPoolEventV2("editor-pool.released", {
+    ...EditorPoolRequestFields,
+    leaseId: EventIdSchema,
+    slotId: UnityEditorSlotIdSchema,
+  }),
+]);
+export type UnityEditorPoolEventV2 = z.infer<typeof UnityEditorPoolEventV2Schema>;
+
+export const UnityEditorOwnershipSchema = z.enum(["honeybee", "user", "unknown"]);
+export type UnityEditorOwnership = z.infer<typeof UnityEditorOwnershipSchema>;
+
+export const UnityEditorObservationV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    editorId: EventIdSchema,
+    pid: z.number().int().positive(),
+    processIdentity: z.string().min(1).max(512),
+    executablePath: z.string().min(1).optional(),
+    projectPath: z.string().min(1).optional(),
+    workspaceId: z.string().min(1).optional(),
+    ownership: UnityEditorOwnershipSchema,
+    ownerRunId: RunIdSchema.optional(),
+    ownerWorkId: StepIdSchema.optional(),
+    slotId: UnityEditorSlotIdSchema.optional(),
+    launchId: EventIdSchema.optional(),
+    state: z.enum(["alive", "exited", "stale"]),
+    pathObservation: z.enum(["confirmed", "unavailable", "invalid"]),
+    observedAt: z.string().datetime(),
+  })
+  .strict()
+  .superRefine((observation, context) => {
+    if (
+      observation.ownership === "honeybee" &&
+      (observation.ownerRunId === undefined ||
+        observation.ownerWorkId === undefined ||
+        observation.slotId === undefined ||
+        observation.launchId === undefined ||
+        observation.projectPath === undefined ||
+        observation.workspaceId === undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ownership"],
+        message: "HoneyBee-owned Editor observations need durable owner and workspace identity.",
+      });
+    }
+    if (
+      observation.ownership !== "honeybee" &&
+      (observation.ownerRunId !== undefined ||
+        observation.ownerWorkId !== undefined ||
+        observation.slotId !== undefined ||
+        observation.launchId !== undefined ||
+        observation.workspaceId !== undefined)
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["ownership"],
+        message: "User or unknown Editors cannot carry HoneyBee lease ownership.",
+      });
+    }
+  });
+export type UnityEditorObservationV1 = z.infer<typeof UnityEditorObservationV1Schema>;
+
+const LaunchNonceSchema = z.string().regex(/^[0-9a-f]{64}$/u);
+export const EditorLaunchIntentV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    launchId: EventIdSchema,
+    nonce: LaunchNonceSchema,
+    poolId: ResourceIdSchema,
+    slotId: UnityEditorSlotIdSchema,
+    poolLeaseId: EventIdSchema,
+    ownerRunId: RunIdSchema,
+    ownerWorkId: StepIdSchema,
+    workspaceId: z.string().min(1),
+    projectPath: z.string().min(1),
+    unityExecutablePath: z.string().min(1),
+    unityExecutableDigest: ContentDigestSchema,
+    containmentReceiptPath: z.string().min(1),
+    registrationTimeoutMs: z.number().int().positive(),
+    activationTimeoutMs: z.number().int().positive(),
+    shutdownTimeoutMs: z.number().int().positive(),
+  })
+  .strict();
+export type EditorLaunchIntentV1 = z.infer<typeof EditorLaunchIntentV1Schema>;
+
+export const EditorContainmentReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    launchId: EventIdSchema,
+    nonce: LaunchNonceSchema,
+    containmentPid: z.number().int().positive(),
+    processIdentity: z.string().min(1).max(512),
+    containmentProtocol: z.literal("editor-deferred-v1"),
+    poolId: ResourceIdSchema,
+    slotId: UnityEditorSlotIdSchema,
+    poolLeaseId: EventIdSchema,
+    workspaceId: z.string().min(1),
+    publishedAt: z.string().datetime(),
+  })
+  .strict();
+export type EditorContainmentReceiptV1 = z.infer<typeof EditorContainmentReceiptV1Schema>;
+
+export const EditorOwnershipReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    launchId: EventIdSchema,
+    nonce: LaunchNonceSchema,
+    editorId: EventIdSchema,
+    editorPid: z.number().int().positive(),
+    editorProcessIdentity: z.string().min(1).max(512),
+    containment: ArtifactRefSchema,
+    poolId: ResourceIdSchema,
+    slotId: UnityEditorSlotIdSchema,
+    poolLeaseId: EventIdSchema,
+    ownerRunId: RunIdSchema,
+    ownerWorkId: StepIdSchema,
+    workspaceId: z.string().min(1),
+    projectPath: z.string().min(1),
+    unityExecutablePath: z.string().min(1),
+    unityExecutableDigest: ContentDigestSchema,
+    establishedAt: z.string().datetime(),
+  })
+  .strict()
+  .superRefine((receipt, context) => {
+    if (receipt.containment.kind !== "editor-containment-receipt") {
+      context.addIssue({
+        code: "custom",
+        path: ["containment", "kind"],
+        message: "Editor ownership must reference its containment receipt.",
+      });
+    }
+  });
+export type EditorOwnershipReceiptV1 = z.infer<typeof EditorOwnershipReceiptV1Schema>;
+
+export const WarmBridgeBindingV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    editorId: EventIdSchema,
+    editorPid: z.number().int().positive(),
+    editorProcessIdentity: z.string().min(1).max(512),
+    workspaceId: z.string().min(1),
+    projectPath: z.string().min(1),
+    bridgeSessionId: z.string().min(1).max(256),
+    bridgeProtocolVersion: z.literal(3),
+    editorState: z.literal("idle"),
+    heartbeatAt: z.string().datetime(),
+    boundAt: z.string().datetime(),
+  })
+  .strict();
+export type WarmBridgeBindingV1 = z.infer<typeof WarmBridgeBindingV1Schema>;
 
 const UnityPatchContentRefSchema = ArtifactRefSchema.superRefine((artifact, context) => {
   if (artifact.kind !== "unity-patch-content") {
@@ -1928,5 +2300,450 @@ export const TERMINAL_WORKFLOW_EVENT_V4_TYPES = new Set<TerminalWorkflowEventV4[
   "workflow.cancelled",
 ]);
 
+const EventV5BaseSchema = z.object({
+  schemaVersion: z.literal(5),
+  eventId: EventIdSchema,
+  runId: RunIdSchema,
+  sequence: z.number().int().positive(),
+  timestamp: z.string().datetime(),
+  stepId: StepIdSchema.optional(),
+});
+const eventV5 = <Type extends string, Payload extends z.ZodType>(type: Type, payload: Payload) =>
+  EventV5BaseSchema.extend({ type: z.literal(type), payload }).strict();
+
+const EditorPoolRequestPayloadSchema = z
+  .object({
+    poolId: ResourceIdSchema,
+    requestId: EventIdSchema,
+    priority: UnityWorkPrioritySchema,
+  })
+  .strict();
+const EditorPoolTicketPayloadSchema = EditorPoolRequestPayloadSchema.extend({
+  ticket: z.number().int().positive(),
+}).strict();
+const EditorPoolLeasePayloadSchema = EditorPoolTicketPayloadSchema.extend({
+  leaseId: EventIdSchema,
+  slotId: UnityEditorSlotIdSchema,
+}).strict();
+const CapabilityIdentityPayloadSchema = z
+  .object({
+    capabilityId: StepIdSchema,
+    index: z.number().int().nonnegative(),
+    kind: z.enum(["compile", "warm-test"]),
+  })
+  .strict();
+
+export const OrchestrationEventV5Schema = z
+  .discriminatedUnion("type", [
+    eventV5(
+      "workflow.started",
+      z.discriminatedUnion("mode", [
+        z
+          .object({
+            mode: z.literal("unity-work-v3"),
+            config: ArtifactRefSchema,
+            task: ArtifactRefSchema,
+            linkage: z
+              .object({
+                parentRunId: RunIdSchema.optional(),
+                workId: StepIdSchema,
+                poolId: ResourceIdSchema,
+                priority: UnityWorkPrioritySchema,
+                capabilityCount: z.number().int().positive(),
+              })
+              .strict(),
+          })
+          .strict(),
+        z
+          .object({
+            mode: z.literal("unity-batch-v2"),
+            config: ArtifactRefSchema,
+            workCount: z.number().int().positive(),
+            maxParallelWorks: z.number().int().positive(),
+            poolId: ResourceIdSchema,
+            poolCapacity: z.number().int().min(1).max(32),
+          })
+          .strict(),
+      ]),
+    ),
+    eventV5("artifact.stored", z.object({ artifact: ArtifactRefSchema }).strict()),
+    eventV5("source.baselined", z.object({ manifest: ArtifactRefSchema }).strict()),
+    eventV5(
+      "workspace.prepared",
+      z.object({ workspaceId: z.string().min(1), sourceManifest: ArtifactRefSchema }).strict(),
+    ),
+    eventV5(
+      "workspace.acquire-started",
+      z.object({ request: ArtifactRefSchema, requestId: z.string().min(1) }).strict(),
+    ),
+    eventV5("workspace.acquire-failed", z.object({ failure: FailureMetadataSchema }).strict()),
+    eventV5(
+      "workspace.acquired",
+      z
+        .object({
+          workspaceId: z.string().min(1),
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5(
+      "agent.started",
+      z
+        .object({
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512).optional(),
+          containment: z.literal("deferred-v1").optional(),
+        })
+        .strict(),
+    ),
+    eventV5("agent.exited", ProcessMetadataSchema),
+    eventV5("agent.input-write-failed", FailureMetadataSchema),
+    eventV5(
+      "process.containment-registered",
+      z.object({ process: z.literal("agent"), startedEventId: EventIdSchema }).strict(),
+    ),
+    eventV5(
+      "process.drain-completed",
+      z.object({ process: z.literal("agent"), startedEventId: EventIdSchema }).strict(),
+    ),
+    eventV5("editor.pool-requested", EditorPoolRequestPayloadSchema),
+    eventV5("editor.pool-queued", EditorPoolTicketPayloadSchema),
+    eventV5(
+      "editor.pool-acquire-failed",
+      EditorPoolRequestPayloadSchema.extend({ failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV5("editor.pool-acquired", EditorPoolLeasePayloadSchema),
+    eventV5("editor.pool-cancelled", EditorPoolRequestPayloadSchema),
+    eventV5(
+      "editor.launch-intended",
+      z
+        .object({
+          launchId: EventIdSchema,
+          slotId: UnityEditorSlotIdSchema,
+          leaseId: EventIdSchema,
+          intent: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5(
+      "editor.containment-registered",
+      z
+        .object({
+          launchId: EventIdSchema,
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512),
+          receipt: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5("editor.launch-abandoned", z.object({ launchId: EventIdSchema }).strict()),
+    eventV5("editor.activated", z.object({ launchId: EventIdSchema }).strict()),
+    eventV5(
+      "editor.ownership-established",
+      z
+        .object({
+          launchId: EventIdSchema,
+          editorId: EventIdSchema,
+          slotId: UnityEditorSlotIdSchema,
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512),
+          receipt: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5(
+      "editor.bridge-bound",
+      z
+        .object({
+          editorId: EventIdSchema,
+          bridgeSessionId: z.string().min(1).max(256),
+          binding: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5("capability.started", CapabilityIdentityPayloadSchema),
+    eventV5(
+      "capability.process-started",
+      CapabilityIdentityPayloadSchema.extend({
+        pid: z.number().int().positive(),
+        processIdentity: z.string().min(1).max(512).optional(),
+        containment: z.literal("deferred-v1").optional(),
+      }).strict(),
+    ),
+    eventV5(
+      "capability.process-registered",
+      CapabilityIdentityPayloadSchema.extend({ startedEventId: EventIdSchema }).strict(),
+    ),
+    eventV5(
+      "capability.process-exited",
+      CapabilityIdentityPayloadSchema.extend(ProcessMetadataSchema.shape).strict(),
+    ),
+    eventV5(
+      "capability.process-drained",
+      CapabilityIdentityPayloadSchema.extend({ startedEventId: EventIdSchema }).strict(),
+    ),
+    eventV5(
+      "capability.completed",
+      CapabilityIdentityPayloadSchema.extend({ evidence: ArtifactRefSchema }).strict(),
+    ),
+    eventV5(
+      "capability.failed",
+      CapabilityIdentityPayloadSchema.extend({ failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV5(
+      "editor.stop-started",
+      z.object({ editorId: EventIdSchema, launchId: EventIdSchema }).strict(),
+    ),
+    eventV5(
+      "editor.exited",
+      z
+        .object({
+          editorId: EventIdSchema,
+          launchId: EventIdSchema,
+          pid: z.number().int().positive(),
+          processIdentity: z.string().min(1).max(512),
+        })
+        .strict(),
+    ),
+    eventV5(
+      "editor.containment-drained",
+      z.object({ launchId: EventIdSchema, receipt: ArtifactRefSchema }).strict(),
+    ),
+    eventV5("editor.pool-release-started", EditorPoolLeasePayloadSchema),
+    eventV5(
+      "editor.pool-release-failed",
+      EditorPoolLeasePayloadSchema.extend({ failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV5("editor.pool-released", EditorPoolLeasePayloadSchema),
+    eventV5(
+      "source.checked",
+      z
+        .object({ before: ArtifactRefSchema, after: ArtifactRefSchema, unchanged: z.boolean() })
+        .strict(),
+    ),
+    eventV5(
+      "patch.verified",
+      z
+        .object({
+          patch: ArtifactRefSchema,
+          baseManifest: ArtifactRefSchema,
+          resultManifest: ArtifactRefSchema,
+        })
+        .strict(),
+    ),
+    eventV5("transaction.outcome-decided", UnityTransactionDecisionSchema),
+    eventV5(
+      "control.accepted",
+      z.object({ requestId: EventIdSchema, action: z.literal("cancel") }).strict(),
+    ),
+    eventV5(
+      "workspace.release-started",
+      z.object({ leaseId: z.string().min(1), requestId: z.string().min(1) }).strict(),
+    ),
+    eventV5(
+      "workspace.release-failed",
+      z.object({ leaseId: z.string().min(1), failure: FailureMetadataSchema }).strict(),
+    ),
+    eventV5(
+      "workspace.released",
+      z
+        .object({
+          leaseId: z.string().min(1),
+          receipt: ArtifactRefSchema,
+          cleanupState: z.literal("released"),
+        })
+        .strict(),
+    ),
+    eventV5(
+      "work.registered",
+      z
+        .object({
+          workId: StepIdSchema,
+          childRunId: RunIdSchema,
+          priority: UnityWorkPrioritySchema,
+          capabilityCount: z.number().int().positive(),
+        })
+        .strict(),
+    ),
+    eventV5(
+      "work.finished",
+      z.discriminatedUnion("status", [
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("completed"),
+            patch: ArtifactRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("failed"),
+            failure: FailureMetadataSchema,
+          })
+          .strict(),
+        z
+          .object({
+            workId: StepIdSchema,
+            childRunId: RunIdSchema,
+            status: z.literal("cancelled"),
+            started: z.boolean(),
+          })
+          .strict(),
+      ]),
+    ),
+    eventV5("workflow.cancelling", z.object({ requestId: EventIdSchema }).strict()),
+    eventV5(
+      "workflow.completed",
+      z.union([
+        z
+          .object({
+            evidence: ArtifactRefSchema,
+            patch: ArtifactRefSchema,
+            resultManifest: ArtifactRefSchema,
+            release: ArtifactRefSchema,
+            sourceAfter: ArtifactRefSchema,
+          })
+          .strict(),
+        z.object({ summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+    eventV5(
+      "workflow.failed",
+      z.union([
+        z
+          .object({
+            failure: FailureMetadataSchema,
+            release: ArtifactRefSchema.optional(),
+            sourceAfter: ArtifactRefSchema.optional(),
+          })
+          .strict(),
+        z.object({ failure: FailureMetadataSchema, summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+    eventV5(
+      "workflow.cancelled",
+      z.union([
+        z
+          .object({
+            release: ArtifactRefSchema.optional(),
+            sourceAfter: ArtifactRefSchema.optional(),
+          })
+          .strict(),
+        z.object({ summary: UnityBatchSummarySchema }).strict(),
+      ]),
+    ),
+  ])
+  .superRefine((event, context) => {
+    const requireKind = (artifact: ArtifactRef, kind: ArtifactKind, path: string[]): void => {
+      if (artifact.kind !== kind) {
+        context.addIssue({ code: "custom", path, message: `Expected Artifact kind ${kind}.` });
+      }
+    };
+    if (event.type === "workflow.started") {
+      requireKind(event.payload.config, "workflow-config", ["payload", "config", "kind"]);
+      if (event.payload.mode === "unity-work-v3") {
+        requireKind(event.payload.task, "task", ["payload", "task", "kind"]);
+      }
+    } else if (event.type === "source.baselined") {
+      requireKind(event.payload.manifest, "unity-source-manifest", ["payload", "manifest", "kind"]);
+    } else if (event.type === "workspace.acquire-started") {
+      requireKind(event.payload.request, "workspace-acquire-request", [
+        "payload",
+        "request",
+        "kind",
+      ]);
+    } else if (event.type === "workspace.acquired") {
+      requireKind(event.payload.receipt, "workspace-acquire-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "editor.launch-intended") {
+      requireKind(event.payload.intent, "editor-launch-intent", ["payload", "intent", "kind"]);
+    } else if (event.type === "editor.containment-registered") {
+      requireKind(event.payload.receipt, "editor-containment-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "editor.ownership-established") {
+      requireKind(event.payload.receipt, "editor-ownership-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "editor.bridge-bound") {
+      requireKind(event.payload.binding, "warm-bridge-binding", ["payload", "binding", "kind"]);
+    } else if (event.type === "capability.completed") {
+      requireKind(event.payload.evidence, "unity-capability-evidence", [
+        "payload",
+        "evidence",
+        "kind",
+      ]);
+    } else if (event.type === "editor.containment-drained") {
+      requireKind(event.payload.receipt, "editor-containment-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    } else if (event.type === "source.checked") {
+      requireKind(event.payload.before, "unity-source-manifest", ["payload", "before", "kind"]);
+      requireKind(event.payload.after, "unity-source-manifest", ["payload", "after", "kind"]);
+    } else if (event.type === "patch.verified") {
+      requireKind(event.payload.patch, "unity-verified-patch", ["payload", "patch", "kind"]);
+      requireKind(event.payload.baseManifest, "unity-source-manifest", [
+        "payload",
+        "baseManifest",
+        "kind",
+      ]);
+      requireKind(event.payload.resultManifest, "unity-workspace-manifest", [
+        "payload",
+        "resultManifest",
+        "kind",
+      ]);
+    } else if (event.type === "workspace.released") {
+      requireKind(event.payload.receipt, "workspace-release-receipt", [
+        "payload",
+        "receipt",
+        "kind",
+      ]);
+    }
+    const agentScoped =
+      event.type === "agent.started" ||
+      event.type === "agent.exited" ||
+      event.type === "agent.input-write-failed" ||
+      event.type === "process.containment-registered" ||
+      event.type === "process.drain-completed";
+    if (agentScoped && event.stepId === undefined) {
+      context.addIssue({ code: "custom", path: ["stepId"], message: "Agent event needs stepId." });
+    }
+    if (event.type.startsWith("workflow.") && event.stepId !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Workflow event cannot have stepId.",
+      });
+    }
+  });
+export type OrchestrationEventV5 = z.infer<typeof OrchestrationEventV5Schema>;
+
+export type TerminalWorkflowEventV5 = Extract<
+  OrchestrationEventV5,
+  { type: "workflow.completed" | "workflow.failed" | "workflow.cancelled" }
+>;
+export const TERMINAL_WORKFLOW_EVENT_V5_TYPES = new Set<TerminalWorkflowEventV5["type"]>([
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+]);
+
 export type AnyOrchestrationEvent =
-  OrchestrationEventV1 | OrchestrationEventV2 | OrchestrationEventV3 | OrchestrationEventV4;
+  | OrchestrationEventV1
+  | OrchestrationEventV2
+  | OrchestrationEventV3
+  | OrchestrationEventV4
+  | OrchestrationEventV5;
