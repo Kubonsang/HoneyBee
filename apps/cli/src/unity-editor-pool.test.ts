@@ -88,6 +88,32 @@ describe("FileUnityEditorPoolCoordinator", () => {
     await pool.release(lease);
   });
 
+  it("releases a slot granted while its acquire is being aborted", async () => {
+    const root = await temporaryRoot();
+    const pool = new FileUnityEditorPoolCoordinator(root);
+    await pool.declare({ poolId: ResourceIdSchema.parse("unity-editors"), capacity: 1 });
+    const blocker = request("validation", "blocker");
+    const aborted = request("validation", "aborted");
+    await pool.enqueue(blocker);
+    const blockerLease = await pool.acquire(blocker);
+    await pool.enqueue(aborted);
+
+    const controller = new AbortController();
+    const waiting = pool.acquire(aborted, controller.signal);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    controller.abort();
+    await pool.release(blockerLease);
+
+    await expect(waiting).rejects.toMatchObject({ code: "agent.cancelled" });
+    expect(await pool.status(aborted)).toMatchObject({ state: "released" });
+
+    const next = request("validation", "next");
+    await pool.enqueue(next);
+    const nextLease = await pool.acquire(next);
+    expect(nextLease.slotId).toBe("editor-1");
+    await pool.release(nextLease);
+  });
+
   it.skipIf(process.platform !== "win32")(
     "rejects a junction in every state or lock path component",
     async () => {

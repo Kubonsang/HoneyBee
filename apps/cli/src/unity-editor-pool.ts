@@ -274,9 +274,10 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
       poolId: ResourceIdSchema.parse(locatorValue.poolId),
       requestId: EventIdSchema.parse(locatorValue.requestId),
     };
+    const aborted = (): boolean => signal?.aborted === true;
     for (;;) {
-      if (signal?.aborted === true) {
-        await this.cancel(locator);
+      if (aborted()) {
+        await this.#abortAcquire(locator);
         throw new HoneyBeeCoreError("agent.cancelled", "Editor pool wait was cancelled.");
       }
       const status = await this.#withLock(locator.poolId, async () => {
@@ -287,7 +288,13 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
           }
         );
       });
-      if (status.state === "active" || status.state === "released") return status.lease;
+      if (status.state === "active" || status.state === "released") {
+        if (aborted()) {
+          await this.#abortAcquire(locator);
+          throw new HoneyBeeCoreError("agent.cancelled", "Editor pool wait was cancelled.");
+        }
+        return status.lease;
+      }
       if (status.state !== "queued") {
         throw new HoneyBeeCoreError(
           "validation.invalid-workflow",
@@ -296,6 +303,38 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
       }
       await delay(POLL_MS);
     }
+  }
+
+  async #abortAcquire(locator: UnityEditorPoolLocator): Promise<void> {
+    await this.#withLock(locator.poolId, async () => {
+      await this.#grant(locator.poolId);
+      const snapshot = await this.#snapshot(locator.poolId);
+      const status = snapshot.requests.get(locator.requestId);
+      if (status?.state === "queued") {
+        await this.#appendRequest(snapshot.events, "editor-pool.cancelled", status.ticket);
+        return;
+      }
+      if (status?.state === "active") {
+        await this.#append(
+          locator.poolId,
+          UnityEditorPoolEventV2Schema.parse({
+            schemaVersion: 2,
+            eventId: EventIdSchema.parse(this.randomId()),
+            sequence: snapshot.events.length + 1,
+            timestamp: this.now().toISOString(),
+            type: "editor-pool.released",
+            ...status.lease,
+          }),
+        );
+        await this.#grant(locator.poolId);
+        return;
+      }
+      if (status?.state === "cancelled" || status?.state === "released") return;
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Editor pool request is not queued.",
+      );
+    });
   }
 
   public async status(locatorValue: UnityEditorPoolLocator): Promise<UnityEditorPoolStatus> {

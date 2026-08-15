@@ -6,10 +6,12 @@ import path from "node:path";
 import {
   ContentDigestSchema,
   EditorContainmentReceiptV1Schema,
+  EventIdSchema,
   FileArtifactStore,
   FileOrchestrationJournal,
   FileRunControl,
   FileRunRepository,
+  HoneyBeeCoreError,
   RunIdSchema,
   StepIdSchema,
   UnityEditorObservationV1Schema,
@@ -21,6 +23,7 @@ import {
   type EditorContainmentReceiptV1,
   type EditorLaunchIntentV1,
   type UnityEditorObservationV1,
+  type VersionedOrchestrationJournal,
   type WarmBridgeBindingV1,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -296,9 +299,212 @@ class CompletedCapabilities implements UnityCapabilityRunner {
   }
 }
 
+class FailedCapabilities implements UnityCapabilityRunner {
+  public async runCapability(
+    _runId: Parameters<UnityCapabilityRunner["runCapability"]>[0],
+    capability: Parameters<UnityCapabilityRunner["runCapability"]>[1],
+    _binding: Parameters<UnityCapabilityRunner["runCapability"]>[2],
+    _workspacePath: string,
+    _timeoutMs: number,
+    _signal: AbortSignal,
+    lifecycle: Parameters<UnityCapabilityRunner["runCapability"]>[6],
+  ): Promise<UnityCapabilityRunResult> {
+    const command = {
+      pid: 3201,
+      exitCode: 23,
+      signal: null,
+      durationMs: 17,
+      stdoutBytes: 4,
+      stderrBytes: 7,
+      termination: "exited",
+      stdout: "nope",
+      stderr: "failure",
+    } as const;
+    await lifecycle.onStarted(command.pid, { containment: "deferred-v1" });
+    await lifecycle.onRegistered?.(command.pid);
+    await lifecycle.onExited(command);
+    return {
+      capability,
+      command,
+      response: { compiled: false },
+      evidence: [],
+    };
+  }
+}
+
+class PostRunFailingBridge extends MemoryBridge {
+  public override async verify(_binding: WarmBridgeBindingV1): Promise<void> {
+    this.verifies += 1;
+    if (this.verifies === 2) {
+      throw new HoneyBeeCoreError("bridge.binding-changed", "Bridge changed after capability.");
+    }
+  }
+}
+
+class CrashAfterEventJournal implements VersionedOrchestrationJournal {
+  #crashed = false;
+
+  public constructor(
+    private readonly delegate: VersionedOrchestrationJournal,
+    private readonly eventType: string,
+  ) {}
+
+  public async append(...args: Parameters<VersionedOrchestrationJournal["append"]>): Promise<void> {
+    await this.delegate.append(...args);
+    if (!this.#crashed && args[1].type === this.eventType) {
+      this.#crashed = true;
+      throw new Error("simulated parent crash");
+    }
+  }
+
+  public replay(
+    ...args: Parameters<VersionedOrchestrationJournal["replay"]>
+  ): ReturnType<VersionedOrchestrationJournal["replay"]> {
+    return this.delegate.replay(...args);
+  }
+}
+
 const processControl: UnityProcessControl = {
   captureIdentity: async (pid) => "test:process:" + pid,
   drain: async () => "drained",
+};
+
+const testConfig = async (source: string, workspaceRoot: string) => {
+  const executableDigest = createHash("sha256")
+    .update(await readFile(process.execPath))
+    .digest("hex");
+  return UnityWorkConfigV2Schema.parse({
+    schemaVersion: 2,
+    sourceProjectPath: source,
+    workspaceStorage: {
+      command: { command: process.execPath },
+      contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+      binarySha256: executableDigest,
+      workspaceRoot,
+      parentKey: {
+        schemaVersion: 2,
+        digest: "c".repeat(64),
+        libraryKey: {
+          schemaVersion: "1",
+          digest: "d".repeat(64),
+          unityVersion: "6000",
+          unityExecutableSha256: "e".repeat(64),
+          manifestSha256: "f".repeat(64),
+          packagesLockSha256: "missing",
+          projectSettingsSha256: "0".repeat(64),
+          buildTarget: "windows/amd64",
+          scriptingBackend: "Mono",
+          projectIdentitySha256: "1".repeat(64),
+        },
+        provider: "vhdx-differencing",
+        filesystem: "NTFS",
+        virtualBytes: 1024,
+        blockBytes: 512,
+        sectorBytes: 512,
+      },
+    },
+    agent: { command: { command: process.execPath }, harness: "stdio-framed-v2" },
+    testplay: {
+      command: { command: process.execPath },
+      unityPath: process.execPath,
+      platform: "edit_mode",
+      timeoutMs: 1000,
+      bridgeProtocolVersion: 3,
+    },
+    editorPool: {
+      id: "unity-editors",
+      capacity: 1,
+      registrationTimeoutMs: 1000,
+      activationTimeoutMs: 1000,
+      bridgeReadyTimeoutMs: 1000,
+      capabilityTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+    },
+    priority: "validation",
+    capabilities: [
+      { id: "compile", kind: "compile" },
+      { id: "warm-test", kind: "warm-test", filter: "Smoke" },
+    ],
+  });
+};
+
+const transactionFixture = async (
+  options: Readonly<{
+    capabilities?: UnityCapabilityRunner;
+    bridge?: WarmBridgeBindingResolver;
+    registry?: MemoryEditorRegistry;
+    wrapJournal?: (journal: VersionedOrchestrationJournal) => VersionedOrchestrationJournal;
+  }> = {},
+) => {
+  const root = await temporaryRoot();
+  const source = path.join(root, "source");
+  const workspaceRoot = path.join(root, "workspaces");
+  await Promise.all([
+    mkdir(path.join(source, "Assets"), { recursive: true }),
+    mkdir(path.join(source, "Packages"), { recursive: true }),
+    mkdir(path.join(source, "ProjectSettings"), { recursive: true }),
+    mkdir(workspaceRoot),
+  ]);
+  await Promise.all([
+    writeFile(path.join(source, "Assets", "source.txt"), "source\n"),
+    writeFile(path.join(source, "Packages", "manifest.json"), "{}\n"),
+    writeFile(
+      path.join(source, "ProjectSettings", "ProjectVersion.txt"),
+      "m_EditorVersion: test\n",
+    ),
+  ]);
+  const config = await testConfig(source, workspaceRoot);
+  const runId = RunIdSchema.parse(randomUUID());
+  await new FileRunRepository(root).create(runId);
+  const artifacts = new FileArtifactStore(root);
+  const baseJournal = new FileOrchestrationJournal(root);
+  const controls = new FileRunControl(root);
+  const bootstrap = new UnityProjectBootstrap();
+  const storage = new MemoryWorkspaceStorage();
+  const capabilities = options.capabilities ?? new CompletedCapabilities();
+  const launcher = new MemoryEditorLauncher();
+  const registry = options.registry ?? new MemoryEditorRegistry();
+  const bridge = options.bridge ?? new MemoryBridge();
+  const pool = new FileUnityEditorPoolCoordinator(root);
+  const patchBuilder = new UnityPatchBuilder(
+    artifacts,
+    bootstrap,
+    path.join(root, ".patch-verification"),
+  );
+  const execution = {
+    workId: StepIdSchema.parse("work-a"),
+    poolId: config.editorPool.id,
+    priority: config.priority,
+    capabilities: config.capabilities,
+    pool,
+    patchBuilder,
+  } as const;
+  const createTransaction = (journal: VersionedOrchestrationJournal) =>
+    new UnityEditorWorkTransaction(
+      root,
+      new CompletedAgent(),
+      artifacts,
+      journal,
+      controls,
+      bootstrap,
+      storage,
+      capabilities,
+      launcher,
+      registry,
+      bridge,
+      { processControl },
+    );
+  return {
+    runId,
+    config,
+    execution,
+    storage,
+    controls,
+    registry,
+    baseJournal,
+    transaction: createTransaction(options.wrapJournal?.(baseJournal) ?? baseJournal),
+    resumer: createTransaction(baseJournal),
+  };
 };
 
 describe("UnityEditorWorkTransaction", () => {
@@ -468,5 +674,156 @@ describe("UnityEditorWorkTransaction", () => {
     expect(patch.entries[0]?.operation === "add-or-modify" && patch.entries[0].content.kind).toBe(
       "unity-patch-content",
     );
+  });
+
+  it("persists the actual failure metadata after a started capability exits", async () => {
+    const fixture = await transactionFixture({ capabilities: new FailedCapabilities() });
+    const result = await fixture.transaction.run(
+      fixture.runId,
+      "fail the capability",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      failure: {
+        errorCode: "capability.failed",
+        exitCode: 23,
+        signal: null,
+        durationMs: 17,
+        stdoutBytes: 4,
+        stderrBytes: 7,
+      },
+    });
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    const failed = replay.events.find(
+      (event) => event.schemaVersion === 5 && event.type === "capability.failed",
+    );
+    expect(failed?.type).toBe("capability.failed");
+    if (failed?.schemaVersion !== 5 || failed.type !== "capability.failed") {
+      throw new Error("missing capability failure");
+    }
+    expect(failed.payload.failure).toEqual({
+      errorCode: "capability.failed",
+      exitCode: 23,
+      signal: null,
+      durationMs: 17,
+      stdoutBytes: 4,
+      stderrBytes: 7,
+    });
+  });
+
+  it("persists a post-run Bridge verification failure without rewriting it as interruption", async () => {
+    const fixture = await transactionFixture({ bridge: new PostRunFailingBridge() });
+    const result = await fixture.transaction.run(
+      fixture.runId,
+      "invalidate the Bridge",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(result).toMatchObject({
+      status: "failed",
+      failure: { errorCode: "bridge.binding-changed" },
+    });
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    const failed = replay.events.find(
+      (event) => event.schemaVersion === 5 && event.type === "capability.failed",
+    );
+    expect(failed?.type).toBe("capability.failed");
+    if (failed?.schemaVersion !== 5 || failed.type !== "capability.failed") {
+      throw new Error("missing capability failure");
+    }
+    expect(failed.payload.failure).toEqual({ errorCode: "bridge.binding-changed" });
+  });
+
+  it("reuses a durable workspace release when resuming before the terminal event", async () => {
+    const fixture = await transactionFixture({
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "workspace.released"),
+    });
+    const interrupted = await fixture.transaction.run(
+      fixture.runId,
+      "crash after release",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(interrupted.status).toBe("cleanup-pending");
+    expect(fixture.storage.released).toBe(1);
+
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("completed");
+    expect(fixture.storage.released).toBe(1);
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    expect(replay.status).toBe("terminal");
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    expect(replay.events.filter((event) => event.type === "workspace.released")).toHaveLength(1);
+  });
+
+  it("reuses a durable workspace release for a failed decision", async () => {
+    const fixture = await transactionFixture({
+      capabilities: new FailedCapabilities(),
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "workspace.released"),
+    });
+    expect(
+      (
+        await fixture.transaction.run(
+          fixture.runId,
+          "fail before release",
+          fixture.config,
+          fixture.execution,
+        )
+      ).status,
+    ).toBe("cleanup-pending");
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("failed");
+    expect(fixture.storage.released).toBe(1);
+  });
+
+  it("reuses a durable workspace release for a cancelled decision", async () => {
+    const fixture = await transactionFixture({
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "workspace.released"),
+    });
+    await fixture.controls.submit({
+      requestId: EventIdSchema.parse(randomUUID()),
+      runId: fixture.runId,
+      action: "cancel",
+      timestamp: new Date().toISOString(),
+    });
+    expect(
+      (
+        await fixture.transaction.run(
+          fixture.runId,
+          "cancel before release",
+          fixture.config,
+          fixture.execution,
+        )
+      ).status,
+    ).toBe("cleanup-pending");
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("cancelled");
+    expect(fixture.storage.released).toBe(1);
+  });
+
+  it("reconciles the Registry tombstone when resuming after editor.exited", async () => {
+    const registry = new MemoryEditorRegistry();
+    const fixture = await transactionFixture({
+      registry,
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "editor.exited"),
+    });
+    const interrupted = await fixture.transaction.run(
+      fixture.runId,
+      "crash before the tombstone",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(interrupted.status).toBe("cleanup-pending");
+    expect(registry.exited).toBeUndefined();
+
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("failed");
+    expect(registry.exited).toBe(registry.owned?.editorId);
+    expect(fixture.storage.released).toBe(1);
+    expect((await fixture.baseJournal.replay(fixture.runId)).status).toBe("terminal");
   });
 });

@@ -144,6 +144,7 @@ class V5Writer {
       return event;
     });
     this.#tail = operation.then(() => undefined);
+    void this.#tail.catch(() => undefined);
     return operation;
   }
 }
@@ -375,6 +376,7 @@ export class UnityEditorWorkTransaction {
     let patch: ArtifactRef | undefined;
     let resultManifest: ArtifactRef | undefined;
     let decision: Decision | undefined;
+    let activeCapabilityFailure: FailureMetadata | undefined;
     const aborter = new AbortController();
 
     try {
@@ -686,6 +688,7 @@ export class UnityEditorWorkTransaction {
     } catch (error) {
       const pollingError = watcher.error();
       const failure = failureMetadata(pollingError ?? error);
+      activeCapabilityFailure = failure;
       decision =
         pollingError === undefined &&
         (aborter.signal.aborted || failure.errorCode === "agent.cancelled")
@@ -699,7 +702,11 @@ export class UnityEditorWorkTransaction {
     if (decision.outcome !== "failed" && watcher.error() !== undefined)
       decision = { outcome: "failed", failure: failureMetadata(watcher.error()) };
 
-    const processCleanupFailure = await this.#drainInterruptedProcesses(runId, writer);
+    const processCleanupFailure = await this.#drainInterruptedProcesses(
+      runId,
+      writer,
+      activeCapabilityFailure,
+    );
     if (processCleanupFailure !== undefined) {
       return {
         runId,
@@ -1065,6 +1072,7 @@ export class UnityEditorWorkTransaction {
   async #drainInterruptedProcesses(
     runId: RunId,
     writer: V5Writer,
+    activeCapabilityFailure: FailureMetadata = { errorCode: "agent.interrupted" },
   ): Promise<FailureMetadata | undefined> {
     const replay = await this.journal.replay(runId);
     if (replay.status === "indeterminate") return { errorCode: "run.indeterminate" };
@@ -1140,7 +1148,7 @@ export class UnityEditorWorkTransaction {
       }
       await writer.emit("capability.failed", {
         ...activeCapability.payload,
-        failure: { errorCode: "agent.interrupted" },
+        failure: activeCapabilityFailure,
       });
       return undefined;
     } catch (error) {
@@ -1177,8 +1185,9 @@ export class UnityEditorWorkTransaction {
             pid: input.ownership.editorPid,
             processIdentity: input.ownership.editorProcessIdentity,
           });
-          await this.registry.recordExited(input.ownership.editorId);
         }
+        if (input.ownership !== undefined)
+          await this.registry.recordExited(input.ownership.editorId);
         await input.writer.emit("editor.containment-drained", {
           launchId: input.containment.launchId,
           receipt: input.containmentArtifact,
@@ -1462,6 +1471,7 @@ export class UnityEditorWorkTransaction {
       });
     }
 
+    let recoveredEditorExited = lastEvent(events, "editor.exited") !== undefined;
     if (
       containment !== undefined &&
       containmentArtifact !== undefined &&
@@ -1482,12 +1492,25 @@ export class UnityEditorWorkTransaction {
             pid: ownership.editorPid,
             processIdentity: ownership.editorProcessIdentity,
           });
-          await this.registry.recordExited(ownership.editorId);
+          recoveredEditorExited = true;
         }
+        if (ownership !== undefined && recoveredEditorExited)
+          await this.registry.recordExited(ownership.editorId);
         await writer.emit("editor.containment-drained", {
           launchId: containment.launchId,
           receipt: containmentArtifact,
         });
+      } catch (error) {
+        return { runId, status: "cleanup-pending", failure: failureMetadata(error) };
+      }
+    }
+    if (
+      ownership !== undefined &&
+      recoveredEditorExited &&
+      lastEvent(events, "editor.containment-drained") !== undefined
+    ) {
+      try {
+        await this.registry.recordExited(ownership.editorId);
       } catch (error) {
         return { runId, status: "cleanup-pending", failure: failureMetadata(error) };
       }
@@ -1540,6 +1563,7 @@ export class UnityEditorWorkTransaction {
     if (previousDecision === undefined) await writer.emit("transaction.outcome-decided", decision);
     const recoveredEvidence = lastEvent(events, "capability.completed")?.payload.evidence;
     const recoveredPatch = lastEvent(events, "patch.verified")?.payload;
+    const recoveredRelease = lastEvent(events, "workspace.released")?.payload.receipt;
     return this.#releaseAndFinish({
       runId,
       config,
@@ -1556,7 +1580,9 @@ export class UnityEditorWorkTransaction {
             patch: recoveredPatch.patch,
             resultManifest: recoveredPatch.resultManifest,
           }),
+      ...(recoveredRelease === undefined ? {} : { release: recoveredRelease }),
       ...(lastEvent(events, "workspace.release-started") !== undefined &&
+      recoveredRelease === undefined &&
       lastEvent(events, "workspace.release-failed") === undefined
         ? { releaseAlreadyStarted: true }
         : {}),
@@ -1593,37 +1619,41 @@ export class UnityEditorWorkTransaction {
       lastEvidence?: ArtifactRef;
       patch?: ArtifactRef;
       resultManifest?: ArtifactRef;
+      release?: ArtifactRef;
       releaseAlreadyStarted?: boolean;
     }>,
   ): Promise<UnityWorkRunResult> {
     const requestId = releaseRequestIdFor(input.runId);
-    if (input.releaseAlreadyStarted !== true) {
-      await input.writer.emit("workspace.release-started", { leaseId: input.leaseId, requestId });
-    }
+    let release = input.release;
     try {
-      const response = await this.storage.release(
-        input.leaseId,
-        requestId,
-        input.config.workspaceStorage.workspaceRoot,
-      );
-      await this.bootstrap.verifyReleased(
-        input.config.workspaceStorage.workspaceRoot,
-        input.workspaceId,
-      );
-      const release = await this.#storeJson(
-        input.writer,
-        input.runId,
-        "workspace-release-receipt",
-        {
+      if (release === undefined) {
+        if (input.releaseAlreadyStarted !== true) {
+          await input.writer.emit("workspace.release-started", {
+            leaseId: input.leaseId,
+            requestId,
+          });
+        }
+        const response = await this.storage.release(
+          input.leaseId,
+          requestId,
+          input.config.workspaceStorage.workspaceRoot,
+        );
+        await this.bootstrap.verifyReleased(
+          input.config.workspaceStorage.workspaceRoot,
+          input.workspaceId,
+        );
+        release = await this.#storeJson(input.writer, input.runId, "workspace-release-receipt", {
           response,
           workspaceAbsent: true,
-        },
-      );
-      await input.writer.emit("workspace.released", {
-        leaseId: input.leaseId,
-        receipt: release,
-        cleanupState: "released",
-      });
+        });
+        await input.writer.emit("workspace.released", {
+          leaseId: input.leaseId,
+          receipt: release,
+          cleanupState: "released",
+        });
+      } else {
+        await this.artifacts.get({ runId: input.runId, artifact: release });
+      }
       if (input.decision.outcome === "completed") {
         if (
           input.lastEvidence === undefined ||
@@ -1682,9 +1712,11 @@ export class UnityEditorWorkTransaction {
       };
     } catch (error) {
       const failure = failureMetadata(error);
-      await input.writer
-        .emit("workspace.release-failed", { leaseId: input.leaseId, failure })
-        .catch(() => undefined);
+      if (release === undefined) {
+        await input.writer
+          .emit("workspace.release-failed", { leaseId: input.leaseId, failure })
+          .catch(() => undefined);
+      }
       return {
         runId: input.runId,
         status: "cleanup-pending",

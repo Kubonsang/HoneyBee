@@ -28,6 +28,30 @@ export interface OsUnityEditorProcess {
 
 export type DiscoverUnityEditors = () => Promise<readonly OsUnityEditorProcess[]>;
 
+export const parseUnityEditorProcesses = (parsed: unknown): readonly OsUnityEditorProcess[] => {
+  const values = Array.isArray(parsed)
+    ? parsed
+    : typeof parsed === "object" && parsed !== null
+      ? [parsed]
+      : [];
+  return values.flatMap((value): OsUnityEditorProcess[] => {
+    if (typeof value !== "object" || value === null || !("pid" in value)) return [];
+    const pid = value.pid;
+    if (!Number.isInteger(pid) || (pid as number) <= 0) return [];
+    const executablePath = "executablePath" in value ? value.executablePath : undefined;
+    const commandLine = "commandLine" in value ? value.commandLine : undefined;
+    return [
+      {
+        pid: pid as number,
+        ...(typeof executablePath === "string" && executablePath.length > 0
+          ? { executablePath }
+          : {}),
+        ...(typeof commandLine === "string" && commandLine.length > 0 ? { commandLine } : {}),
+      },
+    ];
+  });
+};
+
 const discoverUnityEditors: DiscoverUnityEditors = async () => {
   if (process.platform === "win32") {
     const script = String.raw`$items = @(Get-CimInstance Win32_Process -Filter "Name = 'Unity.exe'" | ForEach-Object { [pscustomobject]@{ pid = [int]$_.ProcessId; executablePath = $_.ExecutablePath; commandLine = $_.CommandLine } }); [Console]::Out.Write(($items | ConvertTo-Json -Compress))`;
@@ -37,23 +61,7 @@ const discoverUnityEditors: DiscoverUnityEditors = async () => {
       { encoding: "utf8", timeout: 15_000, windowsHide: true },
     );
     const parsed = JSON.parse(stdout.length === 0 ? "[]" : stdout) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return parsed.flatMap((value): OsUnityEditorProcess[] => {
-      if (typeof value !== "object" || value === null || !("pid" in value)) return [];
-      const pid = value.pid;
-      if (!Number.isInteger(pid) || (pid as number) <= 0) return [];
-      const executablePath = "executablePath" in value ? value.executablePath : undefined;
-      const commandLine = "commandLine" in value ? value.commandLine : undefined;
-      return [
-        {
-          pid: pid as number,
-          ...(typeof executablePath === "string" && executablePath.length > 0
-            ? { executablePath }
-            : {}),
-          ...(typeof commandLine === "string" && commandLine.length > 0 ? { commandLine } : {}),
-        },
-      ];
-    });
+    return parseUnityEditorProcesses(parsed);
   }
   const { stdout } = await execFileAsync("ps", ["-axo", "pid=,command="], {
     encoding: "utf8",
@@ -141,7 +149,12 @@ const ensureDirectory = async (root: string, components: readonly string[]): Pro
   return directory;
 };
 
-const publishImmutable = async (directory: string, name: string, value: unknown): Promise<void> => {
+const publishImmutable = async (
+  directory: string,
+  name: string,
+  value: unknown,
+  validateExisting?: (filePath: string) => Promise<void>,
+): Promise<void> => {
   const finalPath = path.join(directory, name);
   const temporaryPath = path.join(directory, `.${randomUUID()}.tmp`);
   const bytes = Buffer.from(JSON.stringify(value), "utf8");
@@ -156,12 +169,43 @@ const publishImmutable = async (directory: string, name: string, value: unknown)
     await link(temporaryPath, finalPath);
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
+    if (validateExisting !== undefined) {
+      await validateExisting(finalPath);
+      return;
+    }
     const existing = await readFile(finalPath);
     if (!existing.equals(bytes)) {
       throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry identity was overwritten.");
     }
   } finally {
     await unlink(temporaryPath).catch(() => undefined);
+  }
+};
+
+const validateExitRecord = async (filePath: string, editorId: string): Promise<void> => {
+  const metadata = await lstat(filePath);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+  } catch {
+    throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry exit record is malformed.");
+  }
+  if (
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.nlink !== 1 ||
+    typeof parsed !== "object" ||
+    parsed === null ||
+    Object.keys(parsed).sort().join("\0") !== "editorId\0exitedAt\0schemaVersion" ||
+    !("schemaVersion" in parsed) ||
+    parsed.schemaVersion !== 1 ||
+    !("editorId" in parsed) ||
+    parsed.editorId !== editorId ||
+    !("exitedAt" in parsed) ||
+    typeof parsed.exitedAt !== "string" ||
+    Number.isNaN(Date.parse(parsed.exitedAt))
+  ) {
+    throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry exit record is invalid.");
   }
 };
 
@@ -205,11 +249,16 @@ export class FileOsUnityEditorRegistry implements UnityEditorRegistry {
   public async recordExited(editorIdValue: UnityEditorObservationV1["editorId"]): Promise<void> {
     const editorId = EventIdSchema.parse(editorIdValue);
     const directory = await ensureDirectory(this.#root, [".unity-editors", "v1", "exited"]);
-    await publishImmutable(directory, `${editorId}.json`, {
-      schemaVersion: 1,
-      editorId,
-      exitedAt: this.now().toISOString(),
-    });
+    await publishImmutable(
+      directory,
+      `${editorId}.json`,
+      {
+        schemaVersion: 1,
+        editorId,
+        exitedAt: this.now().toISOString(),
+      },
+      (filePath) => validateExitRecord(filePath, editorId),
+    );
   }
 
   public async list(): Promise<readonly UnityEditorObservationV1[]> {
@@ -319,26 +368,7 @@ export class FileOsUnityEditorRegistry implements UnityEditorRegistry {
         );
       }
       const filePath = path.join(directory, entry.name);
-      const metadata = await lstat(filePath);
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
-      } catch {
-        throw new HoneyBeeCoreError(
-          "run.indeterminate",
-          "Editor Registry exit record is malformed.",
-        );
-      }
-      if (
-        !metadata.isFile() ||
-        metadata.isSymbolicLink() ||
-        metadata.nlink !== 1 ||
-        typeof parsed !== "object" ||
-        parsed === null ||
-        !("editorId" in parsed) ||
-        parsed.editorId !== match[1]
-      )
-        throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry exit record is invalid.");
+      await validateExitRecord(filePath, match[1]);
       values.add(EventIdSchema.parse(match[1]));
     }
     return values;

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -12,7 +12,7 @@ import {
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { UnityProcessControl } from "./process-control.js";
-import { FileOsUnityEditorRegistry } from "./unity-editor-registry.js";
+import { FileOsUnityEditorRegistry, parseUnityEditorProcesses } from "./unity-editor-registry.js";
 
 const roots: string[] = [];
 afterEach(async () =>
@@ -31,6 +31,24 @@ const processes = (identities: ReadonlyMap<number, string>): UnityProcessControl
 });
 
 describe("FileOsUnityEditorRegistry", () => {
+  it("normalizes a singleton PowerShell discovery object", () => {
+    expect(
+      parseUnityEditorProcesses({
+        pid: 100,
+        executablePath: "C:\\Unity.exe",
+        commandLine: "Unity.exe -projectPath C:\\Game",
+      }),
+    ).toEqual([
+      {
+        pid: 100,
+        executablePath: "C:\\Unity.exe",
+        commandLine: "Unity.exe -projectPath C:\\Game",
+      },
+    ]);
+    expect(parseUnityEditorProcesses([])).toEqual([]);
+    expect(parseUnityEditorProcesses("invalid")).toEqual([]);
+  });
+
   it("observes path-known user and path-unknown Editors without ownership linkage", async () => {
     const root = await temporaryRoot();
     const userProject = path.join(root, "Game Project");
@@ -109,5 +127,28 @@ describe("FileOsUnityEditorRegistry", () => {
         (editor) => editor.processIdentity === "win32:original" && editor.state === "stale",
       ),
     ).toBe(true);
+  });
+
+  it("records an immutable exit tombstone idempotently", async () => {
+    const root = await temporaryRoot();
+    const editorId = EventIdSchema.parse(randomUUID());
+    let time = 0;
+    const registry = new FileOsUnityEditorRegistry(
+      root,
+      async () => [],
+      processes(new Map()),
+      () => new Date(time++),
+    );
+
+    await registry.recordExited(editorId);
+    const tombstonePath = path.join(root, ".unity-editors", "v1", "exited", `${editorId}.json`);
+    const original = await readFile(tombstonePath, "utf8");
+    await registry.recordExited(editorId);
+    expect(await readFile(tombstonePath, "utf8")).toBe(original);
+
+    await writeFile(tombstonePath, JSON.stringify({ schemaVersion: 1, editorId: randomUUID() }));
+    await expect(registry.recordExited(editorId)).rejects.toMatchObject({
+      code: "run.indeterminate",
+    });
   });
 });

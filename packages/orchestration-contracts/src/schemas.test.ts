@@ -560,6 +560,24 @@ describe("orchestration contracts", () => {
         },
       }).success,
     ).toBe(false);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...config,
+        transaction: {
+          ...transaction,
+          testplay: { ...transaction.testplay, platform: "play_mode" },
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...config,
+        transaction: {
+          ...transaction,
+          testplay: { ...transaction.testplay, filter: "Smoke" },
+        },
+      }).success,
+    ).toBe(false);
 
     const single = {
       ...transaction,

@@ -1071,6 +1071,20 @@ export const UnityBatchConfigV3Schema = z
         message: "Workspace storage cannot inject an unpinned execution environment.",
       });
     }
+    if (config.transaction.testplay.platform !== "edit_mode") {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay", "platform"],
+        message: "Unity v0.6 batches require edit-mode TestPlay.",
+      });
+    }
+    if (config.transaction.testplay.filter !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay", "filter"],
+        message: "Unity v0.6 batches configure filters through capabilities.",
+      });
+    }
   });
 export type UnityBatchConfigV3 = z.infer<typeof UnityBatchConfigV3Schema>;
 export const UnityBatchConfigSchema = z.discriminatedUnion("schemaVersion", [
