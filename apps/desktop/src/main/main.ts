@@ -1,4 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -21,7 +23,16 @@ import {
 import { DesktopSettingsStore } from "./settings.js";
 
 let mainWindow: BrowserWindow | undefined;
-await app.whenReady();
+const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
+const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v1";
+if (smokeMode) app.disableHardwareAcceleration();
+const writeSmokeStage = async (stage: string): Promise<void> => {
+  if (smokeResultPath === undefined) return;
+  const target = path.resolve(smokeResultPath);
+  const relative = path.relative(path.resolve(tmpdir()), target);
+  if (relative.startsWith("..") || path.isAbsolute(relative)) return;
+  await writeFile(target, JSON.stringify({ stage }) + "\n", "utf8");
+};
 const userData = app.getPath("userData");
 const settings = new DesktopSettingsStore(userData);
 const runtime = new HoneyBeeRuntimeFacade({
@@ -210,7 +221,9 @@ const registerIpc = (): void => {
 };
 
 const createWindow = async (): Promise<void> => {
-  const preload = fileURLToPath(new URL("../../preload/preload.cjs", import.meta.url));
+  const preload = fileURLToPath(
+    new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url),
+  );
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -228,7 +241,8 @@ const createWindow = async (): Promise<void> => {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
+  await writeSmokeStage("window-created");
   const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
   if (
     developmentUrl !== undefined &&
@@ -236,12 +250,81 @@ const createWindow = async (): Promise<void> => {
   ) {
     await mainWindow.loadURL(developmentUrl);
   } else {
-    await mainWindow.loadFile(fileURLToPath(new URL("../../renderer/index.html", import.meta.url)));
+    await mainWindow.loadFile(
+      fileURLToPath(new URL(/* @vite-ignore */ "../../renderer/index.html", import.meta.url)),
+    );
+  }
+  await writeSmokeStage("renderer-loaded");
+  if (smokeMode) {
+    try {
+      const script = [
+        "new Promise((resolve, reject) => {",
+        "  const deadline = Date.now() + 5000;",
+        "  const inspect = async () => {",
+        "    try {",
+        "      const api = window.honeybee;",
+        "      const ready = document.body.textContent?.includes('Command Center') === true;",
+        "      if (api !== undefined && ready) {",
+        "        const bootstrap = await api.bootstrap();",
+        "        resolve({",
+        "          apiVersion: bootstrap.runtime.apiVersion,",
+        "          schemaVersion: bootstrap.schemaVersion,",
+        "          rendererReady: ready",
+        "        });",
+        "        return;",
+        "      }",
+        "      if (Date.now() >= deadline) {",
+        "        const body = (document.body.textContent ?? '').slice(0, 300);",
+        "        reject(new Error('renderer timeout; api=' + (api !== undefined) + '; body=' + body));",
+        "        return;",
+        "      }",
+        "      setTimeout(() => void inspect(), 50);",
+        "    } catch (error) { reject(error); }",
+        "  };",
+        "  void inspect();",
+        "})",
+      ].join("\n");
+      const result = (await mainWindow.webContents.executeJavaScript(script)) as unknown;
+      const valid =
+        typeof result === "object" &&
+        result !== null &&
+        "apiVersion" in result &&
+        result.apiVersion === 1 &&
+        "schemaVersion" in result &&
+        result.schemaVersion === 1 &&
+        "rendererReady" in result &&
+        result.rendererReady === true;
+      if (!valid) throw new Error("invalid smoke result");
+      await writeSmokeStage("passed");
+      process.stdout.write("HONEYBEE_DESKTOP_SMOKE_OK\n");
+      mainWindow.destroy();
+      app.exit(0);
+    } catch (error) {
+      await writeSmokeStage("failed");
+      process.stderr.write(
+        "HoneyBee Desktop smoke failed.\n" +
+          (error instanceof Error ? (error.stack ?? error.message) : String(error)) +
+          "\n",
+      );
+      mainWindow.destroy();
+      app.exit(1);
+    }
   }
 };
 
-registerIpc();
-await createWindow();
+const startDesktop = async (): Promise<void> => {
+  await writeSmokeStage("module-loaded");
+  await app.whenReady();
+  await writeSmokeStage("app-ready");
+  registerIpc();
+  await createWindow();
+};
+
+void startDesktop().catch(async () => {
+  await writeSmokeStage("failed").catch(() => undefined);
+  process.stderr.write("HoneyBee Desktop failed to start.\n");
+  app.exit(1);
+});
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) void createWindow();

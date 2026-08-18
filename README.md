@@ -111,7 +111,13 @@ The Electron Desktop is a thin operator surface over `honeybee-cli/runtime`; it 
 ```powershell
 corepack pnpm --filter honeybee-desktop build
 corepack pnpm --filter honeybee-desktop start
+corepack pnpm --filter honeybee-desktop package:smoke
 ```
+
+`package:smoke` produces `apps/desktop/release/HoneyBee-win32-x64/HoneyBee.exe` and launches that
+packaged executable with an isolated temporary user-data directory. The smoke requires Electron
+`app.ready`, the sandboxed preload API, the renderer Command Center, and runtime bootstrap IPC to
+all succeed. It force-closes only its own process tree and removes its temporary profile.
 
 Add a Unity project and link its existing v0.6 batch schema 3 config. Doctor validates Unity project structure/version, physical path isolation, TestPlay/Agent command availability, and the pinned workspace-storage binary without running an Agent. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. Agent choice remains the linked config; priorities and compile/warm-test capabilities are selected per Work.
 
@@ -120,6 +126,10 @@ The Command Center shows live Work phases, the priority/FIFO Editor queue, Edito
 New patches use a reference-only manifest v2 with detailed base/result trees and separate content-addressed before/after blobs. Apply verifies the complete source tree, uses a durable same-directory backup/checkpoint transaction, and rolls back on conflict; Reject never changes source. Patch disposition is separate from the immutable terminal orchestration Journal. Existing manifest v1 results remain viewable/rejectable but are not applied because they lack a durable detailed base tree. See [ADR-022](docs/decisions/ADR-022-desktop-results-and-patch-disposition.md).
 
 Profiles are stored as strict atomic JSON below Electron's `userData` directory. Runtime state is stored separately below `<userData>/runtime/runs`. Context isolation, renderer sandboxing, disabled Node integration, navigation denial, a restrictive CSP, and strict request/response validation keep filesystem and process authority in the main process. See [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md) and [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md).
+
+Use the [Desktop MVP dogfood checklist](docs/validation/desktop-mvp-dogfood.md) for a real v0.6
+Unity batch. The checklist treats source preservation, patch disposition, cleanup recovery, and
+workspace/Editor/process residual zero as release gates rather than UI-only demonstrations.
 
 ## Workflow config v3
 

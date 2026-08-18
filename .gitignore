@@ -3,6 +3,7 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+/apps/desktop/release/
 
 # Local package-manager and registry credentials
 .npmrc
