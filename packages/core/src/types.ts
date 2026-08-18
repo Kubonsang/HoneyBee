@@ -98,6 +98,7 @@ export interface RunRecord {
 export interface RunRepository {
   create(runId: RunId): Promise<void>;
   open(runId: RunId): Promise<RunRecord>;
+  list(): Promise<readonly RunRecord[]>;
   delete(runId: RunId): Promise<void>;
 }
 

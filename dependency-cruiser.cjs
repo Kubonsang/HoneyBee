@@ -18,7 +18,7 @@ module.exports = {
     {
       name: "contracts-do-not-depend-on-implementations",
       severity: "error",
-      from: { path: "^packages/(event|orchestration)-contracts/" },
+      from: { path: "^packages/(control-plane|event|orchestration)-contracts/" },
       to: {
         path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
       },

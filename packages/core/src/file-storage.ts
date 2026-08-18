@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, rm, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -121,6 +121,37 @@ export class FileRunRepository extends FileRunScopedStore implements RunReposito
   public async open(runId: RunId): Promise<RunRecord> {
     await this.requireRunDirectory(runId);
     return { runId: RunIdSchema.parse(runId) };
+  }
+
+  public async list(): Promise<readonly RunRecord[]> {
+    let entries;
+    try {
+      const root = await lstat(this.rootDirectory);
+      if (!root.isDirectory() || root.isSymbolicLink()) {
+        throw new HoneyBeeCoreError(
+          "run.invalid-path",
+          "Run repository root is not a real directory.",
+        );
+      }
+      entries = await readdir(this.rootDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return [];
+      if (error instanceof HoneyBeeCoreError) throw error;
+      throw new HoneyBeeCoreError("run.invalid-path", "Run repository could not be enumerated.");
+    }
+    const records: RunRecord[] = [];
+    for (const entry of entries) {
+      const parsed = RunIdSchema.safeParse(entry.name);
+      if (!parsed.success) continue;
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        throw new HoneyBeeCoreError(
+          "run.invalid-path",
+          `Run ${entry.name} is not a real directory.`,
+        );
+      }
+      records.push({ runId: parsed.data });
+    }
+    return records.sort((left, right) => left.runId.localeCompare(right.runId));
   }
 
   public async delete(runId: RunId): Promise<void> {

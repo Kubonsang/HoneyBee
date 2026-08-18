@@ -43,6 +43,9 @@ importers:
 
   apps/cli:
     dependencies:
+      '@honeybee/control-plane-contracts':
+        specifier: workspace:*
+        version: link:../../packages/control-plane-contracts
       '@honeybee/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -55,6 +58,15 @@ importers:
       '@honeybee/domain':
         specifier: workspace:*
         version: link:../domain
+
+  packages/control-plane-contracts:
+    dependencies:
+      '@honeybee/orchestration-contracts':
+        specifier: workspace:*
+        version: link:../orchestration-contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
 
   packages/core:
     dependencies:

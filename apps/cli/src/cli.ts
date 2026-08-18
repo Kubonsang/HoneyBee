@@ -49,22 +49,19 @@ import {
 import { UnityPatchBuilder } from "./unity-patch.js";
 import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js";
 import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
-import { physicalPathsOverlap } from "./path-safety.js";
-import { FileUnityEditorPoolCoordinator } from "./unity-editor-pool.js";
-import { FileOsUnityEditorRegistry } from "./unity-editor-registry.js";
-import { FileWarmBridgeBindingResolver } from "./unity-bridge-binding.js";
-import { SystemUnityEditorLauncher } from "./unity-editor-launcher.js";
+import { inspectUnityEditorBatchEvents } from "./unity-editor-batch.js";
+import { HoneyBeeRuntimeFacade } from "./runtime-api.js";
 import {
-  UnityEditorWorkTransaction,
-  type UnityWorkV5Execution,
-} from "./unity-editor-transaction.js";
-import { UnityEditorBatchWorkflow, inspectUnityEditorBatchEvents } from "./unity-editor-batch.js";
+  assertUnityPathsDisjoint,
+  createUnityEditorBatchWorkflow,
+  createUnityEditorTransactionServices,
+} from "./unity-runtime-services.js";
 
 const VERSION = "0.6.0";
 const HELP = `HoneyBee ${VERSION}
 
 Usage:
-  honeybee demo --task <text> [--json]
+  honeybee demo --task <text> [--json] [--state-root <path>]
   honeybee run --config <path> --task <text> [--json]
   honeybee unity run --config <path> --task <text> [--json]
   honeybee unity batch run --config <path> [--json]
@@ -271,25 +268,9 @@ const demoConfig = (): WorkflowConfigV3 => {
   });
 };
 
-const stateRoot = (): string => path.resolve(process.cwd(), ".honeybee", "runs");
-
-const assertUnityPathsDisjoint = async (
-  root: string,
-  config: Readonly<{
-    sourceProjectPath: string;
-    workspaceStorage: Readonly<{ workspaceRoot: string }>;
-  }>,
-): Promise<void> => {
-  const [stateAndSource, stateAndWorkspace, sourceAndWorkspace] = await Promise.all([
-    physicalPathsOverlap(root, config.sourceProjectPath),
-    physicalPathsOverlap(root, config.workspaceStorage.workspaceRoot),
-    physicalPathsOverlap(config.sourceProjectPath, config.workspaceStorage.workspaceRoot),
-  ]);
-  if (stateAndSource || stateAndWorkspace || sourceAndWorkspace) {
-    throw new Error(
-      "HoneyBee Run state, sourceProjectPath, and workspaceStorage.workspaceRoot must be disjoint.",
-    );
-  }
+const stateRoot = (): string => {
+  const configured = optionValue(process.argv.slice(2), "--state-root");
+  return path.resolve(configured ?? path.join(process.cwd(), ".honeybee", "runs"));
 };
 
 const output = (value: unknown, json: boolean): void => {
@@ -423,93 +404,6 @@ const unityBatchFor = (
   );
 };
 
-const unityEditorTransactionFor = (
-  root: string,
-  config: ReturnType<typeof UnityWorkConfigV2Schema.parse>,
-  journal: VersionedOrchestrationJournal,
-  controls: FileRunControl,
-): Readonly<{ transaction: UnityEditorWorkTransaction; execution: UnityWorkV5Execution }> => {
-  const artifacts = new FileArtifactStore(root);
-  const bootstrap = new UnityProjectBootstrap();
-  const pool = new FileUnityEditorPoolCoordinator(root);
-  const patchBuilder = new UnityPatchBuilder(
-    artifacts,
-    bootstrap,
-    path.join(root, ".patch-verification"),
-  );
-  return {
-    transaction: new UnityEditorWorkTransaction(
-      root,
-      new UnityAgentProcessRunner(),
-      artifacts,
-      journal,
-      controls,
-      bootstrap,
-      new UnityWorkspaceStorageCliAdapter(
-        config.workspaceStorage.command,
-        config.workspaceStorage.parentKey.provider,
-        config.workspaceStorage.binarySha256,
-      ),
-      new TestPlayCliAdapter(config.testplay),
-      new SystemUnityEditorLauncher(root),
-      new FileOsUnityEditorRegistry(root),
-      new FileWarmBridgeBindingResolver(),
-    ),
-    execution: {
-      workId: StepIdSchema.parse("unity-work"),
-      poolId: config.editorPool.id,
-      priority: config.priority,
-      capabilities: config.capabilities,
-      pool,
-      patchBuilder,
-    },
-  };
-};
-
-const unityEditorBatchFor = (
-  root: string,
-  config: ReturnType<typeof UnityBatchConfigV3Schema.parse>,
-  journal: VersionedOrchestrationJournal,
-  controls: FileRunControl,
-): UnityEditorBatchWorkflow => {
-  const artifacts = new FileArtifactStore(root);
-  const bootstrap = new UnityProjectBootstrap();
-  const pool = new FileUnityEditorPoolCoordinator(root);
-  const patchBuilder = new UnityPatchBuilder(
-    artifacts,
-    bootstrap,
-    path.join(root, ".patch-verification"),
-  );
-  const transaction = new UnityEditorWorkTransaction(
-    root,
-    new UnityAgentProcessRunner(),
-    artifacts,
-    journal,
-    controls,
-    bootstrap,
-    new UnityWorkspaceStorageCliAdapter(
-      config.transaction.workspaceStorage.command,
-      config.transaction.workspaceStorage.parentKey.provider,
-      config.transaction.workspaceStorage.binarySha256,
-    ),
-    new TestPlayCliAdapter(config.transaction.testplay),
-    new SystemUnityEditorLauncher(root),
-    new FileOsUnityEditorRegistry(root),
-    new FileWarmBridgeBindingResolver(),
-  );
-  return new UnityEditorBatchWorkflow(
-    root,
-    artifacts,
-    journal,
-    new FileRunRepository(root),
-    controls,
-    controls,
-    transaction,
-    pool,
-    patchBuilder,
-  );
-};
-
 const execute = async (args: Extract<ParsedArguments, { command: "execute" }>): Promise<void> => {
   if (args.task === undefined || args.task.trim().length === 0)
     throw new Error("--task is required.");
@@ -586,7 +480,7 @@ const executeUnity = async (
       config.schemaVersion === 1
         ? await unityTransactionFor(root, config, journal, controls).run(runId, task, config)
         : await (async () => {
-            const services = unityEditorTransactionFor(root, config, journal, controls);
+            const services = createUnityEditorTransactionServices(root, config, journal, controls);
             await services.execution.pool.declare({
               poolId: config.editorPool.id,
               capacity: config.editorPool.capacity,
@@ -617,7 +511,7 @@ const executeUnityBatch = async (
   try {
     const result =
       config.schemaVersion === 3
-        ? await unityEditorBatchFor(root, config, journal, controls).run(runId, config)
+        ? await createUnityEditorBatchWorkflow(root, config, journal, controls).run(runId, config)
         : await unityBatchFor(root, config, journal, controls).run(runId, config);
     finishUnityBatchExecution(result, journalPath, args.json);
   } catch (error) {
@@ -630,7 +524,7 @@ const executeUnityBatch = async (
 const listUnityEditors = async (
   args: Extract<ParsedArguments, { command: "unity-editor-list" }>,
 ): Promise<void> => {
-  const editors = await new FileOsUnityEditorRegistry(stateRoot()).list();
+  const { editors } = await new HoneyBeeRuntimeFacade({ stateRoot: stateRoot() }).listEditors();
   if (args.json) {
     output({ ok: true, editors }, true);
     return;
@@ -671,7 +565,9 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
           JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
         );
         await assertUnityPathsDisjoint(root, config.transaction);
-        const result = await unityEditorBatchFor(root, config, journal, controls).resume(runId);
+        const result = await createUnityEditorBatchWorkflow(root, config, journal, controls).resume(
+          runId,
+        );
         finishUnityBatchExecution(result, journalPath, args.json);
         return;
       }
@@ -685,7 +581,7 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
         JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
       );
       await assertUnityPathsDisjoint(root, config);
-      const services = unityEditorTransactionFor(root, config, journal, controls);
+      const services = createUnityEditorTransactionServices(root, config, journal, controls);
       const result = await services.transaction.resume(runId, config, services.execution);
       finishUnityExecution(result, journalPath, args.json);
       return;

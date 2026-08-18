@@ -68,11 +68,19 @@ export type UnityEditorPoolStatus =
   | Readonly<{ state: "cancelled"; ticket: UnityEditorPoolTicket }>
   | Readonly<{ state: "released"; lease: UnityEditorPoolLease }>;
 
+export interface UnityEditorPoolSnapshot {
+  readonly poolId: ResourceId;
+  readonly capacity: number;
+  readonly active: readonly UnityEditorPoolLease[];
+  readonly queued: readonly UnityEditorPoolTicket[];
+}
+
 export interface UnityEditorPoolCoordinator {
   declare(definition: UnityEditorPoolDefinition): Promise<void>;
   enqueue(request: UnityEditorPoolRequest): Promise<UnityEditorPoolTicket>;
   acquire(locator: UnityEditorPoolLocator, signal?: AbortSignal): Promise<UnityEditorPoolLease>;
   status(locator: UnityEditorPoolLocator): Promise<UnityEditorPoolStatus>;
+  inspect(poolId: ResourceId): Promise<UnityEditorPoolSnapshot>;
   cancel(locator: UnityEditorPoolLocator): Promise<void>;
   release(lease: UnityEditorPoolLease): Promise<void>;
 }
@@ -342,6 +350,25 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
     const requestId = EventIdSchema.parse(locatorValue.requestId);
     const snapshot = await this.#snapshot(poolId);
     return snapshot.requests.get(requestId) ?? { state: "missing" };
+  }
+
+  public async inspect(poolIdValue: ResourceId): Promise<UnityEditorPoolSnapshot> {
+    const poolId = ResourceIdSchema.parse(poolIdValue);
+    const snapshot = await this.#snapshot(poolId);
+    const active = [...snapshot.activeBySlot.values()].sort((left, right) =>
+      left.slotId.localeCompare(right.slotId),
+    );
+    const queued = [...snapshot.requests.values()]
+      .filter(
+        (status): status is Extract<UnityEditorPoolStatus, { state: "queued" }> =>
+          status.state === "queued",
+      )
+      .map((status) => status.ticket)
+      .sort(
+        (left, right) =>
+          PRIORITY[left.priority] - PRIORITY[right.priority] || left.ticket - right.ticket,
+      );
+    return { poolId, capacity: snapshot.capacity, active, queued };
   }
 
   public async cancel(locatorValue: UnityEditorPoolLocator): Promise<void> {

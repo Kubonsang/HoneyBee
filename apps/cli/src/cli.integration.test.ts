@@ -131,6 +131,19 @@ describe("HoneyBee CLI sequential orchestration", () => {
     expect(journal).not.toContain("DEMO_RESULT");
   }, 20_000);
 
+  it("places all Run state under an explicit state root", async () => {
+    const cwd = await temporaryDirectory();
+    const root = path.join(cwd, "desktop-runtime", "runs");
+    const execution = await runCli(
+      ["demo", "--task", "state root", "--json", "--state-root", root],
+      cwd,
+    );
+    expect(execution.exitCode).toBe(0);
+    const result = JSON.parse(execution.stdout) as CliOutput;
+    expect(path.dirname(path.dirname(result.journalPath))).toBe(path.resolve(root));
+    expect(await readFile(result.journalPath, "utf8")).toContain("workflow.completed");
+  }, 20_000);
+
   it("runs a configured deterministic three-process v2 chain", async () => {
     const cwd = await temporaryDirectory();
     const configPath = path.join(cwd, "workflow.json");

@@ -59,7 +59,17 @@ describe("FileUnityEditorPoolCoordinator", () => {
     const firstTicket = await pool.enqueue(firstInteractive);
     const secondTicket = await pool.enqueue(secondInteractive);
     expect(firstTicket.ticket).toBeLessThan(secondTicket.ticket);
+    expect((await pool.inspect(ResourceIdSchema.parse("unity-editors"))).queued).toEqual([
+      firstTicket,
+      secondTicket,
+      expect.objectContaining({ requestId: background.requestId }),
+    ]);
     await pool.release(blockerLease);
+
+    expect(await pool.inspect(ResourceIdSchema.parse("unity-editors"))).toMatchObject({
+      capacity: 1,
+      active: [expect.objectContaining({ requestId: firstInteractive.requestId })],
+    });
 
     const firstLease = await pool.acquire(firstInteractive);
     expect(firstLease.slotId).toBe("editor-1");
