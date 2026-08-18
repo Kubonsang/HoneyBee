@@ -534,6 +534,8 @@ export class UnityEditorWorkTransaction {
         {
           command: executablePath,
           args: [
+            "-batchmode",
+            "-nographics",
             "-projectPath",
             workspacePath,
             "-logFile",

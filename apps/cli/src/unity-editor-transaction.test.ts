@@ -633,6 +633,8 @@ describe("UnityEditorWorkTransaction", () => {
     expect(storage.released).toBe(1);
     expect(launcher.stopped).toBe(1);
     expect(launcher.command?.args).toEqual([
+      "-batchmode",
+      "-nographics",
       "-projectPath",
       path.join(workspaceRoot, "hb-" + runId),
       "-logFile",
