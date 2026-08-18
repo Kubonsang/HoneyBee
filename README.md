@@ -1,6 +1,6 @@
 # HoneyBee
 
-HoneyBee is a CLI-first orchestration kernel for durable Agent work and isolated Unity validation.
+HoneyBee is a CLI-first orchestration kernel with a local Desktop control plane for durable Agent work and isolated Unity validation.
 
 Version 0.6 assigns durable Editor-pool slots to isolated Unity Work Transactions, binds each owned Editor and Warm Bridge to one exact workspace, and runs config-selected compile/warm-test capabilities under that exclusive slot. The v0.5, v0.4, and v0.3 contracts remain compatible.
 
@@ -8,7 +8,7 @@ Version 0.6 assigns durable Editor-pool slots to isolated Unity Work Transaction
 prepare → acquire → one Agent → TestPlay → Evidence → release → residual 0
 ```
 
-> The former VS Code Extension and Webview packages remain retired. `packages/core`, `packages/orchestration-contracts`, and `apps/cli` are the product boundary.
+> The former VS Code Extension and Webview packages remain retired. The runtime boundary is `packages/core`, `packages/orchestration-contracts`, and `apps/cli`; `apps/desktop` observes and invokes that runtime through strict control-plane DTOs.
 
 ## Requirements
 
@@ -84,7 +84,7 @@ Batch config schema 1 remains accepted with its original process-local queue for
 
 A completed child stores a `unity-verified-patch` manifest before workspace release. Added and modified file bodies are separate `unity-patch-content` binary Artifacts in the existing content-addressed store; the manifest contains only Artifact references and delete metadata. HoneyBee verifies the patch against a clean source copy, and the original project remains unchanged.
 
-Git Worktree integration, distributed scheduling, GUI, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md) and [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md).
+Git Worktree integration, distributed scheduling, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md) and [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md).
 
 ## Unity Editor pool v0.6
 
@@ -100,9 +100,22 @@ After the Agent exits, HoneyBee launches an Editor for the assigned workspace th
 
 The OS Editor Registry and Warm Bridge binding are separate contracts. HoneyBee-owned Editors carry exact Run, Work, workspace, slot, launch, PID, and process-incarnation linkage. User-owned or path-unknown Editors remain observable only: they are never assigned, leased, adopted, or terminated. Bridge protocol 3 proves an exact owned Editor/workspace/session binding; it does not own scheduling or lifecycle.
 
-Capabilities are selected by HoneyBee config, not by Agent output. compile and warm-test execute sequentially inside the child Run while its assigned Editor slot is exclusive. Warm Test must report at least one executed test. Capture, GUI, Semantic IR, Recipe systems, distributed workers, preemption, and automatic capacity optimization remain out of scope.
+Capabilities are selected by HoneyBee config, not by Agent output. compile and warm-test execute sequentially inside the child Run while its assigned Editor slot is exclusive. Warm Test must report at least one executed test. Capture, Semantic IR, Recipe systems, distributed workers, preemption, and automatic capacity optimization remain out of scope.
 
 Parent and v0.6 child Journals use schema v5. Crash recovery does not rerun the Agent or a capability: it drains unmatched recorded processes/containment, closes the Editor-pool lease, verifies the source, preserves any verified patch Artifact, and releases the workspace. Terminal success follows workspace release, and deterministic E2E coverage asserts Editor, pool, child-process, and workspace residual zero. See [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md).
+
+## Desktop control plane MVP
+
+The Electron Desktop is a thin operator surface over `honeybee-cli/runtime`; it does not implement a second scheduler or transaction state machine. Its sandboxed renderer can only call the versioned preload API. The main process owns project profiles, Doctor requests, and Work starts under an explicit application-data state root.
+
+```powershell
+corepack pnpm --filter honeybee-desktop build
+corepack pnpm --filter honeybee-desktop start
+```
+
+Add a Unity project and link its existing v0.6 batch schema 3 config. Doctor validates Unity project structure/version, physical path isolation, TestPlay/Agent command availability, and the pinned workspace-storage binary without running an Agent. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. Agent choice remains the linked config; priorities and compile/warm-test capabilities are selected per Work.
+
+Profiles are stored as strict atomic JSON below Electron's `userData` directory. Runtime state is stored separately below `<userData>/runtime/runs`. Context isolation, renderer sandboxing, disabled Node integration, navigation denial, a restrictive CSP, and strict request/response validation keep filesystem and process authority in the main process. See [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md) and [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md).
 
 ## Workflow config v3
 
@@ -217,7 +230,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-HoneyBee remains a local CLI kernel. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, and config-owned compile/warm-test capabilities while preserving earlier contracts. Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, parent provisioning, GUI, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), and [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md).
+HoneyBee remains a local CLI kernel with a thin Desktop operator surface. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, and config-owned compile/warm-test capabilities while preserving earlier contracts. Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, parent provisioning, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md), [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), and [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md).
 
 ## License
 

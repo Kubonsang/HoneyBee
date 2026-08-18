@@ -1,0 +1,185 @@
+import { randomUUID } from "node:crypto";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { HoneyBeeRuntimeFacade } from "honeybee-cli/runtime";
+
+import {
+  DesktopBootstrapV1Schema,
+  DesktopDoctorRequestV1Schema,
+  DesktopIpcChannels,
+  DesktopProfileIdRequestV1Schema,
+  DesktopProjectProfileV1Schema,
+  DesktopStartRequestV1Schema,
+} from "../shared/ipc.js";
+import { DesktopSettingsStore } from "./settings.js";
+
+let mainWindow: BrowserWindow | undefined;
+await app.whenReady();
+const userData = app.getPath("userData");
+const settings = new DesktopSettingsStore(userData);
+const runtime = new HoneyBeeRuntimeFacade({
+  stateRoot: path.join(userData, "runtime", "runs"),
+});
+
+const profileKey = (value: string): string => {
+  const normalized = path.resolve(value);
+  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+};
+
+const showOpenDialog = (options: Electron.OpenDialogOptions) =>
+  mainWindow === undefined
+    ? dialog.showOpenDialog(options)
+    : dialog.showOpenDialog(mainWindow, options);
+
+const profileFor = async (profileId: string) => {
+  const profile = (await settings.listProfiles()).find(
+    (candidate) => candidate.profileId === profileId,
+  );
+  if (profile === undefined) throw new Error("Project profile was not found.");
+  return profile;
+};
+
+const bootstrap = async () =>
+  DesktopBootstrapV1Schema.parse({
+    schemaVersion: 1,
+    runtime: runtime.info(),
+    profiles: await settings.listProfiles(),
+  });
+
+const safeHandler =
+  <Arguments extends readonly unknown[], Result>(
+    operation: (...args: Arguments) => Promise<Result>,
+  ) =>
+  async (_event: Electron.IpcMainInvokeEvent, ...args: Arguments): Promise<Result> => {
+    try {
+      return await operation(...args);
+    } catch (error) {
+      const code =
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        typeof error.code === "string"
+          ? error.code
+          : "desktop.operation-failed";
+      throw new Error(`HoneyBee operation failed (${code}).`, { cause: error });
+    }
+  };
+
+const registerIpc = (): void => {
+  ipcMain.handle(
+    DesktopIpcChannels.bootstrap,
+    safeHandler(async () => bootstrap()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.chooseProfile,
+    safeHandler(async () => {
+      const project = await showOpenDialog({
+        title: "Choose a Unity project",
+        properties: ["openDirectory"],
+      });
+      const projectPath = project.filePaths[0];
+      if (project.canceled || projectPath === undefined) return null;
+      const config = await showOpenDialog({
+        title: "Choose the HoneyBee v0.6 batch config",
+        defaultPath: projectPath,
+        properties: ["openFile"],
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      const batchConfigPath = config.filePaths[0];
+      if (config.canceled || batchConfigPath === undefined) return null;
+      const existing = (await settings.listProfiles()).find(
+        (candidate) =>
+          profileKey(candidate.projectPath) === profileKey(projectPath) &&
+          profileKey(candidate.batchConfigPath) === profileKey(batchConfigPath),
+      );
+      const profile = DesktopProjectProfileV1Schema.parse({
+        schemaVersion: 1,
+        profileId: existing?.profileId ?? randomUUID(),
+        label: path.basename(projectPath),
+        projectPath: path.resolve(projectPath),
+        batchConfigPath: path.resolve(batchConfigPath),
+        configLabel: path.basename(batchConfigPath, path.extname(batchConfigPath)),
+        lastOpenedAt: new Date().toISOString(),
+      });
+      await settings.upsertProfile(profile);
+      return profile;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.removeProfile,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProfileIdRequestV1Schema.parse(requestValue);
+      await settings.removeProfile(request.profileId);
+      return bootstrap();
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.doctor,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopDoctorRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return runtime.doctor({
+        schemaVersion: 1,
+        projectPath: profile.projectPath,
+        batchConfigPath: profile.batchConfigPath,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.startWorks,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopStartRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return runtime.startUnityWorks({
+        schemaVersion: 1,
+        projectPath: profile.projectPath,
+        batchConfigPath: profile.batchConfigPath,
+        maxParallelWorks: request.maxParallelWorks,
+        works: request.works,
+      });
+    }),
+  );
+};
+
+const createWindow = async (): Promise<void> => {
+  const preload = fileURLToPath(new URL("../../preload/preload.cjs", import.meta.url));
+  mainWindow = new BrowserWindow({
+    width: 1320,
+    height: 860,
+    minWidth: 980,
+    minHeight: 680,
+    backgroundColor: "#f4f1e8",
+    show: false,
+    title: "HoneyBee",
+    webPreferences: {
+      preload,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  mainWindow.once("ready-to-show", () => mainWindow?.show());
+  const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
+  if (
+    developmentUrl !== undefined &&
+    /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(developmentUrl)
+  ) {
+    await mainWindow.loadURL(developmentUrl);
+  } else {
+    await mainWindow.loadFile(fileURLToPath(new URL("../../renderer/index.html", import.meta.url)));
+  }
+};
+
+registerIpc();
+await createWindow();
+
+app.on("activate", () => {
+  if (BrowserWindow.getAllWindows().length === 0) void createWindow();
+});
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") app.quit();
+});
