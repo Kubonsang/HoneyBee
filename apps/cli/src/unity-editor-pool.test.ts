@@ -29,6 +29,15 @@ const request = (priority: "interactive" | "validation" | "background", workId: 
 });
 
 describe("FileUnityEditorPoolCoordinator", () => {
+  it("distinguishes an undeclared pool from corrupt declared history", async () => {
+    const root = await temporaryRoot();
+    const pool = new FileUnityEditorPoolCoordinator(root);
+    expect(await pool.inspectOptional(ResourceIdSchema.parse("unity-editors"))).toBeUndefined();
+    await expect(pool.inspect(ResourceIdSchema.parse("unity-editors"))).rejects.toMatchObject({
+      code: "validation.invalid-workflow",
+    });
+  });
+
   it("assigns free slots atomically and permits different Editors concurrently", async () => {
     const root = await temporaryRoot();
     const pool = new FileUnityEditorPoolCoordinator(root);

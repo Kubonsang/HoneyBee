@@ -650,7 +650,7 @@ export class HoneyBeeRuntimeFacade {
       .sort((left, right) => (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""));
   }
 
-  public async getRunDetail(runIdValue: RunId): Promise<RunDetailV1> {
+  public async getRunDetail(runIdValue: string): Promise<RunDetailV1> {
     const runId = RunIdSchema.parse(runIdValue);
     await new FileRunRepository(this.#root).open(runId);
     const controls = new FileRunControl(this.#root);
@@ -740,7 +740,7 @@ export class HoneyBeeRuntimeFacade {
     });
   }
 
-  public async resume(runIdValue: RunId): Promise<RunControlResultV1> {
+  public async resume(runIdValue: string): Promise<RunControlResultV1> {
     const runId = RunIdSchema.parse(runIdValue);
     const detail = await this.getRunDetail(runId);
     if (!detail.summary.allowedActions.includes("resume")) {
@@ -813,7 +813,7 @@ export class HoneyBeeRuntimeFacade {
     }
   }
 
-  public async cancel(runIdValue: RunId): Promise<RunControlResultV1> {
+  public async cancel(runIdValue: string): Promise<RunControlResultV1> {
     const runId = RunIdSchema.parse(runIdValue);
     const detail = await this.getRunDetail(runId);
     if (!detail.summary.allowedActions.includes("cancel")) {
@@ -856,8 +856,31 @@ export class HoneyBeeRuntimeFacade {
     });
   }
 
+  public async inspectEditorPoolForConfig(configPath: string): Promise<EditorPoolSnapshotV1> {
+    const loaded = await loadUnityBatchConfig(configPath);
+    if (loaded.schemaVersion !== 3) {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Editor pool inspection requires a v0.6 batch configuration.",
+      );
+    }
+    const snapshot = await new FileUnityEditorPoolCoordinator(this.#root).inspectOptional(
+      loaded.editorPool.id,
+    );
+    if (snapshot !== undefined) {
+      return EditorPoolSnapshotV1Schema.parse({ schemaVersion: 1, ...snapshot });
+    }
+    return EditorPoolSnapshotV1Schema.parse({
+      schemaVersion: 1,
+      poolId: loaded.editorPool.id,
+      capacity: loaded.editorPool.capacity,
+      active: [],
+      queued: [],
+    });
+  }
+
   public async readReferencedArtifact(
-    runIdValue: RunId,
+    runIdValue: string,
     artifactIdValue: string,
   ): Promise<ArtifactViewV1> {
     const runId = RunIdSchema.parse(runIdValue);

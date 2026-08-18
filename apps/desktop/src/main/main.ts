@@ -6,11 +6,14 @@ import { app, BrowserWindow, dialog, ipcMain } from "electron";
 import { HoneyBeeRuntimeFacade } from "honeybee-cli/runtime";
 
 import {
+  DesktopArtifactRequestV1Schema,
   DesktopBootstrapV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectProfileV1Schema,
+  DesktopRunRequestV1Schema,
+  DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV1Schema,
 } from "../shared/ipc.js";
 import { DesktopSettingsStore } from "./settings.js";
@@ -139,6 +142,53 @@ const registerIpc = (): void => {
         maxParallelWorks: request.maxParallelWorks,
         works: request.works,
       });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.runtimeSnapshot,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProfileIdRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      const [runs, editors, pool] = await Promise.all([
+        runtime.listRuns({ projectPath: profile.projectPath }),
+        runtime.listEditors(),
+        runtime.inspectEditorPoolForConfig(profile.batchConfigPath),
+      ]);
+      return DesktopRuntimeSnapshotV1Schema.parse({
+        schemaVersion: 1,
+        observedAt: new Date().toISOString(),
+        runs,
+        editors,
+        pool,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.runDetail,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopRunRequestV1Schema.parse(requestValue);
+      return runtime.getRunDetail(request.runId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.artifactRead,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopArtifactRequestV1Schema.parse(requestValue);
+      return runtime.readReferencedArtifact(request.runId, request.artifactId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.runResume,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopRunRequestV1Schema.parse(requestValue);
+      return runtime.resume(request.runId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.runCancel,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopRunRequestV1Schema.parse(requestValue);
+      return runtime.cancel(request.runId);
     }),
   );
 };

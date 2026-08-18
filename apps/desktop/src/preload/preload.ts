@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
 
 import {
+  DesktopArtifactRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopIpcResponseSchemas,
   DesktopProfileIdRequestV1Schema,
+  DesktopRunRequestV1Schema,
   DesktopStartRequestV1Schema,
   type HoneyBeeDesktopApi,
 } from "../shared/ipc.js";
@@ -37,6 +39,41 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.startWorks,
         DesktopStartRequestV1Schema.parse(request),
+      ),
+    ),
+  runtimeSnapshot: async (request) =>
+    DesktopIpcResponseSchemas.runtimeSnapshot.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.runtimeSnapshot,
+        DesktopProfileIdRequestV1Schema.parse(request),
+      ),
+    ),
+  runDetail: async (request) =>
+    DesktopIpcResponseSchemas.runDetail.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.runDetail,
+        DesktopRunRequestV1Schema.parse(request),
+      ),
+    ),
+  readArtifact: async (request) =>
+    DesktopIpcResponseSchemas.artifactRead.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.artifactRead,
+        DesktopArtifactRequestV1Schema.parse(request),
+      ),
+    ),
+  resumeRun: async (request) =>
+    DesktopIpcResponseSchemas.runResume.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.runResume,
+        DesktopRunRequestV1Schema.parse(request),
+      ),
+    ),
+  cancelRun: async (request) =>
+    DesktopIpcResponseSchemas.runCancel.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.runCancel,
+        DesktopRunRequestV1Schema.parse(request),
       ),
     ),
 };

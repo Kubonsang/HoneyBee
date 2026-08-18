@@ -353,7 +353,18 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
   }
 
   public async inspect(poolIdValue: ResourceId): Promise<UnityEditorPoolSnapshot> {
+    const inspected = await this.inspectOptional(poolIdValue);
+    if (inspected === undefined) {
+      throw new HoneyBeeCoreError("validation.invalid-workflow", "Editor pool is not declared.");
+    }
+    return inspected;
+  }
+
+  public async inspectOptional(
+    poolIdValue: ResourceId,
+  ): Promise<UnityEditorPoolSnapshot | undefined> {
     const poolId = ResourceIdSchema.parse(poolIdValue);
+    if ((await this.#readEvents(poolId)).length === 0) return undefined;
     const snapshot = await this.#snapshot(poolId);
     const active = [...snapshot.activeBySlot.values()].sort((left, right) =>
       left.slotId.localeCompare(right.slotId),
