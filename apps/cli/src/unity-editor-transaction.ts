@@ -533,7 +533,12 @@ export class UnityEditorWorkTransaction {
         intent,
         {
           command: executablePath,
-          args: ["-projectPath", workspacePath],
+          args: [
+            "-projectPath",
+            workspacePath,
+            "-logFile",
+            path.join(this.root, runId, "unity-editor.log"),
+          ],
           cwd: workspacePath,
           env: { HONEYBEE_WORKSPACE_ID: workspaceId, HONEYBEE_EDITOR_LAUNCH_ID: launchId },
         },

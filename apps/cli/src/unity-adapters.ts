@@ -66,6 +66,58 @@ const createExclusiveFile = async (target: string, content: string): Promise<voi
   }
 };
 
+const removeStaleSourceAssetDatabaseLock = async (libraryPath: string): Promise<void> => {
+  const lockPath = path.join(libraryPath, "SourceAssetDB-lock");
+  let initial: Awaited<ReturnType<typeof lstat>>;
+  try {
+    initial = await lstat(lockPath);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock could not be inspected safely.",
+    );
+  }
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.nlink !== 1) {
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock is not a private regular file.",
+    );
+  }
+  try {
+    const handle = await open(lockPath, "r");
+    try {
+      const opened = await handle.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        opened.dev !== initial.dev ||
+        opened.ino !== initial.ino
+      ) {
+        throw new HoneyBeeCoreError(
+          "workspace.protocol-invalid",
+          "The acquired Library lock changed while it was being opened.",
+        );
+      }
+    } finally {
+      await handle.close();
+    }
+    await rm(lockPath);
+    await lstat(lockPath);
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock remained after removal.",
+    );
+  } catch (error) {
+    if (error instanceof HoneyBeeCoreError) throw error;
+    if (errorCode(error) === "ENOENT") return;
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock could not be removed safely.",
+    );
+  }
+};
+
 const readBoundedEvidenceFile = async (
   target: string,
   maxBytes: number,
@@ -981,6 +1033,11 @@ export class UnityWorkspaceStorageCliAdapter {
         "Workspace acquire did not publish the expected Library mount.",
       );
     }
+    // Unity may leave SourceAssetDB-lock in the immutable seed after a clean
+    // batchmode parent build. It is process-lifetime state, not reusable
+    // Library content. Remove only the exact verified child mount's private
+    // lock before any HoneyBee-owned agent or Editor can start.
+    await removeStaleSourceAssetDatabaseLock(expectedMount);
     return {
       ...parsed,
       schemaVersion: 1,

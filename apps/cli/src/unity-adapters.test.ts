@@ -33,7 +33,16 @@ afterEach(async () => {
   );
 });
 
-const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-provider") => {
+const command = async (
+  mode:
+    | "case-mount"
+    | "mount"
+    | "mount-with-lock"
+    | "mount-with-lock-directory"
+    | "malformed"
+    | "rejected"
+    | "wrong-provider",
+) => {
   const root = await mkdtemp(path.join(tmpdir(), "honeybee-storage-contract-"));
   directories.push(root);
   const script = path.join(root, "storage.mjs");
@@ -46,7 +55,7 @@ const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-pr
       "process.stdin.on('end', () => {",
       " if (mode === 'malformed') { process.stdout.write('not-json\\n'); return; }",
       " if (mode === 'rejected') { process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: false, operation: 'acquire', error: { code: 'workspace-command-failed', message: 'rejected' } }) + '\\n'); process.exitCode = 1; return; }",
-      " const request = JSON.parse(input); const library = path.join(process.cwd(), 'Library'); if (mode === 'case-mount') fs.mkdirSync(library); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: mode === 'case-mount' ? request.parentKey.provider : 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: mode === 'case-mount' ? library.toUpperCase() : library, state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
+      " const request = JSON.parse(input); const library = path.join(process.cwd(), 'Library'); const mounted = mode === 'case-mount' || mode.startsWith('mount'); if (mounted) fs.mkdirSync(library); if (mode === 'mount-with-lock') fs.writeFileSync(path.join(library, 'SourceAssetDB-lock'), 'stale'); if (mode === 'mount-with-lock-directory') fs.mkdirSync(path.join(library, 'SourceAssetDB-lock')); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: mounted ? request.parentKey.provider : 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: mode === 'case-mount' ? library.toUpperCase() : library, state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
       "});",
     ].join("\n"),
     "utf8",
@@ -72,12 +81,17 @@ const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-pr
     } else {
       const parsed = JSON.parse(options.input ?? "{}") as WorkspaceAcquireRequest;
       const library = path.join(options.cwd, "Library");
-      if (mode === "case-mount") await mkdir(library);
+      const mounted = mode === "case-mount" || mode.startsWith("mount");
+      if (mounted) await mkdir(library);
+      if (mode === "mount-with-lock")
+        await writeFile(path.join(library, "SourceAssetDB-lock"), "stale", "utf8");
+      if (mode === "mount-with-lock-directory")
+        await mkdir(path.join(library, "SourceAssetDB-lock"));
       stdout =
         JSON.stringify({
           schemaVersion: 1,
           requestId: parsed.requestId,
-          provider: mode === "case-mount" ? parsed.parentKey.provider : "wrong",
+          provider: mounted ? parsed.parentKey.provider : "wrong",
           lease: {
             leaseId: "lease",
             runId: parsed.consumerId,
@@ -182,6 +196,37 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
       });
     },
   );
+
+  it("removes only the stale SourceAssetDB lock from an acquired child", async () => {
+    const fixture = await command("mount-with-lock");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).resolves.toMatchObject({
+      lease: { leaseId: "lease" },
+    });
+    await expect(access(path.join(workspace, "Library", "SourceAssetDB-lock"))).rejects.toThrow();
+  });
+
+  it("accepts an acquired child whose SourceAssetDB lock is already absent", async () => {
+    const fixture = await command("mount");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).resolves.toMatchObject({
+      lease: { leaseId: "lease" },
+    });
+  });
+
+  it("refuses to remove a non-file SourceAssetDB lock", async () => {
+    const fixture = await command("mount-with-lock-directory");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).rejects.toMatchObject({
+      code: "workspace.protocol-invalid",
+    });
+    await expect(access(path.join(workspace, "Library", "SourceAssetDB-lock"))).resolves.toBe(
+      undefined,
+    );
+  });
 
   it("revalidates the pinned storage executable before every invocation", async () => {
     const fixture = await command("wrong-provider");

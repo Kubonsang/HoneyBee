@@ -165,12 +165,14 @@ class MemoryWorkspaceStorage extends UnityWorkspaceStorageCliAdapter {
 
 class MemoryEditorLauncher implements UnityEditorLauncher {
   public stopped = 0;
+  public command: Parameters<UnityEditorLauncher["launch"]>[1] | undefined;
 
   public async launch(
     intent: EditorLaunchIntentV1,
-    _command: Parameters<UnityEditorLauncher["launch"]>[1],
+    command: Parameters<UnityEditorLauncher["launch"]>[1],
     lifecycle: Parameters<UnityEditorLauncher["launch"]>[2],
   ): Promise<UnityEditorLaunchHandle> {
+    this.command = command;
     const containment = EditorContainmentReceiptV1Schema.parse({
       schemaVersion: 1,
       launchId: intent.launchId,
@@ -630,6 +632,12 @@ describe("UnityEditorWorkTransaction", () => {
     expect(bridge.verifies).toBe(4);
     expect(storage.released).toBe(1);
     expect(launcher.stopped).toBe(1);
+    expect(launcher.command?.args).toEqual([
+      "-projectPath",
+      path.join(workspaceRoot, "hb-" + runId),
+      "-logFile",
+      path.join(root, runId, "unity-editor.log"),
+    ]);
     expect(registry.owned?.ownership).toBe("honeybee");
     expect(registry.exited).toBe(registry.owned?.editorId);
     await expect(access(path.join(workspaceRoot, "hb-" + runId))).rejects.toMatchObject({
