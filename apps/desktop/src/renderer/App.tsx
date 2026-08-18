@@ -3,8 +3,10 @@ import { useEffect, useMemo, useState } from "react";
 import type {
   ArtifactViewV1,
   DoctorReportV1,
+  PatchActionV1,
   RunActionV1,
   RunDetailV1,
+  VerifiedPatchViewV1,
 } from "@honeybee/control-plane-contracts";
 
 import {
@@ -51,11 +53,12 @@ export function App() {
   const [doctor, setDoctor] = useState<DoctorReportV1>();
   const [works, setWorks] = useState<readonly WorkDraft[]>([initialWork()]);
   const [busy, setBusy] = useState<"profile" | "doctor" | "start">();
-  const [detailBusy, setDetailBusy] = useState<"artifact" | RunActionV1>();
+  const [detailBusy, setDetailBusy] = useState<"artifact" | RunActionV1 | PatchActionV1>();
   const [snapshot, setSnapshot] = useState<DesktopRuntimeSnapshotV1>();
   const [selectedRunId, setSelectedRunId] = useState<string>();
   const [runDetail, setRunDetail] = useState<RunDetailV1>();
   const [artifact, setArtifact] = useState<ArtifactViewV1>();
+  const [patch, setPatch] = useState<VerifiedPatchViewV1>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
 
@@ -106,6 +109,7 @@ export function App() {
     if (selectedRunId === undefined) {
       setRunDetail(undefined);
       setArtifact(undefined);
+      setPatch(undefined);
       return;
     }
     let stopped = false;
@@ -146,6 +150,7 @@ export function App() {
     setSelectedRunId(undefined);
     setRunDetail(undefined);
     setArtifact(undefined);
+    setPatch(undefined);
   };
 
   const chooseProfile = async (): Promise<void> => {
@@ -237,6 +242,7 @@ export function App() {
       setSelectedRunId(result.runId);
       setRunDetail(undefined);
       setArtifact(undefined);
+      setPatch(undefined);
       setView("command");
     } catch (reason) {
       setError(readableError(reason));
@@ -249,12 +255,64 @@ export function App() {
     if (selectedRunId === undefined) return;
     setDetailBusy("artifact");
     setError(undefined);
+    setPatch(undefined);
     try {
       setArtifact(
         await window.honeybee.readArtifact({
           schemaVersion: 1,
           runId: selectedRunId,
           artifactId,
+        }),
+      );
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setDetailBusy(undefined);
+    }
+  };
+
+  const readPatch = async (patchArtifactId: string): Promise<void> => {
+    if (selectedRunId === undefined) return;
+    setDetailBusy("artifact");
+    setError(undefined);
+    setArtifact(undefined);
+    try {
+      setPatch(
+        await window.honeybee.getPatch({
+          schemaVersion: 1,
+          runId: selectedRunId,
+          patchArtifactId,
+        }),
+      );
+    } catch (reason) {
+      setError(readableError(reason));
+    } finally {
+      setDetailBusy(undefined);
+    }
+  };
+
+  const controlPatch = async (action: PatchActionV1): Promise<void> => {
+    if (selectedRunId === undefined || patch === undefined) return;
+    const question =
+      action === "apply"
+        ? "Apply this verified patch to the original Unity project?"
+        : "Reject this verified patch permanently?";
+    if (!window.confirm(question)) return;
+    setDetailBusy(action);
+    setError(undefined);
+    try {
+      const result = await window.honeybee.controlPatch({
+        schemaVersion: 1,
+        runId: selectedRunId,
+        patchArtifactId: patch.patch.artifactId,
+        action,
+      });
+      setNotice("Patch " + result.disposition);
+      setPatch(
+        await window.honeybee.getPatch({
+          schemaVersion: 1,
+          runId: selectedRunId,
+          patchArtifactId: patch.patch.artifactId,
         }),
       );
     } catch (reason) {
@@ -604,19 +662,24 @@ export function App() {
                 setSelectedRunId(runId);
                 setRunDetail(undefined);
                 setArtifact(undefined);
+                setPatch(undefined);
               }}
             />
             {selectedRunId !== undefined && (
               <RunDetailView
                 detail={runDetail}
                 artifact={artifact}
+                patch={patch}
                 busy={detailBusy}
                 onReadArtifact={(artifactId) => void readArtifact(artifactId)}
+                onReadPatch={(artifactId) => void readPatch(artifactId)}
                 onControl={(action) => void controlRun(action)}
+                onPatchControl={(action) => void controlPatch(action)}
                 onClose={() => {
                   setSelectedRunId(undefined);
                   setRunDetail(undefined);
                   setArtifact(undefined);
+                  setPatch(undefined);
                 }}
               />
             )}

@@ -10,6 +10,8 @@ import {
   DesktopBootstrapV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
+  DesktopPatchControlRequestV1Schema,
+  DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectProfileV1Schema,
   DesktopRunRequestV1Schema,
@@ -189,6 +191,20 @@ const registerIpc = (): void => {
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopRunRequestV1Schema.parse(requestValue);
       return runtime.cancel(request.runId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.patchView,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPatchRequestV1Schema.parse(requestValue);
+      return runtime.getVerifiedPatch(request.runId, request.patchArtifactId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.patchControl,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPatchControlRequestV1Schema.parse(requestValue);
+      return runtime.controlVerifiedPatch(request.runId, request.patchArtifactId, request.action);
     }),
   );
 };

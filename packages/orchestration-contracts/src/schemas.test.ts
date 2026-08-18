@@ -13,6 +13,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
@@ -331,6 +332,40 @@ describe("orchestration contracts", () => {
       UnityPatchManifestV1Schema.safeParse({
         ...valid,
         entries: [{ ...valid.entries[0], path: "Assets/file.txt:stream" }],
+      }).success,
+    ).toBe(false);
+
+    const v2 = {
+      schemaVersion: 2,
+      baseManifest: base,
+      baseTreeManifest: result,
+      resultManifest: result,
+      entries: [
+        { path: "Assets/added.bin", operation: "add", after: content },
+        {
+          path: "ProjectSettings/removed.asset",
+          operation: "delete",
+          baseContentDigest: content.contentDigest,
+          before: content,
+        },
+      ],
+    } as const;
+    expect(UnityPatchManifestV2Schema.safeParse(v2).success).toBe(true);
+    expect(
+      UnityPatchManifestV2Schema.safeParse({
+        ...v2,
+        entries: [
+          {
+            ...v2.entries[1],
+            baseContentDigest: "sha256:" + "d".repeat(64),
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityPatchManifestV2Schema.safeParse({
+        ...v2,
+        entries: [{ ...v2.entries[0], contentBase64: "AA==" }],
       }).success,
     ).toBe(false);
   });

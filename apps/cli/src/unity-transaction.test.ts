@@ -14,7 +14,7 @@ import {
   ResourceIdSchema,
   RunIdSchema,
   StepIdSchema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
   UnityWorkConfigV1Schema,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -332,7 +332,7 @@ describe("UnityWorkTransaction", () => {
       expect(child.resultManifest?.kind).toBe("unity-workspace-manifest");
       if (child.patch === undefined) throw new Error("missing patch");
       durableChildPatch = child.patch;
-      const patch = UnityPatchManifestV1Schema.parse(
+      const patch = UnityPatchManifestV2Schema.parse(
         JSON.parse(
           await childArtifacts.get({ runId: childRunId, artifact: child.patch }),
         ) as unknown,

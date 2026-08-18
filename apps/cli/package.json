@@ -23,7 +23,8 @@
   "dependencies": {
     "@honeybee/control-plane-contracts": "workspace:*",
     "@honeybee/core": "workspace:*",
-    "@honeybee/orchestration-contracts": "workspace:*"
+    "@honeybee/orchestration-contracts": "workspace:*",
+    "zod": "^4.0.0"
   },
   "license": "MIT"
 }

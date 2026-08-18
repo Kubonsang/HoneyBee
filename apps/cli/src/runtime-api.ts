@@ -10,6 +10,7 @@ import {
   DoctorReportV1Schema,
   EditorPoolSnapshotV1Schema,
   EditorRegistryViewV1Schema,
+  PatchActionV1Schema,
   RunControlResultV1Schema,
   RunDetailV1Schema,
   RunSummaryV1Schema,
@@ -17,6 +18,8 @@ import {
   RuntimeProjectProfileV1Schema,
   StartUnityWorksRequestV1Schema,
   StartUnityWorksResultV1Schema,
+  type PatchActionV1,
+  type PatchControlResultV1,
   type ArtifactViewV1,
   type DoctorCheckV1,
   type DoctorReportV1,
@@ -29,6 +32,7 @@ import {
   type RuntimeProjectProfileV1,
   type StartUnityWorksRequestV1,
   type StartUnityWorksResultV1,
+  type VerifiedPatchViewV1,
 } from "@honeybee/control-plane-contracts";
 import {
   ArtifactIdSchema,
@@ -56,6 +60,7 @@ import { loadUnityBatchConfig } from "./config.js";
 import { physicalPath, samePath } from "./path-safety.js";
 import { FileUnityEditorPoolCoordinator } from "./unity-editor-pool.js";
 import { FileOsUnityEditorRegistry } from "./unity-editor-registry.js";
+import { FileUnityPatchControl } from "./unity-patch-control.js";
 import {
   assertUnityPathsDisjoint,
   createUnityEditorBatchWorkflow,
@@ -140,6 +145,13 @@ const collectArtifactRefs = (
 
 const eventArtifacts = (event: AnyOrchestrationEvent): ArtifactRef[] =>
   collectArtifactRefs(event.payload);
+
+const storedArtifactRefs = (events: readonly AnyOrchestrationEvent[]): ArtifactRef[] =>
+  events.flatMap((event) => {
+    if (event.type !== "artifact.stored" || !isRecord(event.payload)) return [];
+    const parsed = ArtifactRefSchema.safeParse(event.payload.artifact);
+    return parsed.success ? [parsed.data] : [];
+  });
 
 const eventSummary = (event: AnyOrchestrationEvent): string => {
   const payload: Record<string, unknown> = isRecord(event.payload) ? event.payload : {};
@@ -704,7 +716,7 @@ export class HoneyBeeRuntimeFacade {
             ...(!outcomeDecided ? (["cancel"] as const) : []),
             ...(!executorPresent ? (["resume"] as const) : []),
           ];
-    const artifacts = collectArtifactRefs(events);
+    const artifacts = storedArtifactRefs(events);
     const assignedEditor = assignedEditorFrom(events);
     const summary = RunSummaryV1Schema.parse({
       schemaVersion: 1,
@@ -893,7 +905,7 @@ export class HoneyBeeRuntimeFacade {
         "Artifacts cannot be authorized from an indeterminate Journal.",
       );
     }
-    const artifacts = collectArtifactRefs(replay.events);
+    const artifacts = storedArtifactRefs(replay.events);
     const artifact = artifacts.find((candidate) => candidate.artifactId === artifactId);
     if (artifact === undefined) {
       throw new HoneyBeeCoreError(
@@ -912,6 +924,53 @@ export class HoneyBeeRuntimeFacade {
       encoding,
       content: bytes.toString(encoding),
     });
+  }
+
+  public async getVerifiedPatch(
+    runIdValue: string,
+    patchArtifactIdValue: string,
+  ): Promise<VerifiedPatchViewV1> {
+    const authorized = await this.#authorizedPatch(runIdValue, patchArtifactIdValue);
+    return new FileUnityPatchControl(this.#root, this.#now).view(authorized);
+  }
+
+  public async controlVerifiedPatch(
+    runIdValue: string,
+    patchArtifactIdValue: string,
+    actionValue: PatchActionV1,
+  ): Promise<PatchControlResultV1> {
+    const action = PatchActionV1Schema.parse(actionValue);
+    const authorized = await this.#authorizedPatch(runIdValue, patchArtifactIdValue);
+    return new FileUnityPatchControl(this.#root, this.#now).act({ ...authorized, action });
+  }
+
+  async #authorizedPatch(
+    runIdValue: string,
+    patchArtifactIdValue: string,
+  ): Promise<Readonly<{ runId: RunId; patch: ArtifactRef; sourceProjectPath: string }>> {
+    const runId = RunIdSchema.parse(runIdValue);
+    const patchArtifactId = ArtifactIdSchema.parse(patchArtifactIdValue);
+    const controls = new FileRunControl(this.#root);
+    const replay = await this.#replayStable(runId, controls);
+    if (replay.status !== "terminal" || replay.terminal.type !== "workflow.completed") {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Only a completed Run can dispose a verified patch.",
+      );
+    }
+    const events = replay.events as readonly AnyOrchestrationEvent[];
+    const patch = storedArtifactRefs(events).find(
+      (artifact) =>
+        artifact.artifactId === patchArtifactId && artifact.kind === "unity-verified-patch",
+    );
+    const sourceProjectPath = await this.#projectPathFor(runId, events);
+    if (patch === undefined || sourceProjectPath === undefined) {
+      throw new HoneyBeeCoreError(
+        "artifact.read-failed",
+        "The verified patch is not locally stored by this completed Run.",
+      );
+    }
+    return { runId, patch, sourceProjectPath };
   }
 
   async #projectPathFor(

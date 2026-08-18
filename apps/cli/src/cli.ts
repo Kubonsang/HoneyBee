@@ -47,6 +47,7 @@ import {
   type UnityBatchRunResult,
 } from "./unity-batch.js";
 import { UnityPatchBuilder } from "./unity-patch.js";
+import { FileUnityPatchControl } from "./unity-patch-control.js";
 import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js";
 import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
 import { inspectUnityEditorBatchEvents } from "./unity-editor-batch.js";
@@ -1076,6 +1077,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
         }
         for (const childRunId of childRunIds) {
           try {
+            await new FileUnityPatchControl(root).assertDeletionSafe(childRunId);
             await repository.delete(childRunId);
           } catch (error) {
             if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found")
@@ -1136,6 +1138,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
         }
         for (const childRunId of childRunIds) {
           try {
+            await new FileUnityPatchControl(root).assertDeletionSafe(childRunId);
             await repository.delete(childRunId);
           } catch (error) {
             if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found")
@@ -1146,6 +1149,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
         for (const childLease of childLeases.reverse()) await childLease.release();
       }
     }
+    await new FileUnityPatchControl(root).assertDeletionSafe(runId);
     await repository.delete(runId);
   } finally {
     await lease.release();

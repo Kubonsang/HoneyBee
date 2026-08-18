@@ -15,7 +15,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityEditorObservationV1Schema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
   UnityWorkConfigV2Schema,
   WarmBridgeBindingV1Schema,
   type AgentProcessResult,
@@ -662,16 +662,16 @@ describe("UnityEditorWorkTransaction", () => {
     if (result.status !== "completed" || result.patch === undefined) {
       throw new Error("unexpected result");
     }
-    const patch = UnityPatchManifestV1Schema.parse(
+    const patch = UnityPatchManifestV2Schema.parse(
       JSON.parse(await artifacts.get({ runId, artifact: result.patch })) as unknown,
     );
     expect(patch.entries).toHaveLength(1);
     expect(patch.entries[0]).toMatchObject({
       path: "Assets/agent-created.txt",
-      operation: "add-or-modify",
+      operation: "add",
     });
     expect(JSON.stringify(patch)).not.toContain("contentBase64");
-    expect(patch.entries[0]?.operation === "add-or-modify" && patch.entries[0].content.kind).toBe(
+    expect(patch.entries[0]?.operation === "add" && patch.entries[0].after.kind).toBe(
       "unity-patch-content",
     );
   }, 30_000);

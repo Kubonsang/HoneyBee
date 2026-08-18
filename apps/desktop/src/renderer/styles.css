@@ -860,6 +860,140 @@ main {
   word-break: break-word;
 }
 
+.patch-result {
+  margin-top: 20px;
+  padding-top: 16px;
+  border-top: 1px solid #dedad0;
+}
+.patch-result-head {
+  margin-bottom: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+.patch-result-head .subheading {
+  margin-bottom: 3px;
+}
+.patch-result-head strong {
+  font-size: 12px;
+}
+.patch-result-head > div:last-child {
+  display: flex;
+  gap: 5px;
+}
+.patch-state,
+.operation {
+  padding: 4px 6px;
+  border-radius: 999px;
+  color: #5e5d54;
+  background: #e7e4dc;
+  font-size: 8px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.patch-state.clean,
+.patch-state.applied {
+  color: #285e37;
+  background: #dfefe1;
+}
+.patch-state.drift,
+.patch-state.conflict,
+.patch-state.indeterminate {
+  color: #8a3b32;
+  background: #f5ded9;
+}
+.patch-state.result,
+.patch-state.applying {
+  color: #6e570a;
+  background: #f4e7b8;
+}
+.patch-actions {
+  margin-bottom: 14px;
+}
+.conflict-paths {
+  margin: -3px 0 12px;
+  display: grid;
+  gap: 3px;
+}
+.conflict-paths code {
+  overflow: hidden;
+  color: #913f36;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.patch-files {
+  display: grid;
+  gap: 9px;
+}
+.patch-file {
+  overflow: hidden;
+  border: 1px solid #dcd8cd;
+  border-radius: 9px;
+  background: #fffefa;
+}
+.patch-file header {
+  min-width: 0;
+  padding: 8px 9px;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid #e4e0d6;
+}
+.patch-file header code {
+  overflow: hidden;
+  color: #595b52;
+  font-size: 9px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.operation.add {
+  color: #276039;
+  background: #deefe1;
+}
+.operation.modify {
+  color: #715b0e;
+  background: #f3e7ba;
+}
+.operation.delete {
+  color: #893c34;
+  background: #f4ddd8;
+}
+.diff-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+.diff-grid > div {
+  min-width: 0;
+}
+.diff-grid > div + div {
+  border-left: 1px solid #e1ddd2;
+}
+.diff-grid small {
+  padding: 6px 8px 0;
+  display: block;
+  color: #9b9788;
+  font-size: 7px;
+  font-weight: 900;
+  letter-spacing: 0.09em;
+}
+.diff-grid pre {
+  max-height: 240px;
+  margin: 0;
+  padding: 7px 8px 10px;
+  overflow: auto;
+  color: #484a43;
+  background: transparent;
+  font:
+    8px/1.45 ui-monospace,
+    "Cascadia Code",
+    monospace;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
 .panel {
   background: #fcfaf4;
   border: 1px solid #d7d2c6;

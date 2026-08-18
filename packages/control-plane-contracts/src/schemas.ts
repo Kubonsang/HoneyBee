@@ -160,6 +160,67 @@ export const ArtifactViewV1Schema = z
   .strict();
 export type ArtifactViewV1 = z.infer<typeof ArtifactViewV1Schema>;
 
+export const PatchActionV1Schema = z.enum(["apply", "reject"]);
+export type PatchActionV1 = z.infer<typeof PatchActionV1Schema>;
+
+const PatchFileContentV1Schema = z
+  .object({
+    contentDigest: z.string().regex(/^sha256:[0-9a-f]{64}$/u),
+    byteLength: z.number().int().nonnegative(),
+    format: z.enum(["text", "binary", "unavailable"]),
+    text: z.string().max(524_288).optional(),
+    truncated: z.boolean(),
+  })
+  .strict();
+
+export const PatchFileViewV1Schema = z
+  .object({
+    path: z.string().min(1).max(4096),
+    operation: z.enum(["add", "modify", "delete"]),
+    before: PatchFileContentV1Schema.optional(),
+    after: PatchFileContentV1Schema.optional(),
+  })
+  .strict();
+export type PatchFileViewV1 = z.infer<typeof PatchFileViewV1Schema>;
+
+export const VerifiedPatchViewV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: RunIdSchema,
+    patch: ArtifactRefSchema,
+    manifestVersion: z.union([z.literal(1), z.literal(2)]),
+    sourceProjectPath: z.string().min(1),
+    sourceState: z.enum(["clean", "result", "drift", "unavailable"]),
+    disposition: z.enum([
+      "pending",
+      "applying",
+      "committing",
+      "rolling-back",
+      "applied",
+      "rejected",
+      "conflict",
+      "indeterminate",
+    ]),
+    conflictPaths: z.array(z.string().min(1).max(4096)),
+    files: z.array(PatchFileViewV1Schema),
+    allowedActions: z.array(PatchActionV1Schema),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type VerifiedPatchViewV1 = z.infer<typeof VerifiedPatchViewV1Schema>;
+
+export const PatchControlResultV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: RunIdSchema,
+    patchArtifactId: z.string().uuid(),
+    action: PatchActionV1Schema,
+    disposition: z.enum(["applied", "rejected", "conflict", "indeterminate"]),
+    conflictPaths: z.array(z.string().min(1).max(4096)),
+  })
+  .strict();
+export type PatchControlResultV1 = z.infer<typeof PatchControlResultV1Schema>;
+
 export const StartUnityWorkV1Schema = z
   .object({
     id: StepIdSchema,

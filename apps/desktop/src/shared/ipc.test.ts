@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   DesktopArtifactRequestV1Schema,
+  DesktopPatchControlRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV1Schema,
@@ -56,6 +57,22 @@ describe("Desktop IPC contracts", () => {
     expect(
       DesktopArtifactRequestV1Schema.safeParse({ schemaVersion: 1, runId, artifactId }).success,
     ).toBe(true);
+    expect(
+      DesktopPatchControlRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        runId,
+        patchArtifactId: artifactId,
+        action: "apply",
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopPatchControlRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        runId,
+        patchArtifactId: artifactId,
+        action: "delete",
+      }).success,
+    ).toBe(false);
   });
 
   it("keeps runtime snapshots strict at nested resource boundaries", () => {

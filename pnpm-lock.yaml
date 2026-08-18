@@ -52,6 +52,9 @@ importers:
       '@honeybee/orchestration-contracts':
         specifier: workspace:*
         version: link:../../packages/orchestration-contracts
+      zod:
+        specifier: ^4.0.0
+        version: 4.4.3
 
   apps/desktop:
     dependencies:

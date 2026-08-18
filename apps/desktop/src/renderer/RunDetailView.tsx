@@ -1,11 +1,20 @@
-import type { ArtifactViewV1, RunActionV1, RunDetailV1 } from "@honeybee/control-plane-contracts";
+import type {
+  ArtifactViewV1,
+  PatchActionV1,
+  RunActionV1,
+  RunDetailV1,
+  VerifiedPatchViewV1,
+} from "@honeybee/control-plane-contracts";
 
 interface RunDetailViewProps {
   readonly detail?: RunDetailV1 | undefined;
   readonly artifact?: ArtifactViewV1 | undefined;
-  readonly busy?: "artifact" | RunActionV1 | undefined;
+  readonly patch?: VerifiedPatchViewV1 | undefined;
+  readonly busy?: "artifact" | RunActionV1 | PatchActionV1 | undefined;
   readonly onReadArtifact: (artifactId: string) => void;
+  readonly onReadPatch: (artifactId: string) => void;
   readonly onControl: (action: RunActionV1) => void;
+  readonly onPatchControl: (action: PatchActionV1) => void;
   readonly onClose: () => void;
 }
 
@@ -27,9 +36,12 @@ const artifactText = (artifact: ArtifactViewV1): string => {
 export function RunDetailView({
   detail,
   artifact,
+  patch,
   busy,
   onReadArtifact,
+  onReadPatch,
   onControl,
+  onPatchControl,
   onClose,
 }: RunDetailViewProps) {
   if (detail === undefined) {
@@ -123,7 +135,11 @@ export function RunDetailView({
               <button
                 key={item.artifactId}
                 disabled={busy !== undefined}
-                onClick={() => onReadArtifact(item.artifactId)}
+                onClick={() =>
+                  item.kind === "unity-verified-patch"
+                    ? onReadPatch(item.artifactId)
+                    : onReadArtifact(item.artifactId)
+                }
               >
                 <span>{item.kind}</span>
                 <small>
@@ -134,6 +150,77 @@ export function RunDetailView({
           </div>
         )}
       </section>
+
+      {patch !== undefined && (
+        <section className="patch-result">
+          <div className="patch-result-head">
+            <div>
+              <span className="subheading">Verified patch</span>
+              <strong>
+                {patch.files.length} file{patch.files.length === 1 ? "" : "s"}
+              </strong>
+            </div>
+            <div>
+              <span className={"patch-state " + patch.sourceState}>{patch.sourceState}</span>
+              <span className={"patch-state " + patch.disposition}>{patch.disposition}</span>
+            </div>
+          </div>
+          {patch.message !== undefined && <p className="diagnostic-message">{patch.message}</p>}
+          {patch.conflictPaths.length > 0 && (
+            <div className="conflict-paths">
+              {patch.conflictPaths.map((conflictPath) => (
+                <code key={conflictPath}>{conflictPath}</code>
+              ))}
+            </div>
+          )}
+          {patch.allowedActions.length > 0 && (
+            <div className="control-row patch-actions">
+              {patch.allowedActions.map((action) => (
+                <button
+                  className={action === "apply" ? "primary" : "danger-button"}
+                  disabled={busy !== undefined}
+                  key={action}
+                  onClick={() => onPatchControl(action)}
+                >
+                  {busy === action ? action + "…" : action + " patch"}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="patch-files">
+            {patch.files.map((file) => (
+              <article className="patch-file" key={file.path}>
+                <header>
+                  <span className={"operation " + file.operation}>{file.operation}</span>
+                  <code>{file.path}</code>
+                </header>
+                <div className="diff-grid">
+                  <div>
+                    <small>BEFORE</small>
+                    <pre>
+                      {file.before?.format === "text"
+                        ? (file.before.text ?? "")
+                        : file.before === undefined
+                          ? "∅"
+                          : file.before.format}
+                    </pre>
+                  </div>
+                  <div>
+                    <small>AFTER</small>
+                    <pre>
+                      {file.after?.format === "text"
+                        ? (file.after.text ?? "")
+                        : file.after === undefined
+                          ? "∅"
+                          : file.after.format}
+                    </pre>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      )}
 
       {artifact !== undefined && (
         <section className="artifact-preview">

@@ -5,20 +5,25 @@ import {
   DoctorReportV1Schema,
   EditorPoolSnapshotV1Schema,
   EditorRegistryViewV1Schema,
+  PatchActionV1Schema,
+  PatchControlResultV1Schema,
   RunControlResultV1Schema,
   RunDetailV1Schema,
   RunSummaryV1Schema,
   RuntimeInfoV1Schema,
   StartUnityWorkV1Schema,
   StartUnityWorksResultV1Schema,
+  VerifiedPatchViewV1Schema,
   type ArtifactViewV1,
   type DoctorReportV1,
   type EditorPoolSnapshotV1,
   type EditorRegistryViewV1,
+  type PatchControlResultV1,
   type RunControlResultV1,
   type RunDetailV1,
   type RuntimeInfoV1,
   type StartUnityWorksResultV1,
+  type VerifiedPatchViewV1,
 } from "@honeybee/control-plane-contracts";
 
 export const DesktopProjectProfileV1Schema = z
@@ -95,6 +100,20 @@ export const DesktopArtifactRequestV1Schema = z
   .strict();
 export type DesktopArtifactRequestV1 = z.infer<typeof DesktopArtifactRequestV1Schema>;
 
+export const DesktopPatchRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: z.string().uuid(),
+    patchArtifactId: z.string().uuid(),
+  })
+  .strict();
+export type DesktopPatchRequestV1 = z.infer<typeof DesktopPatchRequestV1Schema>;
+
+export const DesktopPatchControlRequestV1Schema = DesktopPatchRequestV1Schema.extend({
+  action: PatchActionV1Schema,
+}).strict();
+export type DesktopPatchControlRequestV1 = z.infer<typeof DesktopPatchControlRequestV1Schema>;
+
 export const DesktopIpcChannels = {
   bootstrap: "desktop.bootstrap.v1",
   chooseProfile: "desktop.profile.choose.v1",
@@ -106,6 +125,8 @@ export const DesktopIpcChannels = {
   artifactRead: "desktop.artifact.read.v1",
   runResume: "desktop.run.resume.v1",
   runCancel: "desktop.run.cancel.v1",
+  patchView: "desktop.patch.view.v1",
+  patchControl: "desktop.patch.control.v1",
 } as const;
 
 export interface HoneyBeeDesktopApi {
@@ -119,6 +140,8 @@ export interface HoneyBeeDesktopApi {
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
   resumeRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
   cancelRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
+  getPatch(request: DesktopPatchRequestV1): Promise<VerifiedPatchViewV1>;
+  controlPatch(request: DesktopPatchControlRequestV1): Promise<PatchControlResultV1>;
 }
 
 export const DesktopIpcResponseSchemas = {
@@ -132,6 +155,8 @@ export const DesktopIpcResponseSchemas = {
   artifactRead: ArtifactViewV1Schema,
   runResume: RunControlResultV1Schema,
   runCancel: RunControlResultV1Schema,
+  patchView: VerifiedPatchViewV1Schema,
+  patchControl: PatchControlResultV1Schema,
 } as const;
 
 export type DesktopRuntimeInfo = RuntimeInfoV1;
@@ -139,3 +164,4 @@ export type DesktopRunDetail = RunDetailV1;
 export type DesktopArtifactView = ArtifactViewV1;
 export type DesktopEditorPoolSnapshot = EditorPoolSnapshotV1;
 export type DesktopEditorRegistryView = EditorRegistryViewV1;
+export type DesktopVerifiedPatchView = VerifiedPatchViewV1;

@@ -1422,6 +1422,111 @@ export const UnityPatchManifestV1Schema = z
   });
 export type UnityPatchManifestV1 = z.infer<typeof UnityPatchManifestV1Schema>;
 
+const OptionalUnityPatchContentRefSchema = UnityPatchContentRefSchema.optional();
+
+export const UnityPatchManifestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    baseManifest: ArtifactRefSchema,
+    baseTreeManifest: ArtifactRefSchema,
+    resultManifest: ArtifactRefSchema,
+    entries: z.array(
+      z.discriminatedUnion("operation", [
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("add"),
+            after: UnityPatchContentRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("modify"),
+            baseContentDigest: ContentDigestSchema,
+            before: OptionalUnityPatchContentRefSchema,
+            after: UnityPatchContentRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("delete"),
+            baseContentDigest: ContentDigestSchema,
+            before: OptionalUnityPatchContentRefSchema,
+          })
+          .strict(),
+      ]),
+    ),
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    if (
+      manifest.baseManifest.kind !== "unity-source-manifest" ||
+      manifest.baseManifest.mediaType !== "application/json"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["baseManifest"],
+        message: "Patch base must be a JSON Unity source manifest.",
+      });
+    }
+    for (const key of ["baseTreeManifest", "resultManifest"] as const) {
+      if (
+        manifest[key].kind !== "unity-workspace-manifest" ||
+        manifest[key].mediaType !== "application/json"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Patch tree manifests must be JSON Unity workspace manifests.",
+        });
+      }
+    }
+    let previous: string | undefined;
+    const caseInsensitive = new Set<string>();
+    for (const [index, entry] of manifest.entries.entries()) {
+      if (
+        previous !== undefined &&
+        Buffer.compare(Buffer.from(previous), Buffer.from(entry.path)) >= 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch entries must be unique and sorted by UTF-8 path bytes.",
+        });
+      }
+      const folded = entry.path.toLocaleLowerCase("en-US");
+      if (caseInsensitive.has(folded)) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch paths cannot collide case-insensitively.",
+        });
+      }
+      if (
+        entry.operation !== "add" &&
+        entry.before !== undefined &&
+        entry.before.contentDigest !== entry.baseContentDigest
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "before", "contentDigest"],
+          message: "Before content must match the declared base digest.",
+        });
+      }
+      previous = entry.path;
+      caseInsensitive.add(folded);
+    }
+  });
+export type UnityPatchManifestV2 = z.infer<typeof UnityPatchManifestV2Schema>;
+
+export const UnityPatchManifestSchema = z.discriminatedUnion("schemaVersion", [
+  UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
+]);
+export type UnityPatchManifest = z.infer<typeof UnityPatchManifestSchema>;
+
 export const AgentInputEnvelopeV2Schema = z
   .object({
     schemaVersion: z.literal(2),

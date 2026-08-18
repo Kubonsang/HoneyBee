@@ -5,6 +5,8 @@ import {
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopIpcResponseSchemas,
+  DesktopPatchControlRequestV1Schema,
+  DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopStartRequestV1Schema,
@@ -74,6 +76,20 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.runCancel,
         DesktopRunRequestV1Schema.parse(request),
+      ),
+    ),
+  getPatch: async (request) =>
+    DesktopIpcResponseSchemas.patchView.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.patchView,
+        DesktopPatchRequestV1Schema.parse(request),
+      ),
+    ),
+  controlPatch: async (request) =>
+    DesktopIpcResponseSchemas.patchControl.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.patchControl,
+        DesktopPatchControlRequestV1Schema.parse(request),
       ),
     ),
 };

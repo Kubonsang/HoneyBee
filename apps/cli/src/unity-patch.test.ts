@@ -8,7 +8,7 @@ import {
   FileArtifactStore,
   FileRunRepository,
   RunIdSchema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
   type ArtifactKind,
   type ArtifactMediaType,
 } from "@honeybee/core";
@@ -107,20 +107,25 @@ describe("UnityPatchBuilder", () => {
     });
 
     const serialized = await artifacts.get({ runId, artifact: verified.patch });
-    const manifest = UnityPatchManifestV1Schema.parse(JSON.parse(serialized) as unknown);
+    const manifest = UnityPatchManifestV2Schema.parse(JSON.parse(serialized) as unknown);
     expect(sourceChecks).toBe(2);
     expect(manifest.entries.map((entry) => [entry.path, entry.operation])).toEqual([
-      ["Assets/added.txt", "add-or-modify"],
+      ["Assets/added.txt", "add"],
       ["Assets/delete.txt", "delete"],
-      ["Assets/modify.bin", "add-or-modify"],
+      ["Assets/modify.bin", "modify"],
     ]);
     expect(serialized).not.toContain("contentBase64");
     const modified = manifest.entries.find((entry) => entry.path === "Assets/modify.bin");
-    expect(modified?.operation).toBe("add-or-modify");
-    if (modified?.operation !== "add-or-modify") throw new Error("missing modified entry");
-    expect(Buffer.from(await artifacts.getBytes({ runId, artifact: modified.content }))).toEqual(
+    expect(modified?.operation).toBe("modify");
+    if (modified?.operation !== "modify") throw new Error("missing modified entry");
+    if (modified.before === undefined) throw new Error("missing base content");
+    expect(Buffer.from(await artifacts.getBytes({ runId, artifact: modified.after }))).toEqual(
       Buffer.from([255, 0, 128]),
     );
+    expect(Buffer.from(await artifacts.getBytes({ runId, artifact: modified.before }))).toEqual(
+      Buffer.from([0, 1, 2]),
+    );
+    expect(manifest.baseTreeManifest.kind).toBe("unity-workspace-manifest");
     expect(verified.resultManifest.kind).toBe("unity-workspace-manifest");
     expect(await readFile(path.join(source, "Assets", "delete.txt"), "utf8")).toBe("delete me");
   });

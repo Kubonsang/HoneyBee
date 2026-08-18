@@ -5,13 +5,15 @@ import path from "node:path";
 
 import {
   ContentDigestSchema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestSchema,
+  UnityPatchManifestV2Schema,
   type ArtifactKind,
   type ArtifactMediaType,
   type ArtifactRef,
   type ContentDigest,
   type RunId,
-  type UnityPatchManifestV1,
+  type UnityPatchManifest,
+  type UnityPatchManifestV2,
 } from "@honeybee/orchestration-contracts";
 import { HoneyBeeCoreError, type ArtifactStore } from "@honeybee/core";
 
@@ -20,6 +22,7 @@ import type { UnityProjectBootstrap } from "./unity-adapters.js";
 const PROJECT_DIRECTORIES = ["Assets", "Packages", "ProjectSettings"] as const;
 const MAX_PATCH_FILE_BYTES = 16 * 1024 * 1024;
 const MAX_PATCH_TOTAL_BYTES = 64 * 1024 * 1024;
+const MAX_PATCH_BASE_CONTENT_TOTAL_BYTES = 64 * 1024 * 1024;
 
 interface SnapshotFile {
   readonly path: string;
@@ -115,7 +118,10 @@ const safeRelative = (relative: string): readonly string[] => {
   return segments;
 };
 
-const filesUnder = async (root: string): Promise<readonly string[]> => {
+const filesUnder = async (
+  root: string,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): Promise<readonly string[]> => {
   const files: string[] = [];
   const caseInsensitive = new Set<string>();
   const visit = async (directory: string, prefix: string): Promise<void> => {
@@ -132,6 +138,15 @@ const filesUnder = async (root: string): Promise<readonly string[]> => {
       const relative = prefix.length === 0 ? entry.name : `${prefix}/${entry.name}`;
       const absolute = path.join(directory, entry.name);
       const child = await lstat(absolute);
+      if (ignoredPaths.has(relative)) {
+        if (!child.isFile() || child.isSymbolicLink() || child.nlink !== 1) {
+          throw new HoneyBeeCoreError(
+            "workspace.invalid-project",
+            "Ignored patch sidecar is not a private file.",
+          );
+        }
+        continue;
+      }
       if (child.isSymbolicLink()) {
         throw new HoneyBeeCoreError(
           "workspace.invalid-project",
@@ -169,12 +184,15 @@ const filesUnder = async (root: string): Promise<readonly string[]> => {
   return files.sort(pathOrder);
 };
 
-const snapshot = async (root: string): Promise<UnityWorkspaceManifest> => {
+export const snapshotUnityWorkspace = async (
+  root: string,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): Promise<UnityWorkspaceManifest> => {
   const hash = createHash("sha256");
   hash.update("honeybee-unity-workspace-manifest-v1\0", "utf8");
   const files: SnapshotFile[] = [];
   let logicalBytes = 0;
-  for (const relative of await filesUnder(root)) {
+  for (const relative of await filesUnder(root, ignoredPaths)) {
     const target = path.join(root, ...safeRelative(relative));
     const metadata = await lstat(target);
     const relativeBytes = Buffer.from(relative, "utf8");
@@ -207,7 +225,7 @@ const applyManifest = async (
   runId: RunId,
   root: string,
   artifacts: ArtifactStore,
-  manifest: UnityPatchManifestV1,
+  manifest: UnityPatchManifest,
 ): Promise<void> => {
   for (const entry of manifest.entries) {
     const target = path.join(root, ...safeRelative(entry.path));
@@ -222,7 +240,10 @@ const applyManifest = async (
       await unlink(target);
       continue;
     }
-    const content = await artifacts.getBytes({ runId, artifact: entry.content });
+    const content = await artifacts.getBytes({
+      runId,
+      artifact: "content" in entry ? entry.content : entry.after,
+    });
     await mkdir(path.dirname(target), { recursive: true });
     try {
       const current = await lstat(target);
@@ -259,7 +280,7 @@ export class UnityPatchBuilder {
     }>,
   ): Promise<VerifiedUnityPatch> {
     await input.verifySource();
-    const workspaceResult = await snapshot(input.workspacePath);
+    const workspaceResult = await snapshotUnityWorkspace(input.workspacePath);
     const resultManifest = await input.publishJson("unity-workspace-manifest", workspaceResult);
     await mkdir(this.scratchRoot, { recursive: true });
     const temporary = await mkdtemp(path.join(this.scratchRoot, "patch-verify-"));
@@ -267,21 +288,45 @@ export class UnityPatchBuilder {
     const verificationRoot = path.join(temporary, verificationId);
     try {
       await this.bootstrap.prepare(input.sourceProjectPath, temporary, verificationId);
-      const sourceSnapshot = await snapshot(verificationRoot);
+      const sourceSnapshot = await snapshotUnityWorkspace(verificationRoot);
+      const baseTreeManifest = await input.publishJson("unity-workspace-manifest", sourceSnapshot);
       const sourceByPath = new Map(sourceSnapshot.files.map((file) => [file.path, file]));
       const resultByPath = new Map(workspaceResult.files.map((file) => [file.path, file]));
       const paths = [...new Set([...sourceByPath.keys(), ...resultByPath.keys()])].sort(pathOrder);
-      const entries: UnityPatchManifestV1["entries"][number][] = [];
+      const entries: UnityPatchManifestV2["entries"][number][] = [];
       let patchBytes = 0;
+      let capturedBaseBytes = 0;
+      const captureBase = async (
+        relative: string,
+        before: SnapshotFile,
+      ): Promise<ArtifactRef | undefined> => {
+        if (
+          before.byteLength > MAX_PATCH_FILE_BYTES ||
+          capturedBaseBytes + before.byteLength > MAX_PATCH_BASE_CONTENT_TOTAL_BYTES
+        ) {
+          return undefined;
+        }
+        const content = await readFile(path.join(verificationRoot, ...safeRelative(relative)));
+        if (digest(content) !== before.contentDigest) {
+          throw new HoneyBeeCoreError(
+            "artifact.integrity-failed",
+            "Verification source changed during patch capture.",
+          );
+        }
+        capturedBaseBytes += content.byteLength;
+        return input.publishBytes("unity-patch-content", "application/octet-stream", content);
+      };
       for (const relative of paths) {
         const before = sourceByPath.get(relative);
         const after = resultByPath.get(relative);
         if (after === undefined) {
           if (before === undefined) throw new Error("unreachable");
+          const beforeArtifact = await captureBase(relative, before);
           entries.push({
             path: relative,
             operation: "delete",
             baseContentDigest: before.contentDigest,
+            ...(beforeArtifact === undefined ? {} : { before: beforeArtifact }),
           });
           continue;
         }
@@ -305,20 +350,32 @@ export class UnityPatchBuilder {
           "application/octet-stream",
           content,
         );
-        entries.push({ path: relative, operation: "add-or-modify", content: artifact });
+        if (before === undefined) {
+          entries.push({ path: relative, operation: "add", after: artifact });
+        } else {
+          const beforeArtifact = await captureBase(relative, before);
+          entries.push({
+            path: relative,
+            operation: "modify",
+            baseContentDigest: before.contentDigest,
+            ...(beforeArtifact === undefined ? {} : { before: beforeArtifact }),
+            after: artifact,
+          });
+        }
       }
-      const manifest = UnityPatchManifestV1Schema.parse({
-        schemaVersion: 1,
+      const manifest = UnityPatchManifestV2Schema.parse({
+        schemaVersion: 2,
         baseManifest: input.baseManifest,
+        baseTreeManifest,
         resultManifest,
         entries,
       });
       const patch = await input.publishJson("unity-verified-patch", manifest);
-      const stored = UnityPatchManifestV1Schema.parse(
+      const stored = UnityPatchManifestSchema.parse(
         JSON.parse(await this.artifacts.get({ runId: input.runId, artifact: patch })) as unknown,
       );
       await applyManifest(input.runId, verificationRoot, this.artifacts, stored);
-      const applied = await snapshot(verificationRoot);
+      const applied = await snapshotUnityWorkspace(verificationRoot);
       if (!sameSnapshot(applied, workspaceResult)) {
         throw new HoneyBeeCoreError(
           "patch.verification-failed",
