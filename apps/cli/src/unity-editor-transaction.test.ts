@@ -165,12 +165,14 @@ class MemoryWorkspaceStorage extends UnityWorkspaceStorageCliAdapter {
 
 class MemoryEditorLauncher implements UnityEditorLauncher {
   public stopped = 0;
+  public command: Parameters<UnityEditorLauncher["launch"]>[1] | undefined;
 
   public async launch(
     intent: EditorLaunchIntentV1,
-    _command: Parameters<UnityEditorLauncher["launch"]>[1],
+    command: Parameters<UnityEditorLauncher["launch"]>[1],
     lifecycle: Parameters<UnityEditorLauncher["launch"]>[2],
   ): Promise<UnityEditorLaunchHandle> {
+    this.command = command;
     const containment = EditorContainmentReceiptV1Schema.parse({
       schemaVersion: 1,
       launchId: intent.launchId,
@@ -286,7 +288,27 @@ class CompletedCapabilities implements UnityCapabilityRunner {
     return {
       capability,
       command,
-      response: capability.kind === "warm-test" ? { total: 1, passed: 1 } : { compiled: true },
+      response: {
+        schema_version: "1",
+        capability: capability.kind,
+        run_id: "memory-capability-run",
+        artifact_root: path.join(_workspacePath, ".testplay", "runs", "memory-capability-run"),
+        exit_code: 0,
+        backend: "bridge",
+        bridge: {
+          protocol_version: 3,
+          workspace_id: _binding.workspaceId,
+          editor_pid: _binding.editorPid,
+          bridge_session_id: _binding.bridgeSessionId,
+        },
+        compile_errors: 0,
+        total: capability.kind === "warm-test" ? 1 : 0,
+        passed: capability.kind === "warm-test" ? 1 : 0,
+        failed: 0,
+        skipped: 0,
+        fallback_used: false,
+        cleanup_state: "released",
+      },
       evidence: [
         {
           name: capability.id + ".json",
@@ -326,7 +348,6 @@ class FailedCapabilities implements UnityCapabilityRunner {
     return {
       capability,
       command,
-      response: { compiled: false },
       evidence: [],
     };
   }
@@ -630,6 +651,14 @@ describe("UnityEditorWorkTransaction", () => {
     expect(bridge.verifies).toBe(4);
     expect(storage.released).toBe(1);
     expect(launcher.stopped).toBe(1);
+    expect(launcher.command?.args).toEqual([
+      "-batchmode",
+      "-nographics",
+      "-projectPath",
+      path.join(workspaceRoot, "hb-" + runId),
+      "-logFile",
+      path.join(root, runId, "unity-editor.log"),
+    ]);
     expect(registry.owned?.ownership).toBe("honeybee");
     expect(registry.exited).toBe(registry.owned?.editorId);
     await expect(access(path.join(workspaceRoot, "hb-" + runId))).rejects.toMatchObject({

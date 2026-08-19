@@ -1,5 +1,5 @@
-import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -30,6 +30,117 @@ const temporaryRoot = async (): Promise<string> => {
   const root = await mkdtemp(path.join(tmpdir(), "honeybee-runtime-api-"));
   roots.push(root);
   return root;
+};
+
+const doctorFixture = async (root: string, protocolV3: boolean) => {
+  const project = path.join(root, "project");
+  const workspaceRoot = path.join(root, "workspaces");
+  const stateRoot = path.join(root, "runs");
+  await Promise.all([
+    ...["Assets", "Packages", "ProjectSettings"].map((name) =>
+      mkdir(path.join(project, name), { recursive: true }),
+    ),
+    mkdir(workspaceRoot, { recursive: true }),
+    mkdir(stateRoot, { recursive: true }),
+  ]);
+  await writeFile(
+    path.join(project, "ProjectSettings", "ProjectVersion.txt"),
+    "m_EditorVersion: 6000.0.1f1\n",
+    "utf8",
+  );
+  const testplay = path.join(root, "testplay.mjs");
+  await writeFile(
+    testplay,
+    [
+      "const args = process.argv.slice(2);",
+      "if (args[0] === 'version') { process.stdout.write(JSON.stringify({ version: 'v0.14.0-test' }) + '\\n'); process.exit(0); }",
+      protocolV3
+        ? "if (args[0] === 'capability' && args[2] === '--help') { const common = '--require-bridge-session --require-editor-pid --workspace-id --no-fallback'; process.stdout.write(common + (args[1] === 'warm-test' ? ' --filter --category' : '') + '\\n'); process.exit(0); }"
+        : "if (args[0] === 'capability') process.exit(2);",
+      "process.exit(2);",
+    ].join("\n"),
+    "utf8",
+  );
+  const executableDigest = createHash("sha256")
+    .update(await readFile(process.execPath))
+    .digest("hex");
+  const configPath = path.join(root, "batch.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      schemaVersion: 3,
+      mode: "unity-batch",
+      resourceScope: "global-editor-pool-v2",
+      maxParallelWorks: 1,
+      transaction: {
+        schemaVersion: 1,
+        sourceProjectPath: project,
+        workspaceStorage: {
+          command: { command: process.execPath },
+          contractCommit: "575c3b37896cd3dfa37a4705477837cc52ec6132",
+          binarySha256: executableDigest,
+          workspaceRoot,
+          parentKey: {
+            schemaVersion: 2,
+            digest: "a".repeat(64),
+            libraryKey: {
+              schemaVersion: "1",
+              digest: "b".repeat(64),
+              unityVersion: "6000.0.1f1",
+              unityExecutableSha256: "c".repeat(64),
+              manifestSha256: "d".repeat(64),
+              packagesLockSha256: "missing",
+              projectSettingsSha256: "e".repeat(64),
+              buildTarget: "windows/amd64",
+              scriptingBackend: "Mono",
+              projectIdentitySha256: "f".repeat(64),
+            },
+            provider: "vhdx-differencing",
+            filesystem: "NTFS",
+            virtualBytes: 1024 * 1024 * 1024,
+            blockBytes: 2 * 1024 * 1024,
+            sectorBytes: 4096,
+          },
+        },
+        agent: {
+          command: { command: process.execPath },
+          harness: "stdio-framed-v2",
+        },
+        testplay: {
+          command: { command: process.execPath, args: [testplay] },
+          unityPath: process.execPath,
+          platform: "edit_mode",
+          timeoutMs: 10_000,
+        },
+      },
+      editorPool: {
+        id: "unity-editors",
+        capacity: 1,
+        registrationTimeoutMs: 1_000,
+        activationTimeoutMs: 1_000,
+        bridgeReadyTimeoutMs: 1_000,
+        capabilityTimeoutMs: 10_000,
+        shutdownTimeoutMs: 1_000,
+      },
+      bridgeProtocolVersion: 3,
+      works: [
+        {
+          id: "work-a",
+          task: "Compile the fixture",
+          priority: "interactive",
+          capabilities: [{ id: "compile", kind: "compile" }],
+        },
+        {
+          id: "work-b",
+          task: "Warm-test the fixture",
+          priority: "validation",
+          capabilities: [{ id: "warm-test", kind: "warm-test" }],
+        },
+      ],
+    }),
+    "utf8",
+  );
+  return { project, stateRoot, configPath };
 };
 
 const event = (
@@ -209,6 +320,45 @@ describe("HoneyBeeRuntimeFacade", () => {
     expect(JSON.stringify(report)).not.toContain("must-not-appear");
     expect(report.checks).toContainEqual(
       expect.objectContaining({ id: "agent.probe", code: "agent.probe-skipped" }),
+    );
+  });
+
+  it("accepts the side-effect-free TestPlay protocol v3 capability surface", async () => {
+    const root = await temporaryRoot();
+    const fixture = await doctorFixture(root, true);
+    const report = await new HoneyBeeRuntimeFacade({ stateRoot: fixture.stateRoot }).doctor({
+      schemaVersion: 1,
+      projectPath: fixture.project,
+      batchConfigPath: fixture.configPath,
+    });
+
+    expect(report.ok).toBe(true);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        id: "testplay.protocol-v3",
+        status: "pass",
+        code: "testplay.protocol-v3-available",
+        version: "v0.14.0-test",
+      }),
+    );
+  });
+
+  it("rejects a TestPlay executable without protocol v3 capability commands", async () => {
+    const root = await temporaryRoot();
+    const fixture = await doctorFixture(root, false);
+    const report = await new HoneyBeeRuntimeFacade({ stateRoot: fixture.stateRoot }).doctor({
+      schemaVersion: 1,
+      projectPath: fixture.project,
+      batchConfigPath: fixture.configPath,
+    });
+
+    expect(report.ok).toBe(false);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        id: "testplay.protocol-v3",
+        status: "fail",
+        code: "testplay.protocol-v3-unavailable",
+      }),
     );
   });
 });

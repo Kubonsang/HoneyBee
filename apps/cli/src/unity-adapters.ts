@@ -2,6 +2,9 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { copyFile, lstat, mkdir, open, readdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+
+import { z } from "zod";
 
 import {
   ContentDigestSchema,
@@ -12,6 +15,7 @@ import {
   type AgentProcessRunner,
   type ContentDigest,
   type RunId,
+  type StepId,
   type UnityWorkConfigV1,
   type UnityCapability,
   type WarmBridgeBindingV1,
@@ -63,6 +67,58 @@ const createExclusiveFile = async (target: string, content: string): Promise<voi
       );
     }
     throw new HoneyBeeCoreError("testplay.failed", "The TestPlay config could not be created.");
+  }
+};
+
+const removeStaleSourceAssetDatabaseLock = async (libraryPath: string): Promise<void> => {
+  const lockPath = path.join(libraryPath, "SourceAssetDB-lock");
+  let initial: Awaited<ReturnType<typeof lstat>>;
+  try {
+    initial = await lstat(lockPath);
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return;
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock could not be inspected safely.",
+    );
+  }
+  if (!initial.isFile() || initial.isSymbolicLink() || initial.nlink !== 1) {
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock is not a private regular file.",
+    );
+  }
+  try {
+    const handle = await open(lockPath, "r");
+    try {
+      const opened = await handle.stat();
+      if (
+        !opened.isFile() ||
+        opened.nlink !== 1 ||
+        opened.dev !== initial.dev ||
+        opened.ino !== initial.ino
+      ) {
+        throw new HoneyBeeCoreError(
+          "workspace.protocol-invalid",
+          "The acquired Library lock changed while it was being opened.",
+        );
+      }
+    } finally {
+      await handle.close();
+    }
+    await rm(lockPath);
+    await lstat(lockPath);
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock remained after removal.",
+    );
+  } catch (error) {
+    if (error instanceof HoneyBeeCoreError) throw error;
+    if (errorCode(error) === "ENOENT") return;
+    throw new HoneyBeeCoreError(
+      "workspace.protocol-invalid",
+      "The acquired Library lock could not be removed safely.",
+    );
   }
 };
 
@@ -981,6 +1037,11 @@ export class UnityWorkspaceStorageCliAdapter {
         "Workspace acquire did not publish the expected Library mount.",
       );
     }
+    // Unity may leave SourceAssetDB-lock in the immutable seed after a clean
+    // batchmode parent build. It is process-lifetime state, not reusable
+    // Library content. Remove only the exact verified child mount's private
+    // lock before any HoneyBee-owned agent or Editor can start.
+    await removeStaleSourceAssetDatabaseLock(expectedMount);
     return {
       ...parsed,
       schemaVersion: 1,
@@ -1127,8 +1188,39 @@ export interface TestPlayRunResult {
   readonly evidence: readonly TestPlayEvidenceFile[];
 }
 
+const TestPlayCapabilityResponseSchema = z
+  .object({
+    schema_version: z.literal("1"),
+    capability: z.enum(["compile", "warm-test"]),
+    run_id: z.string().regex(/^[A-Za-z0-9._-]+$/u),
+    artifact_root: z.string().min(1),
+    exit_code: z.number().int(),
+    backend: z.literal("bridge"),
+    bridge: z
+      .object({
+        protocol_version: z.literal(3),
+        workspace_id: z.string().min(1),
+        editor_pid: z.number().int().positive(),
+        bridge_session_id: z.string().min(1),
+      })
+      .strict(),
+    compile_errors: z.number().int().nonnegative(),
+    compile_error_details: z.array(z.unknown()).optional(),
+    total: z.number().int().nonnegative(),
+    passed: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    fallback_used: z.literal(false),
+    cleanup_state: z.literal("released"),
+    error: z.string().optional(),
+  })
+  .strict();
+
+export type TestPlayCapabilityResponse = z.infer<typeof TestPlayCapabilityResponseSchema>;
+
 export interface UnityCapabilityRunResult extends TestPlayRunResult {
   readonly capability: UnityCapability;
+  readonly response?: TestPlayCapabilityResponse;
 }
 
 const evidenceMediaType = (name: string): TestPlayEvidenceFile["mediaType"] => {
@@ -1247,14 +1339,69 @@ export class TestPlayCliAdapter {
       terminateTree: true,
       deferExecutionUntilStarted: true,
     });
-    let response: unknown;
-    try {
-      response = parseOneJson(command.stdout, `testplay capability ${capability.kind}`);
-    } catch {
-      response = undefined;
+    let response: TestPlayCapabilityResponse | undefined;
+    if (command.termination === "exited" && command.exitCode !== null) {
+      let value: unknown;
+      try {
+        value = parseOneJson(command.stdout, `testplay capability ${capability.kind}`);
+      } catch {
+        throw new HoneyBeeCoreError(
+          "capability.failed",
+          "TestPlay capability stdout was not one JSON response.",
+          capability.id,
+        );
+      }
+      const parsed = TestPlayCapabilityResponseSchema.safeParse(value);
+      if (!parsed.success) {
+        throw new HoneyBeeCoreError(
+          "capability.failed",
+          "TestPlay capability response violated protocol v3.",
+          capability.id,
+        );
+      }
+      response = parsed.data;
+      const expectedArtifactRoot = path.resolve(
+        workspacePath,
+        ".testplay",
+        "runs",
+        response.run_id,
+      );
+      const countsAreConsistent =
+        response.total === response.passed + response.failed + response.skipped;
+      const successfulCompile =
+        capability.kind !== "compile" ||
+        command.exitCode !== 0 ||
+        (response.compile_errors === 0 && response.total === 0);
+      const successfulWarmTest =
+        capability.kind !== "warm-test" ||
+        command.exitCode !== 0 ||
+        (response.compile_errors === 0 &&
+          response.total > 0 &&
+          response.failed === 0 &&
+          countsAreConsistent);
+      if (
+        response.capability !== capability.kind ||
+        response.exit_code !== command.exitCode ||
+        response.bridge.workspace_id !== binding.workspaceId ||
+        response.bridge.editor_pid !== binding.editorPid ||
+        response.bridge.bridge_session_id !== binding.bridgeSessionId ||
+        !path.isAbsolute(response.artifact_root) ||
+        !samePath(response.artifact_root, expectedArtifactRoot) ||
+        (command.exitCode === 0 && !countsAreConsistent) ||
+        !successfulCompile ||
+        !successfulWarmTest ||
+        (command.exitCode === 0 && response.error !== undefined && response.error.length > 0)
+      ) {
+        throw new HoneyBeeCoreError(
+          "capability.failed",
+          "TestPlay capability response did not match the requested execution.",
+          capability.id,
+        );
+      }
     }
     const artifactRoot = await this.resolveArtifactRoot(workspacePath, before, response);
     const evidence = artifactRoot === undefined ? [] : await this.readEvidenceFiles(artifactRoot);
+    if (response !== undefined) this.validateCapabilityEvidence(response, evidence, capability.id);
     return {
       capability,
       command,
@@ -1262,6 +1409,64 @@ export class TestPlayCliAdapter {
       ...(artifactRoot === undefined ? {} : { artifactRoot }),
       evidence,
     };
+  }
+
+  private validateCapabilityEvidence(
+    response: TestPlayCapabilityResponse,
+    evidence: readonly TestPlayEvidenceFile[],
+    capabilityId: StepId,
+  ): void {
+    const summary = evidence.find((file) => file.name === "summary.json");
+    const manifest = evidence.find((file) => file.name === "manifest.json");
+    if (summary === undefined || manifest === undefined) {
+      throw new HoneyBeeCoreError(
+        "capability.failed",
+        "TestPlay capability omitted its durable summary or manifest.",
+        capabilityId,
+      );
+    }
+    let summaryValue: unknown;
+    let manifestValue: unknown;
+    try {
+      summaryValue = JSON.parse(summary.content) as unknown;
+      manifestValue = JSON.parse(manifest.content) as unknown;
+    } catch {
+      throw new HoneyBeeCoreError(
+        "capability.failed",
+        "TestPlay capability Evidence was not valid JSON.",
+        capabilityId,
+      );
+    }
+    const parsedSummary = TestPlayCapabilityResponseSchema.safeParse(summaryValue);
+    if (!parsedSummary.success || !isDeepStrictEqual(parsedSummary.data, response)) {
+      throw new HoneyBeeCoreError(
+        "capability.failed",
+        "TestPlay capability summary did not match stdout.",
+        capabilityId,
+      );
+    }
+    if (
+      !isRecord(manifestValue) ||
+      manifestValue.schema_version !== "1" ||
+      manifestValue.run_id !== response.run_id ||
+      manifestValue.artifact_root !== response.artifact_root
+    ) {
+      throw new HoneyBeeCoreError(
+        "capability.failed",
+        "TestPlay capability manifest did not match stdout.",
+        capabilityId,
+      );
+    }
+    if (
+      response.capability === "warm-test" &&
+      evidence.every((file) => file.name !== "results.xml")
+    ) {
+      throw new HoneyBeeCoreError(
+        "capability.failed",
+        "Warm Test omitted its durable results.xml.",
+        capabilityId,
+      );
+    }
   }
 
   public async recoverEvidence(workspacePath: string): Promise<readonly TestPlayEvidenceFile[]> {

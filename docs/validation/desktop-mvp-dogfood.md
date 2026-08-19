@@ -17,9 +17,9 @@ project for fault injection.
 1. Start the packaged executable and add the fixture Unity project plus its v0.6 batch schema 3
    config.
 2. Restart Desktop and confirm the project remains in Recent Projects.
-3. Run Doctor. Unity, HoneyBee runtime, TestPlay, Agent, workspace-storage pin, project/config
-   binding, and physical path isolation must pass. An Agent probe may remain skipped unless it was
-   explicitly configured.
+3. Run Doctor. Unity, HoneyBee runtime, TestPlay version and protocol 3 compile/warm-test command
+   surface, Agent, workspace-storage pin, project/config binding, and physical path isolation must
+   pass. An Agent probe may remain skipped unless it was explicitly configured.
 4. Correct one harmless invalid path in a copy of the config and confirm Doctor fails closed without
    starting a Run.
 

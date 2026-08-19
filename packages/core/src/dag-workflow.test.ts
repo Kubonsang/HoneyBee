@@ -23,7 +23,7 @@ import {
 } from "@honeybee/orchestration-contracts";
 import { describe, expect, it, vi } from "vitest";
 
-import { DagOrchestrationWorkflow } from "./dag-workflow.js";
+import { createDagAgentPrompt, DagOrchestrationWorkflow } from "./dag-workflow.js";
 import { HoneyBeeCoreError } from "./errors.js";
 import type {
   AgentProcessRequest,
@@ -413,6 +413,18 @@ const seedRunningControlCheckpoint = async (
 };
 
 describe("DagOrchestrationWorkflow", () => {
+  it("makes every required v2 response-envelope field explicit to real agents", () => {
+    const prompt = createDagAgentPrompt('{"schemaVersion":2}');
+
+    expect(prompt).toContain('"schemaVersion":2');
+    expect(prompt).toContain('"runId":"<exact input runId>"');
+    expect(prompt).toContain('"stepId":"<exact input step.id>"');
+    expect(prompt).toContain('"status":"completed"');
+    expect(prompt).toContain('"status":"blocked"');
+    expect(prompt).toContain('"status":"escalated"');
+    expect(prompt).toContain("Do not omit schemaVersion.");
+  });
+
   it("runs parallel fan-out up to the limit and supplies verified fan-in inputs", async () => {
     const runner = new DagRunner({ delayMs: 25 });
     const workflow = new DagOrchestrationWorkflow(

@@ -15,7 +15,13 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
-import { ContentDigestSchema, RunIdSchema, StepIdSchema } from "@honeybee/core";
+import {
+  ContentDigestSchema,
+  EventIdSchema,
+  RunIdSchema,
+  StepIdSchema,
+  WarmBridgeBindingV1Schema,
+} from "@honeybee/core";
 
 import {
   TestPlayCliAdapter,
@@ -33,7 +39,16 @@ afterEach(async () => {
   );
 });
 
-const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-provider") => {
+const command = async (
+  mode:
+    | "case-mount"
+    | "mount"
+    | "mount-with-lock"
+    | "mount-with-lock-directory"
+    | "malformed"
+    | "rejected"
+    | "wrong-provider",
+) => {
   const root = await mkdtemp(path.join(tmpdir(), "honeybee-storage-contract-"));
   directories.push(root);
   const script = path.join(root, "storage.mjs");
@@ -46,7 +61,7 @@ const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-pr
       "process.stdin.on('end', () => {",
       " if (mode === 'malformed') { process.stdout.write('not-json\\n'); return; }",
       " if (mode === 'rejected') { process.stdout.write(JSON.stringify({ schemaVersion: 1, ok: false, operation: 'acquire', error: { code: 'workspace-command-failed', message: 'rejected' } }) + '\\n'); process.exitCode = 1; return; }",
-      " const request = JSON.parse(input); const library = path.join(process.cwd(), 'Library'); if (mode === 'case-mount') fs.mkdirSync(library); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: mode === 'case-mount' ? request.parentKey.provider : 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: mode === 'case-mount' ? library.toUpperCase() : library, state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
+      " const request = JSON.parse(input); const library = path.join(process.cwd(), 'Library'); const mounted = mode === 'case-mount' || mode.startsWith('mount'); if (mounted) fs.mkdirSync(library); if (mode === 'mount-with-lock') fs.writeFileSync(path.join(library, 'SourceAssetDB-lock'), 'stale'); if (mode === 'mount-with-lock-directory') fs.mkdirSync(path.join(library, 'SourceAssetDB-lock')); process.stdout.write(JSON.stringify({ schemaVersion: 1, requestId: request.requestId, provider: mounted ? request.parentKey.provider : 'wrong', lease: { leaseId: 'lease', runId: request.consumerId, parentKey: request.parentKey.digest, mountPath: mode === 'case-mount' ? library.toUpperCase() : library, state: 'ready', createdAt: new Date().toISOString(), retained: false } }) + '\\n');",
       "});",
     ].join("\n"),
     "utf8",
@@ -72,12 +87,17 @@ const command = async (mode: "case-mount" | "malformed" | "rejected" | "wrong-pr
     } else {
       const parsed = JSON.parse(options.input ?? "{}") as WorkspaceAcquireRequest;
       const library = path.join(options.cwd, "Library");
-      if (mode === "case-mount") await mkdir(library);
+      const mounted = mode === "case-mount" || mode.startsWith("mount");
+      if (mounted) await mkdir(library);
+      if (mode === "mount-with-lock")
+        await writeFile(path.join(library, "SourceAssetDB-lock"), "stale", "utf8");
+      if (mode === "mount-with-lock-directory")
+        await mkdir(path.join(library, "SourceAssetDB-lock"));
       stdout =
         JSON.stringify({
           schemaVersion: 1,
           requestId: parsed.requestId,
-          provider: mode === "case-mount" ? parsed.parentKey.provider : "wrong",
+          provider: mounted ? parsed.parentKey.provider : "wrong",
           lease: {
             leaseId: "lease",
             runId: parsed.consumerId,
@@ -182,6 +202,37 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
       });
     },
   );
+
+  it("removes only the stale SourceAssetDB lock from an acquired child", async () => {
+    const fixture = await command("mount-with-lock");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).resolves.toMatchObject({
+      lease: { leaseId: "lease" },
+    });
+    await expect(access(path.join(workspace, "Library", "SourceAssetDB-lock"))).rejects.toThrow();
+  });
+
+  it("accepts an acquired child whose SourceAssetDB lock is already absent", async () => {
+    const fixture = await command("mount");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).resolves.toMatchObject({
+      lease: { leaseId: "lease" },
+    });
+  });
+
+  it("refuses to remove a non-file SourceAssetDB lock", async () => {
+    const fixture = await command("mount-with-lock-directory");
+    const workspace = path.join(fixture.root, "workspace");
+    await mkdir(workspace);
+    await expect(fixture.adapter.acquire(request(), workspace)).rejects.toMatchObject({
+      code: "workspace.protocol-invalid",
+    });
+    await expect(access(path.join(workspace, "Library", "SourceAssetDB-lock"))).resolves.toBe(
+      undefined,
+    );
+  });
 
   it("revalidates the pinned storage executable before every invocation", async () => {
     const fixture = await command("wrong-provider");
@@ -313,6 +364,103 @@ describe("TestPlayCliAdapter filesystem safety", () => {
 
     await expect(adapter(root).recoverEvidence(workspace)).rejects.toMatchObject({
       code: "testplay.failed",
+    });
+  });
+});
+
+describe("TestPlayCliAdapter protocol v3 capabilities", () => {
+  const createCapabilityFixture = async (mode: string) => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-testplay-capability-v3-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    const script = path.join(root, "testplay-capability.mjs");
+    await mkdir(workspace);
+    await writeFile(
+      script,
+      [
+        "import fs from 'node:fs'; import path from 'node:path';",
+        "const mode = process.argv[2]; const capability = process.argv[4];",
+        "const runId = 'testplay-capability-run'; const artifactRoot = path.join(process.cwd(), '.testplay', 'runs', runId); fs.mkdirSync(artifactRoot, { recursive: true });",
+        "const response = { schema_version: '1', capability, run_id: runId, artifact_root: artifactRoot, exit_code: 0, backend: 'bridge', bridge: { protocol_version: 3, workspace_id: process.env.HONEYBEE_WORKSPACE_ID, editor_pid: Number(process.env.HONEYBEE_EDITOR_PID), bridge_session_id: process.env.HONEYBEE_BRIDGE_SESSION_ID }, compile_errors: 0, total: capability === 'warm-test' ? 1 : 0, passed: capability === 'warm-test' ? 1 : 0, failed: 0, skipped: 0, fallback_used: false, cleanup_state: 'released' };",
+        "if (mode === 'wrong-binding') response.bridge.workspace_id = 'wrong-workspace';",
+        "if (mode === 'fallback') response.fallback_used = true;",
+        "if (mode === 'exit-mismatch') response.exit_code = 9;",
+        "if (mode === 'zero-tests') { response.total = 0; response.passed = 0; }",
+        "if (mode === 'unknown-field') response.unexpected = true;",
+        "const summary = structuredClone(response); if (mode === 'summary-mismatch') summary.passed = 99;",
+        "const manifest = { schema_version: '1', run_id: mode === 'manifest-mismatch' ? 'other-run' : runId, artifact_root: artifactRoot };",
+        "fs.writeFileSync(path.join(artifactRoot, 'summary.json'), JSON.stringify(summary)); fs.writeFileSync(path.join(artifactRoot, 'manifest.json'), JSON.stringify(manifest)); fs.writeFileSync(path.join(artifactRoot, 'stdout.log'), ''); fs.writeFileSync(path.join(artifactRoot, 'stderr.log'), ''); fs.writeFileSync(path.join(artifactRoot, 'events.ndjson'), '');",
+        "if (capability === 'warm-test' && mode !== 'missing-results') fs.writeFileSync(path.join(artifactRoot, 'results.xml'), '<test-run total=\"1\" passed=\"1\" />');",
+        "process.stdout.write(JSON.stringify(response) + '\\n');",
+      ].join("\n"),
+      "utf8",
+    );
+    const runId = RunIdSchema.parse(randomUUID());
+    const binding = WarmBridgeBindingV1Schema.parse({
+      schemaVersion: 1,
+      editorId: EventIdSchema.parse(randomUUID()),
+      editorPid: process.pid,
+      editorProcessIdentity: "test:editor",
+      workspaceId: "workspace-v3",
+      projectPath: workspace,
+      bridgeSessionId: "bridge-session-v3",
+      bridgeProtocolVersion: 3,
+      editorState: "idle",
+      heartbeatAt: new Date().toISOString(),
+      boundAt: new Date().toISOString(),
+    });
+    return {
+      workspace,
+      runId,
+      binding,
+      adapter: new TestPlayCliAdapter({
+        command: { command: process.execPath, args: [script, mode] },
+        unityPath: path.join(root, "Unity.exe"),
+        platform: "edit_mode",
+        timeoutMs: 10_000,
+      }),
+    };
+  };
+
+  const runCapability = async (mode: string, kind: "compile" | "warm-test") => {
+    const fixture = await createCapabilityFixture(mode);
+    return fixture.adapter.runCapability(
+      fixture.runId,
+      { id: StepIdSchema.parse(kind), kind },
+      fixture.binding,
+      fixture.workspace,
+      10_000,
+      new AbortController().signal,
+      { onStarted: async () => undefined, onExited: async () => undefined },
+    );
+  };
+
+  it.each(["compile", "warm-test"] as const)(
+    "accepts a correlated %s protocol v3 result",
+    async (kind) => {
+      const result = await runCapability("valid", kind);
+      expect(result.response).toMatchObject({
+        capability: kind,
+        backend: "bridge",
+        fallback_used: false,
+        bridge: { protocol_version: 3, workspace_id: "workspace-v3" },
+      });
+      expect(result.evidence.map((file) => file.name)).toContain("summary.json");
+    },
+  );
+
+  it.each([
+    "wrong-binding",
+    "fallback",
+    "exit-mismatch",
+    "zero-tests",
+    "unknown-field",
+    "summary-mismatch",
+    "manifest-mismatch",
+    "missing-results",
+  ])("fails closed for a %s capability response", async (mode) => {
+    await expect(runCapability(mode, "warm-test")).rejects.toMatchObject({
+      code: "capability.failed",
     });
   });
 });

@@ -51,6 +51,7 @@ import {
   UnityEditorSlotIdSchema,
   UnityWorkConfigV2Schema,
   type AnyOrchestrationEvent,
+  type AgentCommand,
   type AnyVersionedJournalReplay,
   type ArtifactRef,
   type RunId,
@@ -90,6 +91,21 @@ const hashFile = async (filePath: string): Promise<string> => {
   const hash = createHash("sha256");
   for await (const chunk of createReadStream(filePath)) hash.update(chunk as Buffer);
   return hash.digest("hex");
+};
+
+const runDoctorCommand = async (
+  command: AgentCommand,
+  args: readonly string[],
+): Promise<Readonly<{ stdout: string; stderr: string }>> => {
+  const result = await execFileAsync(command.command, [...(command.args ?? []), ...args], {
+    cwd: command.cwd,
+    env: { ...process.env, ...command.env },
+    timeout: 5_000,
+    windowsHide: true,
+    maxBuffer: 1024 * 1024,
+    encoding: "utf8",
+  });
+  return { stdout: result.stdout, stderr: result.stderr };
 };
 
 const executableCandidates = (command: string, cwd?: string): readonly string[] => {
@@ -489,6 +505,52 @@ export class HoneyBeeRuntimeFacade {
                 target: resolved,
               },
         );
+      }
+
+      const testplayCommand = config.transaction.testplay.command;
+      try {
+        const versionResult = await runDoctorCommand(testplayCommand, ["version"]);
+        const versionValue = JSON.parse(versionResult.stdout.trim()) as unknown;
+        if (!isRecord(versionValue) || typeof versionValue.version !== "string") {
+          throw new Error("invalid version response");
+        }
+        const [compileHelp, warmTestHelp] = await Promise.all([
+          runDoctorCommand(testplayCommand, ["capability", "compile", "--help"]),
+          runDoctorCommand(testplayCommand, ["capability", "warm-test", "--help"]),
+        ]);
+        const compileSurface = compileHelp.stdout + compileHelp.stderr;
+        const warmTestSurface = warmTestHelp.stdout + warmTestHelp.stderr;
+        for (const required of [
+          "--require-bridge-session",
+          "--require-editor-pid",
+          "--workspace-id",
+          "--no-fallback",
+        ]) {
+          if (!compileSurface.includes(required) || !warmTestSurface.includes(required)) {
+            throw new Error("missing protocol v3 flag");
+          }
+        }
+        if (!warmTestSurface.includes("--filter") || !warmTestSurface.includes("--category")) {
+          throw new Error("missing warm-test selectors");
+        }
+        add({
+          id: "testplay.protocol-v3",
+          label: "TestPlay protocol v3",
+          status: "pass",
+          code: "testplay.protocol-v3-available",
+          summary: "TestPlay exposes strict compile and warm-test capability commands.",
+          target: testplayCommand.command,
+          version: versionValue.version,
+        });
+      } catch {
+        add({
+          id: "testplay.protocol-v3",
+          label: "TestPlay protocol v3",
+          status: "fail",
+          code: "testplay.protocol-v3-unavailable",
+          summary: "TestPlay does not expose the required protocol v3 capability surface.",
+          target: testplayCommand.command,
+        });
       }
     }
 
