@@ -229,7 +229,7 @@ const createWindow = async (): Promise<void> => {
     height: 860,
     minWidth: 980,
     minHeight: 680,
-    backgroundColor: "#f4f1e8",
+    backgroundColor: "#090d10",
     show: false,
     title: "HoneyBee",
     webPreferences: {

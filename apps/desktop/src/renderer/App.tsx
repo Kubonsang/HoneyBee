@@ -1,4 +1,20 @@
 import { useEffect, useMemo, useState } from "react";
+import {
+  CheckCircle,
+  ClockCounterClockwise,
+  Cube,
+  FirstAidKit,
+  Hexagon,
+  ListChecks,
+  Plus,
+  Play,
+  Pulse,
+  SquaresFour,
+  Stethoscope,
+  WarningCircle,
+  X,
+  XCircle,
+} from "@phosphor-icons/react";
 
 import type {
   ArtifactViewV1,
@@ -43,8 +59,14 @@ const initialWork = (key = 1): WorkDraft => ({
 const readableError = (error: unknown): string =>
   error instanceof Error ? error.message : "HoneyBee operation failed.";
 
-const statusMark = (status: "pass" | "warning" | "fail"): string =>
-  status === "pass" ? "✓" : status === "warning" ? "!" : "×";
+const statusMark = (status: "pass" | "warning" | "fail") =>
+  status === "pass" ? (
+    <CheckCircle size={17} weight="fill" />
+  ) : status === "warning" ? (
+    <WarningCircle size={17} weight="fill" />
+  ) : (
+    <XCircle size={17} weight="fill" />
+  );
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<DesktopBootstrapV1>();
@@ -142,6 +164,7 @@ export function App() {
   const validWorks = works.every(
     (work) => work.task.trim().length > 0 && (work.compile || work.warmTest),
   );
+  const primaryWork = works[0] ?? initialWork();
 
   const activateProfile = (profileId: string | undefined): void => {
     setSelectedProfileId(profileId);
@@ -346,34 +369,33 @@ export function App() {
     <div className="app-shell">
       <aside className="sidebar">
         <div className="brand">
-          <span className="brand-mark">HB</span>
-          <div>
-            <strong>HoneyBee</strong>
-            <small>Unity control plane</small>
-          </div>
+          <span className="brand-mark">
+            <Hexagon size={34} weight="duotone" />
+          </span>
+          <strong>HoneyBee</strong>
         </div>
         <button
           className="primary wide"
           onClick={() => void chooseProfile()}
           disabled={busy !== undefined}
         >
-          + Add Unity project
+          <Plus size={17} weight="bold" /> Add Unity project
         </button>
         <nav className="main-nav" aria-label="Workspace views">
           <button
             className={view === "command" ? "selected" : ""}
             onClick={() => setView("command")}
           >
-            <span>⌁</span> Command Center
+            <SquaresFour size={20} weight="duotone" /> Command Center
           </button>
           <button className={view === "work" ? "selected" : ""} onClick={() => setView("work")}>
-            <span>＋</span> New Work
+            <ListChecks size={20} weight="duotone" /> New Work
           </button>
           <button
             className={view === "history" ? "selected" : ""}
             onClick={() => setView("history")}
           >
-            <span>◷</span> Run History
+            <ClockCounterClockwise size={20} weight="duotone" /> Run History
           </button>
         </nav>
         <div className="sidebar-heading">
@@ -389,7 +411,9 @@ export function App() {
                 activateProfile(profile.profileId);
               }}
             >
-              <span className="project-glyph">U</span>
+              <span className="project-glyph">
+                <Cube size={17} weight="duotone" />
+              </span>
               <span className="project-copy">
                 <strong>{profile.label}</strong>
                 <small>{profile.configLabel}</small>
@@ -407,21 +431,62 @@ export function App() {
                   if (event.key === "Enter" || event.key === " ") void removeProfile(profile);
                 }}
               >
-                ×
+                <X size={14} weight="bold" />
               </span>
             </button>
           ))}
         </nav>
         <div className="runtime-foot">
-          <span className="live-dot" /> Runtime {bootstrap?.runtime.runtimeVersion ?? "…"}
-          <small>API v{bootstrap?.runtime.apiVersion ?? "…"}</small>
+          <Pulse size={16} weight="fill" />
+          <span>
+            HoneyBee Daemon: <strong>Connected</strong>
+          </span>
+          <small>
+            Runtime {bootstrap?.runtime.runtimeVersion ?? "…"} · API v
+            {bootstrap?.runtime.apiVersion ?? "…"}
+          </small>
         </div>
       </aside>
 
-      <main>
+      <main className="desktop-main">
         <header className="topbar">
+          <div className="project-switcher">
+            <Cube size={17} weight="duotone" />
+            {bootstrap !== undefined && bootstrap.profiles.length > 0 ? (
+              <select
+                aria-label="Selected Unity project"
+                value={selectedProfileId}
+                onChange={(event) => activateProfile(event.target.value)}
+              >
+                {bootstrap.profiles.map((profile) => (
+                  <option key={profile.profileId} value={profile.profileId}>
+                    {profile.label} · {profile.configLabel}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <button onClick={() => void chooseProfile()}>Choose Unity project</button>
+            )}
+          </div>
+          <span className="runtime-chip">
+            <Pulse size={13} weight="fill" /> HoneyBee {bootstrap?.runtime.runtimeVersion ?? "…"}
+          </span>
+          <div className="topbar-actions">
+            {selectedProfile !== undefined && (
+              <button
+                className="topbar-button"
+                onClick={() => void runDoctor()}
+                disabled={busy !== undefined}
+              >
+                <Stethoscope size={17} /> {busy === "doctor" ? "Checking…" : "Doctor"}
+              </button>
+            )}
+            <span className="avatar">HB</span>
+          </div>
+        </header>
+
+        <div className="page-heading">
           <div>
-            <span className="eyebrow">DESKTOP MVP</span>
             <h1>
               {view === "command"
                 ? "Command Center"
@@ -429,17 +494,15 @@ export function App() {
                   ? "Run History"
                   : (selectedProfile?.label ?? "Choose a Unity project")}
             </h1>
+            <p>
+              {view === "command"
+                ? "Orchestrate AI agents. Isolate workspaces. Deliver verified changes."
+                : view === "history"
+                  ? "Inspect durable outcomes, Evidence, and verified patches."
+                  : "Describe focused changes and launch a bounded parallel batch."}
+            </p>
           </div>
-          {view === "work" && selectedProfile !== undefined && (
-            <button
-              className="secondary"
-              onClick={() => void runDoctor()}
-              disabled={busy !== undefined}
-            >
-              {busy === "doctor" ? "Checking…" : "Run environment Doctor"}
-            </button>
-          )}
-        </header>
+        </div>
 
         {view === "work" ? (
           <div className="content-grid">
@@ -585,7 +648,7 @@ export function App() {
                         ])
                       }
                     >
-                      + Add parallel Work
+                      <Plus size={16} weight="bold" /> Add parallel Work
                     </button>
                     <button
                       className="primary run-button"
@@ -658,6 +721,84 @@ export function App() {
               snapshot={snapshot}
               selectedRunId={selectedRunId}
               historyOnly={view === "history"}
+              composer={
+                view === "command" ? (
+                  <section className="surface quick-composer">
+                    <div className="quick-composer-heading">
+                      <div>
+                        <FirstAidKit size={19} weight="duotone" />
+                        <strong>What shall we build today?</strong>
+                      </div>
+                      <button className="text-button" onClick={() => setView("work")}>
+                        Batch builder
+                      </button>
+                    </div>
+                    <textarea
+                      value={primaryWork.task}
+                      onChange={(event) =>
+                        updateWork(primaryWork.key, { task: event.target.value })
+                      }
+                      placeholder="Describe a feature, fix, or refactor…"
+                      rows={2}
+                    />
+                    <div className="quick-composer-actions">
+                      <label className="compact-select">
+                        <span>Priority</span>
+                        <select
+                          value={primaryWork.priority}
+                          onChange={(event) =>
+                            updateWork(primaryWork.key, {
+                              priority: event.target.value as WorkDraft["priority"],
+                            })
+                          }
+                        >
+                          <option value="interactive">Interactive</option>
+                          <option value="validation">Validation</option>
+                          <option value="background">Background</option>
+                        </select>
+                      </label>
+                      <label className="capability-chip">
+                        <input
+                          type="checkbox"
+                          checked={primaryWork.compile}
+                          onChange={(event) =>
+                            updateWork(primaryWork.key, { compile: event.target.checked })
+                          }
+                        />
+                        Compile
+                      </label>
+                      <label className="capability-chip">
+                        <input
+                          type="checkbox"
+                          checked={primaryWork.warmTest}
+                          onChange={(event) =>
+                            updateWork(primaryWork.key, { warmTest: event.target.checked })
+                          }
+                        />
+                        Warm test
+                      </label>
+                      <span className="composer-spacer" />
+                      {doctor?.ok !== true && (
+                        <button className="doctor-required" onClick={() => void runDoctor()}>
+                          <Stethoscope size={16} /> Run Doctor
+                        </button>
+                      )}
+                      <button
+                        className="primary create-work-button"
+                        onClick={() => void startWorks()}
+                        disabled={busy !== undefined || !validWorks || doctor?.ok !== true}
+                      >
+                        <Play size={16} weight="fill" />
+                        {busy === "start"
+                          ? "Starting…"
+                          : works.length === 1
+                            ? "Create Work"
+                            : `Create ${works.length} Works`}
+                      </button>
+                    </div>
+                  </section>
+                ) : undefined
+              }
               onSelectRun={(runId) => {
                 setSelectedRunId(runId);
                 setRunDetail(undefined);
@@ -690,14 +831,18 @@ export function App() {
           <div className="toast error-toast">
             <strong>Could not complete the operation</strong>
             <span>{error}</span>
-            <button onClick={() => setError(undefined)}>×</button>
+            <button onClick={() => setError(undefined)} aria-label="Dismiss error">
+              <X size={16} />
+            </button>
           </div>
         )}
         {notice !== undefined && (
           <div className="toast success-toast">
             <strong>Runtime updated</strong>
             <span>{notice}</span>
-            <button onClick={() => setNotice(undefined)}>×</button>
+            <button onClick={() => setNotice(undefined)} aria-label="Dismiss notice">
+              <X size={16} />
+            </button>
           </div>
         )}
       </main>

@@ -5,6 +5,7 @@ import type {
   RunDetailV1,
   VerifiedPatchViewV1,
 } from "@honeybee/control-plane-contracts";
+import { X } from "@phosphor-icons/react";
 
 interface RunDetailViewProps {
   readonly detail?: RunDetailV1 | undefined;
@@ -68,7 +69,7 @@ export function RunDetailView({
           <code>{detail.summary.runId}</code>
         </div>
         <button className="close-detail" onClick={onClose} aria-label="Close Run detail">
-          ×
+          <X size={17} weight="bold" />
         </button>
       </div>
       <div className="detail-facts">
