@@ -4,6 +4,10 @@ dist/
 coverage/
 *.tsbuildinfo
 /apps/desktop/release/
+/dogfood/evidence/
+/dogfood/state/
+__pycache__/
+*.py[cod]
 
 # Local package-manager and registry credentials
 .npmrc

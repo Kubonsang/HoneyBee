@@ -67,3 +67,14 @@ project for fault injection.
 The dogfood result is accepted only when the source project is unchanged before explicit Apply,
 every acquired workspace is released, Editor/pool/process residuals are zero, and each patch has one
 durable terminal disposition or remains intentionally pending.
+
+## 6. Reproducible measurement session
+
+Use the read-only launcher and observer in [dogfood/README.md](../../dogfood/README.md) for a
+packaged executable run. It creates a session-isolated Electron userData directory and preserves
+metrics.json, normalized events.ndjson, summary.md, and bounded logs below
+dogfood/evidence/<session-id>/.
+
+Finalize one sequential baseline and one 3- or 4-Work parallel candidate with the same workloadId,
+then run dogfood/session.py compare. Do not hand-edit generated measurements: rerun finalize so the
+observer replays the authoritative Journal and re-verifies every referenced Artifact.
