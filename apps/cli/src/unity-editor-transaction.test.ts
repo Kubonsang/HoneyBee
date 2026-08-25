@@ -15,7 +15,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityEditorObservationV1Schema,
-  UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
   UnityWorkConfigV2Schema,
   WarmBridgeBindingV1Schema,
   type AgentProcessResult,
@@ -721,9 +721,14 @@ describe("UnityEditorWorkTransaction", () => {
     if (result.status !== "completed" || result.patch === undefined) {
       throw new Error("unexpected result");
     }
-    const patch = UnityPatchManifestV2Schema.parse(
+    const patch = UnityPatchManifestV3Schema.parse(
       JSON.parse(await artifacts.get({ runId, artifact: result.patch })) as unknown,
     );
+    expect(patch.verification).toEqual({
+      workspaceIntegrity: "verified",
+      compile: "passed",
+      warmTest: "passed",
+    });
     expect(patch.entries).toHaveLength(1);
     expect(patch.entries[0]).toMatchObject({
       path: "Assets/agent-created.txt",

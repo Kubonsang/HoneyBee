@@ -29,7 +29,6 @@ import {
   DesktopStartRequestV1Schema,
   type DesktopBootstrapV1,
   type DesktopProjectProfile,
-  type DesktopProjectProfileV2,
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { CommandCenter } from "./CommandCenter.js";
@@ -165,7 +164,9 @@ export function App() {
     [bootstrap, selectedProfile],
   );
   const testplayAvailable =
-    selectedProfile?.schemaVersion !== 2 || selectedProfile.environment.testplay !== undefined;
+    selectedProfile === undefined ||
+    selectedProfile.schemaVersion === 1 ||
+    selectedProfile.environment.testplay !== undefined;
   const validWorks = works.every(
     (work) =>
       work.task.trim().length > 0 && (testplayAvailable || (!work.compile && !work.warmTest)),
@@ -198,7 +199,7 @@ export function App() {
     }
   };
 
-  const completeSetup = async (profile: DesktopProjectProfileV2): Promise<void> => {
+  const completeSetup = async (profile: DesktopProjectProfile): Promise<void> => {
     try {
       const value = await window.honeybee.bootstrap();
       setBootstrap(value);

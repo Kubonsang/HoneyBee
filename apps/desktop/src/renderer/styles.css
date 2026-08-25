@@ -882,6 +882,12 @@ main {
   display: flex;
   gap: 5px;
 }
+.patch-verification {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
 .patch-state,
 .operation {
   padding: 4px 6px;
@@ -1044,6 +1050,28 @@ main {
 .health.bad {
   color: #934339;
   background: #f8e4df;
+}
+.health.waiting {
+  color: #765b0b;
+  background: #f3e8bd;
+}
+.setup-addon-note {
+  margin: 8px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid #e0d6aa;
+  border-radius: 9px;
+  color: #6f570d;
+  background: #faf3d7;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.setup-field select {
+  width: 100%;
+  padding: 10px 11px;
+  border: 1px solid #dcd8cd;
+  border-radius: 8px;
+  color: inherit;
+  background: #fffefa;
 }
 
 .binding-row {

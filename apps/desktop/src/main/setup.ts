@@ -18,18 +18,26 @@ import path from "node:path";
 
 import { UnityBatchConfigV3Schema } from "@honeybee/orchestration-contracts";
 import { RuntimeProcessContainment } from "honeybee-cli/runtime";
+import { z } from "zod";
 
 import {
+  DesktopProjectProfileSchema,
   DesktopProjectProfileV2Schema,
+  DesktopProjectProfileV3Schema,
   DesktopSetupDiscoveryV1Schema,
   DesktopSetupDraftV1Schema,
   DesktopSetupStatusV1Schema,
   ManagedUnityEnvironmentV1Schema,
+  ManagedUnityEnvironmentV2Schema,
+  ProjectComponentLockV1Schema,
+  type DesktopProjectProfile,
   type DesktopProjectProfileV2,
+  type DesktopProjectProfileV3,
   type DesktopSetupDiscoveryV1,
-  type DesktopSetupDraftV1,
   type DesktopSetupStatusV1,
   type ManagedUnityEnvironmentV1,
+  type ManagedUnityEnvironmentV2,
+  type ProjectComponentLockV1,
 } from "../shared/ipc.js";
 
 const MAX_COMMAND_BYTES = 4 * 1024 * 1024;
@@ -117,6 +125,50 @@ const setupError = (code: string, message: string): Error & { readonly code: str
 
 const sha256 = (bytes: Uint8Array | string): string =>
   createHash("sha256").update(bytes).digest("hex");
+
+export const ResolvedDesktopSetupDraftV1Schema = z
+  .object({
+    ...DesktopSetupDraftV1Schema.shape,
+    componentLocks: z
+      .object({
+        workspaceStorage: ProjectComponentLockV1Schema,
+        testplay: ProjectComponentLockV1Schema.optional(),
+      })
+      .strict(),
+  })
+  .strict()
+  .superRefine((draft, context) => {
+    if (draft.componentLocks.workspaceStorage.componentId !== "workspace-storage") {
+      context.addIssue({
+        code: "custom",
+        path: ["componentLocks", "workspaceStorage", "componentId"],
+        message: "Resolved Setup requires a workspace-storage lock.",
+      });
+    }
+    if (
+      draft.componentLocks.testplay !== undefined &&
+      draft.componentLocks.testplay.componentId !== "testplay"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["componentLocks", "testplay", "componentId"],
+        message: "Resolved Setup requires a TestPlay lock.",
+      });
+    }
+    if ((draft.testplayPath === undefined) !== (draft.componentLocks.testplay === undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["componentLocks", "testplay"],
+        message: "Resolved TestPlay path and component lock must be present together.",
+      });
+    }
+  });
+export type ResolvedDesktopSetupDraftV1 = z.infer<typeof ResolvedDesktopSetupDraftV1Schema>;
+const InternalSetupDraftSchema = z.union([
+  ResolvedDesktopSetupDraftV1Schema,
+  DesktopSetupDraftV1Schema,
+]);
+type InternalSetupDraft = z.infer<typeof InternalSetupDraftSchema>;
 
 const hashFile = async (filePath: string): Promise<string> => {
   const metadata = await lstat(filePath);
@@ -328,7 +380,48 @@ export const computeUnityCompatibility = async (
   } as const;
 };
 
-const managedRuntimeConfig = (environment: ManagedUnityEnvironmentV1) => {
+const componentFile = (
+  lock: ProjectComponentLockV1,
+  role: ProjectComponentLockV1["files"][number]["role"],
+): ProjectComponentLockV1["files"][number] => {
+  const matches = lock.files.filter((file) => file.role === role);
+  if (matches.length !== 1) throw new Error("Component lock role is missing or ambiguous.");
+  return matches[0] as ProjectComponentLockV1["files"][number];
+};
+
+const managedRuntimeConfig = (
+  environment: ManagedUnityEnvironmentV1 | ManagedUnityEnvironmentV2,
+) => {
+  const storage =
+    environment.schemaVersion === 1
+      ? environment.workspaceStorage
+      : {
+          path: componentFile(environment.storage.component, "client").path,
+          sha256: componentFile(environment.storage.component, "client").sha256,
+          workspaceRoot: environment.storage.workspaceRoot,
+          compatibilityKey: environment.storage.compatibilityKey,
+          parentId: environment.storage.parentId,
+          provider: environment.storage.provider,
+        };
+  const testplay =
+    environment.schemaVersion === 1
+      ? environment.testplay
+      : environment.testplay === undefined
+        ? undefined
+        : {
+            path: componentFile(environment.testplay, "cli").path,
+            sha256: componentFile(environment.testplay, "cli").sha256,
+          };
+  const bridgeOverlay =
+    environment.schemaVersion === 1
+      ? environment.bridgeOverlay
+      : environment.testplay === undefined
+        ? undefined
+        : {
+            packageName: "com.testplay.bridge" as const,
+            sourcePath: componentFile(environment.testplay, "bridge-overlay").path,
+            digest: componentFile(environment.testplay, "bridge-overlay").sha256,
+          };
   const baseWork = (id: string) => ({
     id,
     task: "Desktop runtime placeholder; replaced before execution.",
@@ -345,12 +438,12 @@ const managedRuntimeConfig = (environment: ManagedUnityEnvironmentV1) => {
       sourceProjectPath: environment.projectPath,
       workspaceStorage: {
         schemaVersion: 2,
-        command: { command: environment.workspaceStorage.path },
-        binarySha256: environment.workspaceStorage.sha256,
-        workspaceRoot: environment.workspaceStorage.workspaceRoot,
-        compatibilityKey: environment.workspaceStorage.compatibilityKey,
-        parentId: environment.workspaceStorage.parentId,
-        provider: environment.workspaceStorage.provider,
+        command: { command: storage.path },
+        binarySha256: storage.sha256,
+        workspaceRoot: storage.workspaceRoot,
+        compatibilityKey: storage.compatibilityKey,
+        parentId: storage.parentId,
+        provider: storage.provider,
       },
       agent: {
         command: environment.agent,
@@ -358,19 +451,17 @@ const managedRuntimeConfig = (environment: ManagedUnityEnvironmentV1) => {
         timeoutMs: 900_000,
         maxOutputBytes: 16 * 1024 * 1024,
       },
-      ...(environment.testplay === undefined
+      ...(testplay === undefined
         ? {}
         : {
             testplay: {
-              command: { command: environment.testplay.path },
+              command: { command: testplay.path },
               unityPath: environment.unity.path,
               platform: "edit_mode" as const,
               timeoutMs: 900_000,
             },
           }),
-      ...(environment.bridgeOverlay === undefined
-        ? {}
-        : { bridgeOverlay: environment.bridgeOverlay }),
+      ...(bridgeOverlay === undefined ? {} : { bridgeOverlay }),
     },
     editorPool: {
       id: "unity-editor",
@@ -381,7 +472,7 @@ const managedRuntimeConfig = (environment: ManagedUnityEnvironmentV1) => {
       capabilityTimeoutMs: 900_000,
       shutdownTimeoutMs: 60_000,
     },
-    ...(environment.testplay === undefined ? {} : { bridgeProtocolVersion: 3 as const }),
+    ...(testplay === undefined ? {} : { bridgeProtocolVersion: 3 as const }),
     works: [baseWork("managed-work-a"), baseWork("managed-work-b")],
   });
 };
@@ -688,7 +779,7 @@ export class DesktopSetupCoordinator {
 
   public constructor(
     private readonly root: string,
-    private readonly onProfile: (profile: DesktopProjectProfileV2) => Promise<void>,
+    private readonly onProfile: (profile: DesktopProjectProfile) => Promise<void>,
     private readonly processContainment: Pick<
       RuntimeProcessContainment,
       "captureIdentity" | "drain" | "run"
@@ -696,8 +787,8 @@ export class DesktopSetupCoordinator {
     private readonly executeCommand: typeof runCommand = runCommand,
   ) {}
 
-  public async start(draftValue: DesktopSetupDraftV1): Promise<DesktopSetupStatusV1> {
-    const draft = DesktopSetupDraftV1Schema.parse(draftValue);
+  public async start(draftValue: InternalSetupDraft): Promise<DesktopSetupStatusV1> {
+    const draft = InternalSetupDraftSchema.parse(draftValue);
     const setupId = randomUUID();
     const directory = this.#directory(setupId);
     await mkdir(this.root, { recursive: true });
@@ -719,9 +810,9 @@ export class DesktopSetupCoordinator {
     else if (latest.type === "setup.failed") state = "failed";
     else if (latest.type === "setup.cancelled") state = "cancelled";
     else if (latest.type === "setup.recovery-required") state = "recovery-required";
-    let profile: DesktopProjectProfileV2 | undefined;
+    let profile: DesktopProjectProfile | undefined;
     try {
-      profile = DesktopProjectProfileV2Schema.parse(
+      profile = DesktopProjectProfileSchema.parse(
         JSON.parse(await readFile(path.join(directory, "profile.json"), "utf8")),
       );
     } catch (error) {
@@ -740,7 +831,7 @@ export class DesktopSetupCoordinator {
   public async resume(setupId: string): Promise<DesktopSetupStatusV1> {
     if (this.#active.has(setupId)) return this.status(setupId);
     const directory = this.#directory(setupId);
-    const draft = DesktopSetupDraftV1Schema.parse(
+    const draft = InternalSetupDraftSchema.parse(
       JSON.parse(await readFile(path.join(directory, "request.json"), "utf8")),
     );
     const journal = new SetupJournal(path.join(directory, "events.jsonl"));
@@ -764,7 +855,7 @@ export class DesktopSetupCoordinator {
     return this.status(setupId);
   }
 
-  #launch(setupId: string, draft: DesktopSetupDraftV1, journal: SetupJournal): void {
+  #launch(setupId: string, draft: InternalSetupDraft, journal: SetupJournal): void {
     const aborter = new AbortController();
     const task = this.#run(setupId, draft, journal, aborter.signal).finally(() => {
       this.#active.delete(setupId);
@@ -775,7 +866,7 @@ export class DesktopSetupCoordinator {
 
   async #run(
     setupId: string,
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     journal: SetupJournal,
     signal: AbortSignal,
   ): Promise<void> {
@@ -1183,7 +1274,7 @@ export class DesktopSetupCoordinator {
   }
 
   async #prepareShell(
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     projectRoot: string,
     bridgeDigest?: string,
   ): Promise<void> {
@@ -1219,7 +1310,7 @@ export class DesktopSetupCoordinator {
 
   async #recordBegunResponse(
     setupId: string,
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     journal: SetupJournal,
     response: StorageResponse,
   ): Promise<
@@ -1273,7 +1364,7 @@ export class DesktopSetupCoordinator {
 
   async #abortParent(
     setupId: string,
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     journal: SetupJournal,
     transactionId: string,
     projectRoot: string,
@@ -1360,7 +1451,7 @@ export class DesktopSetupCoordinator {
   }
 
   async #storage(
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     args: readonly string[],
     requestId: string,
     signal: AbortSignal,
@@ -1385,14 +1476,14 @@ export class DesktopSetupCoordinator {
 
   async #finishProfile(
     setupId: string,
-    draft: DesktopSetupDraftV1,
+    draft: InternalSetupDraft,
     journal: SetupJournal,
     committed: Record<string, unknown>,
     knownInputs?: ManagedUnityEnvironmentV1["compatibilityInputs"],
   ): Promise<void> {
     const profilePath = path.join(this.#directory(setupId), "profile.json");
     try {
-      const profile = DesktopProjectProfileV2Schema.parse(
+      const profile = DesktopProjectProfileSchema.parse(
         JSON.parse(await readFile(profilePath, "utf8")),
       );
       await this.onProfile(profile);
@@ -1409,7 +1500,7 @@ export class DesktopSetupCoordinator {
       draft.bridgeOverlayPath,
     );
     const inputs = knownInputs ?? computed.inputs;
-    const environment = ManagedUnityEnvironmentV1Schema.parse({
+    const legacyEnvironment = {
       schemaVersion: 1,
       environmentId: randomUUID(),
       projectPath: path.resolve(draft.projectPath),
@@ -1449,20 +1540,55 @@ export class DesktopSetupCoordinator {
       editorPool: { id: "unity-editor", capacity: draft.editorCapacity },
       compatibilityInputs: inputs,
       configuredAt: new Date().toISOString(),
-    });
+    } as const;
+    const environment =
+      "componentLocks" in draft
+        ? ManagedUnityEnvironmentV2Schema.parse({
+            schemaVersion: 2,
+            environmentId: legacyEnvironment.environmentId,
+            projectPath: legacyEnvironment.projectPath,
+            unity: legacyEnvironment.unity,
+            storage: {
+              component: draft.componentLocks.workspaceStorage,
+              workspaceRoot: legacyEnvironment.workspaceStorage.workspaceRoot,
+              provider: legacyEnvironment.workspaceStorage.provider,
+              parentId: legacyEnvironment.workspaceStorage.parentId,
+              compatibilityKey: legacyEnvironment.workspaceStorage.compatibilityKey,
+            },
+            ...(draft.componentLocks.testplay === undefined
+              ? {}
+              : { testplay: draft.componentLocks.testplay }),
+            agent: draft.agent,
+            editorPool: legacyEnvironment.editorPool,
+            compatibilityInputs: inputs,
+            configuredAt: legacyEnvironment.configuredAt,
+          })
+        : ManagedUnityEnvironmentV1Schema.parse(legacyEnvironment);
     const configPath = path.join(this.#directory(setupId), "runtime-config.json");
     const config = managedRuntimeConfig(environment);
     await publishIdempotentFile(configPath, JSON.stringify(config, null, 2) + "\n");
-    const profile = DesktopProjectProfileV2Schema.parse({
-      schemaVersion: 2,
-      profileId: randomUUID(),
-      label: draft.label,
-      projectPath: environment.projectPath,
-      batchConfigPath: configPath,
-      configLabel: "Managed environment",
-      lastOpenedAt: new Date().toISOString(),
-      environment,
-    });
+    const profile =
+      environment.schemaVersion === 2
+        ? DesktopProjectProfileV3Schema.parse({
+            schemaVersion: 3,
+            profileId: randomUUID(),
+            label: draft.label,
+            projectPath: environment.projectPath,
+            batchConfigPath: configPath,
+            configLabel: "Managed components",
+            lastOpenedAt: new Date().toISOString(),
+            environment,
+          })
+        : DesktopProjectProfileV2Schema.parse({
+            schemaVersion: 2,
+            profileId: randomUUID(),
+            label: draft.label,
+            projectPath: environment.projectPath,
+            batchConfigPath: configPath,
+            configLabel: "Managed environment",
+            lastOpenedAt: new Date().toISOString(),
+            environment,
+          });
     await publishExclusiveFile(profilePath, JSON.stringify(profile));
     await this.onProfile(profile);
     await journal.append("profile.stored", { profileId: profile.profileId });
@@ -1504,6 +1630,7 @@ export class DesktopSetupCoordinator {
 export const installBundledWorkspaceStorage = async (
   storageHostPathValue: string,
   workspaceRootValue: string,
+  replaceExisting = false,
 ): Promise<void> => {
   if (process.platform !== "win32") {
     throw setupError(
@@ -1516,10 +1643,22 @@ export const installBundledWorkspaceStorage = async (
   assertPinnedNativeExecutable(storageHostPath, "HoneyBee workspace-storage host");
   const pinned = await hashFile(storageHostPath);
   const quote = (value: string): string => `'${value.replaceAll("'", "''")}'`;
+  const installArguments = [
+    "'install'",
+    "'--workspace-root'",
+    quote(workspaceRoot),
+    "'--user-sid'",
+    "$sid",
+    ...(replaceExisting ? ["'--replace'"] : []),
+  ].join(",");
   const script = [
     "$ErrorActionPreference='Stop'",
     "$sid=[Security.Principal.WindowsIdentity]::GetCurrent().User.Value",
-    `$process=Start-Process -FilePath ${quote(storageHostPath)} -ArgumentList @('install','--workspace-root',${quote(workspaceRoot)},'--user-sid',$sid) -Verb RunAs -Wait -PassThru`,
+    "$process=Start-Process -FilePath " +
+      quote(storageHostPath) +
+      " -ArgumentList @(" +
+      installArguments +
+      ") -Verb RunAs -Wait -PassThru",
     "exit $process.ExitCode",
   ].join("; ");
   const encoded = Buffer.from(script, "utf16le").toString("base64");
@@ -1543,26 +1682,50 @@ export const installBundledWorkspaceStorage = async (
 };
 
 export const validateManagedEnvironment = async (
-  profile: DesktopProjectProfileV2,
+  profile: DesktopProjectProfileV2 | DesktopProjectProfileV3,
 ): Promise<void> => {
   const environment = profile.environment;
-  if ((environment.testplay === undefined) !== (environment.bridgeOverlay === undefined)) {
+  if (
+    environment.schemaVersion === 1 &&
+    (environment.testplay === undefined) !== (environment.bridgeOverlay === undefined)
+  ) {
     throw setupError(
       "setup.profile-invalid",
       "TestPlay and its Bridge overlay must be configured together.",
     );
   }
+  const bridgePath =
+    environment.schemaVersion === 1
+      ? environment.bridgeOverlay?.sourcePath
+      : environment.testplay === undefined
+        ? undefined
+        : componentFile(environment.testplay, "bridge-overlay").path;
+  const compatibilityKey =
+    environment.schemaVersion === 1
+      ? environment.workspaceStorage.compatibilityKey
+      : environment.storage.compatibilityKey;
+  const storageFile =
+    environment.schemaVersion === 1
+      ? { path: environment.workspaceStorage.path, sha256: environment.workspaceStorage.sha256 }
+      : componentFile(environment.storage.component, "client");
+  const testplayFile =
+    environment.schemaVersion === 1
+      ? environment.testplay
+      : environment.testplay === undefined
+        ? undefined
+        : componentFile(environment.testplay, "cli");
   const compatibility = await computeUnityCompatibility(
     environment.projectPath,
     environment.unity.path,
-    environment.bridgeOverlay?.sourcePath,
+    bridgePath,
   );
   if (
-    compatibility.compatibilityKey !== environment.workspaceStorage.compatibilityKey ||
+    compatibility.compatibilityKey !== compatibilityKey ||
     canonicalJson(compatibility.inputs) !== canonicalJson(environment.compatibilityInputs) ||
-    (environment.testplay !== undefined &&
-      (await hashFile(environment.testplay.path)) !== environment.testplay.sha256) ||
-    (await hashFile(environment.workspaceStorage.path)) !== environment.workspaceStorage.sha256
+    (testplayFile !== undefined && (await hashFile(testplayFile.path)) !== testplayFile.sha256) ||
+    (bridgePath !== undefined &&
+      (await hashTree(bridgePath)) !== environment.compatibilityInputs.bridgeOverlayDigest) ||
+    (await hashFile(storageFile.path)) !== storageFile.sha256
   ) {
     throw new Error(
       "The managed environment changed. Open Setup Center to provision a compatible parent.",
@@ -1572,9 +1735,11 @@ export const validateManagedEnvironment = async (
 
 export const materializeImportedManagedProfile = async (
   rootValue: string,
-  profileValue: DesktopProjectProfileV2,
-): Promise<DesktopProjectProfileV2> => {
-  const profile = DesktopProjectProfileV2Schema.parse(profileValue);
+  profileValue: DesktopProjectProfileV2 | DesktopProjectProfileV3,
+): Promise<DesktopProjectProfileV2 | DesktopProjectProfileV3> => {
+  const profile = z
+    .union([DesktopProjectProfileV2Schema, DesktopProjectProfileV3Schema])
+    .parse(profileValue);
   await validateManagedEnvironment(profile);
   const root = path.resolve(rootValue);
   await mkdir(root, { recursive: true });
@@ -1583,9 +1748,62 @@ export const materializeImportedManagedProfile = async (
     configPath,
     JSON.stringify(managedRuntimeConfig(profile.environment), null, 2) + "\n",
   );
-  return DesktopProjectProfileV2Schema.parse({
+  return (
+    profile.schemaVersion === 2 ? DesktopProjectProfileV2Schema : DesktopProjectProfileV3Schema
+  ).parse({
     ...profile,
     batchConfigPath: configPath,
     lastOpenedAt: new Date().toISOString(),
+  });
+};
+
+export const upgradeManagedProfileV2 = async (
+  rootValue: string,
+  profileValue: DesktopProjectProfileV2,
+  workspaceStorage: ProjectComponentLockV1,
+  testplay?: ProjectComponentLockV1,
+): Promise<DesktopProjectProfileV3> => {
+  const profile = DesktopProjectProfileV2Schema.parse(profileValue);
+  await validateManagedEnvironment(profile);
+  if (workspaceStorage.componentId !== "workspace-storage") {
+    throw new Error("Managed profile upgrade requires a workspace-storage lock.");
+  }
+  if ((profile.environment.testplay === undefined) !== (testplay === undefined)) {
+    throw new Error("Legacy TestPlay can be upgraded only to an exact approved component lock.");
+  }
+  const environment = ManagedUnityEnvironmentV2Schema.parse({
+    schemaVersion: 2,
+    environmentId: profile.environment.environmentId,
+    projectPath: profile.environment.projectPath,
+    unity: profile.environment.unity,
+    storage: {
+      component: workspaceStorage,
+      workspaceRoot: profile.environment.workspaceStorage.workspaceRoot,
+      provider: profile.environment.workspaceStorage.provider,
+      parentId: profile.environment.workspaceStorage.parentId,
+      compatibilityKey: profile.environment.workspaceStorage.compatibilityKey,
+    },
+    ...(testplay === undefined ? {} : { testplay }),
+    agent: profile.environment.agent,
+    editorPool: profile.environment.editorPool,
+    compatibilityInputs: profile.environment.compatibilityInputs,
+    configuredAt: profile.environment.configuredAt,
+  });
+  const root = path.resolve(rootValue);
+  await mkdir(root, { recursive: true });
+  const configPath = path.join(root, environment.environmentId + ".runtime.json");
+  await publishIdempotentFile(
+    configPath,
+    JSON.stringify(managedRuntimeConfig(environment), null, 2) + "\n",
+  );
+  return DesktopProjectProfileV3Schema.parse({
+    schemaVersion: 3,
+    profileId: profile.profileId,
+    label: profile.label,
+    projectPath: profile.projectPath,
+    batchConfigPath: configPath,
+    configLabel: "Managed components",
+    lastOpenedAt: new Date().toISOString(),
+    environment,
   });
 };

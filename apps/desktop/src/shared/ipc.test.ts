@@ -7,7 +7,9 @@ import {
   DesktopRuntimeSnapshotV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupDraftV1Schema,
+  DesktopSetupDraftV2Schema,
   DesktopStartRequestV1Schema,
+  HoneyBeeCompatibilityManifestV1Schema,
 } from "./ipc.js";
 
 describe("Desktop IPC contracts", () => {
@@ -150,5 +152,60 @@ describe("Desktop IPC contracts", () => {
     expect(DesktopSetupDraftV1Schema.safeParse({ ...draft, assetsDigest: "ignored" }).success).toBe(
       false,
     );
+  });
+
+  it("accepts only fixed Component Manager IDs, releases, and exact Setup versions", () => {
+    const payloads = [
+      {
+        role: "client",
+        source: "bundled",
+        fileName: "client.exe",
+        byteLength: 1,
+        sha256: "a".repeat(64),
+        archive: "none",
+      },
+      {
+        role: "host",
+        source: "bundled",
+        fileName: "host.exe",
+        byteLength: 1,
+        sha256: "b".repeat(64),
+        archive: "none",
+      },
+    ];
+    const manifest = {
+      schemaVersion: 1,
+      honeybeeVersion: "0.6.0",
+      workspaceStorage: [
+        {
+          componentId: "workspace-storage",
+          version: "1.0.0",
+          honeybeeVersion: "0.6.0",
+          platform: "win32",
+          architecture: "x64",
+          payloads,
+        },
+      ],
+      testplay: [],
+    };
+    expect(HoneyBeeCompatibilityManifestV1Schema.safeParse(manifest).success).toBe(true);
+    expect(
+      HoneyBeeCompatibilityManifestV1Schema.safeParse({
+        ...manifest,
+        marketplace: "https://untrusted.example",
+      }).success,
+    ).toBe(false);
+    expect(
+      DesktopSetupDraftV2Schema.safeParse({
+        schemaVersion: 2,
+        label: "Game",
+        projectPath: "C:\\Project",
+        unityPath: "C:\\Unity\\Unity.exe",
+        workspaceStorageVersion: "1.0.0",
+        workspaceRoot: "C:\\Workspaces",
+        agent: { command: "opencode" },
+        editorCapacity: 1,
+      }).success,
+    ).toBe(true);
   });
 });

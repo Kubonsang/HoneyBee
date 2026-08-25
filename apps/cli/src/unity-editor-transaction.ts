@@ -815,6 +815,15 @@ export class UnityEditorWorkTransaction {
           sourceProjectPath: config.sourceProjectPath,
           workspacePath,
           baseManifest: sourceBefore,
+          verification: {
+            workspaceIntegrity: "verified",
+            compile: execution.capabilities.some((capability) => capability.kind === "compile")
+              ? "passed"
+              : "not-run",
+            warmTest: execution.capabilities.some((capability) => capability.kind === "warm-test")
+              ? "passed"
+              : "not-run",
+          },
           ignoredPaths: bridgeOverlayPaths,
           verifySource: async () => {
             if (

@@ -15,28 +15,31 @@ project for fault injection.
 ## 2. Project and Doctor
 
 1. Start the packaged executable, open Setup Center, and select the fixture Unity project.
-2. Confirm the exact project Unity version is preferred and the read-only bundled
-   `unity-workspace-storage` path is populated. Select OpenCode and the broker-owned workspace root.
-   Enable the optional TestPlay capability backend for this full-flow dogfood run, then select
-   TestPlay and its Bridge package.
-3. Run **Install & prepare environment** and approve its single storage-service elevation prompt.
+2. Confirm the exact project Unity version is preferred and Component Manager lists the bundled
+   `unity-workspace-storage` version. Select OpenCode and the broker-owned workspace root, then
+   explicitly activate that storage version with the Administrator prompt.
+3. If the fixed compatibility manifest offers TestPlay, explicitly install that CLI/Bridge version
+   and enable compile/warm-test. Otherwise keep validation disabled and verify that the UI identifies
+   the resulting patch as workspace-integrity-only with compile/warm-test `not-run`. Run
+   **Install & prepare environment**.
    Confirm Setup reaches `setup.completed`, the source tree
    remains unchanged, the staging project shell is removed, and the immutable parent is reusable.
 4. Change only a fixture file under `Assets` and provision again. Confirm the compatibility key and
    parent stay the same. Restore it, change a copy of Packages/required ProjectSettings/Bridge, and
    confirm a different compatibility key is required.
 5. Restart Desktop and confirm the managed project remains in Recent Projects.
-6. Run Doctor. Unity, HoneyBee runtime, TestPlay version and protocol 3 compile/warm-test command
-   surface, Agent, bundled workspace-storage pin/service, managed compatibility inputs, project/config
-   binding, and physical path isolation must pass. An Agent probe may remain skipped unless it was
-   explicitly configured.
+6. Run Doctor. Unity, HoneyBee runtime, Agent, exact workspace-storage lock/active service, managed
+   compatibility inputs, project/config binding, and physical path isolation must pass. When
+   TestPlay was installed, its exact lock and protocol 3 compile/warm-test command surface must also
+   pass; otherwise Doctor must report that optional backend as unavailable rather than failed. An
+   Agent probe may remain skipped unless it was explicitly configured.
 7. Change one harmless pinned path and confirm Doctor and Work start fail closed without starting an
    Agent. Restore it before continuing.
 
 ## 3. Batch, queue, and live detail
 
-1. Submit at least two Works with distinct tasks and priorities; select compile and warm-test on at
-   least one Work.
+1. Submit at least two Works with distinct tasks and priorities. When an approved TestPlay release
+   is installed, select compile and warm-test on at least one Work; otherwise use Agent-only Works.
 2. Confirm Agent phases overlap when `maxParallelWorks` permits it.
 3. With Editor capacity lower than Work count, confirm only Unity capability phases wait and the
    Command Center shows priority/FIFO queue order, assigned slot, and Editor ownership.

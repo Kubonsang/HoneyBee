@@ -1,4 +1,5 @@
-import { lstat, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { lstat, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -20,6 +21,7 @@ const fixture = async () => {
   const unity = path.join(root, "Unity.exe");
   const testplay = path.join(root, "testplay.exe");
   const storage = path.join(root, "unity-workspace-storage.exe");
+  const storageHost = path.join(root, "honeybee-workspace-storage-host.exe");
   const agent = path.join(root, "opencode.exe");
   const workspace = path.join(root, "workspaces");
   const setupRoot = path.join(root, "setups");
@@ -47,9 +49,40 @@ const fixture = async () => {
   await writeFile(unity, "unity-v1");
   await writeFile(testplay, "testplay-v1");
   await writeFile(storage, "storage-v1");
+  await writeFile(storageHost, "storage-host-v1");
   await writeFile(agent, "agent-v1");
-  return { root, project, overlay, unity, testplay, storage, agent, workspace, setupRoot };
+  return {
+    root,
+    project,
+    overlay,
+    unity,
+    testplay,
+    storage,
+    storageHost,
+    agent,
+    workspace,
+    setupRoot,
+  };
 };
+
+const fileLock = async (
+  role: "client" | "host",
+  target: string,
+): Promise<{
+  role: "client" | "host";
+  path: string;
+  kind: "file";
+  byteLength: number;
+  sha256: string;
+}> => ({
+  role,
+  path: target,
+  kind: "file",
+  byteLength: (await stat(target)).size,
+  sha256: createHash("sha256")
+    .update(await readFile(target))
+    .digest("hex"),
+});
 
 const waitForTerminal = async (coordinator: DesktopSetupCoordinator, setupId: string) => {
   for (let attempt = 0; attempt < 200; attempt += 1) {
@@ -186,11 +219,25 @@ describe("managed Unity compatibility", () => {
       workspaceRoot: paths.workspace,
       agent: { command: paths.agent },
       editorCapacity: 2,
+      componentLocks: {
+        workspaceStorage: {
+          schemaVersion: 1,
+          componentId: "workspace-storage",
+          version: "1.0.0",
+          receiptDigest: "a".repeat(64),
+          files: [
+            await fileLock("client", paths.storage),
+            await fileLock("host", paths.storageHost),
+          ],
+        },
+      },
     });
     const terminal = await waitForTerminal(coordinator, started.setupId);
     expect(terminal.state).toBe("completed");
     expect(shellObserved).toBe(true);
     expect(profiles).toHaveLength(1);
+    expect(profiles[0]).toHaveProperty("schemaVersion", 3);
+    expect(profiles[0]).toHaveProperty("environment.storage.component.version", "1.0.0");
     expect(profiles[0]).not.toHaveProperty("environment.testplay");
     expect(profiles[0]).not.toHaveProperty("environment.bridgeOverlay");
     await expect(lstat(projectRoot)).rejects.toMatchObject({ code: "ENOENT" });

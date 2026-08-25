@@ -188,7 +188,14 @@ export const VerifiedPatchViewV1Schema = z
     schemaVersion: z.literal(1),
     runId: RunIdSchema,
     patch: ArtifactRefSchema,
-    manifestVersion: z.union([z.literal(1), z.literal(2)]),
+    manifestVersion: z.union([z.literal(1), z.literal(2), z.literal(3)]),
+    verification: z
+      .object({
+        workspaceIntegrity: z.enum(["verified", "legacy-unknown"]),
+        compile: z.enum(["passed", "not-run", "legacy-unknown"]),
+        warmTest: z.enum(["passed", "not-run", "legacy-unknown"]),
+      })
+      .strict(),
     sourceProjectPath: z.string().min(1),
     sourceState: z.enum(["clean", "result", "drift", "unavailable"]),
     disposition: z.enum([

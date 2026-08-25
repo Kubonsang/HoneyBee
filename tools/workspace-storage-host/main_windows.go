@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
 	"golang.org/x/sys/windows"
@@ -67,16 +68,17 @@ func execute(args []string) (any, error) {
 		flags.SetOutput(io.Discard)
 		workspaceRoot := flags.String("workspace-root", "", "absolute workspace root")
 		userSID := flags.String("user-sid", "", "installed user SID")
+		replace := flags.Bool("replace", false, "replace the existing HoneyBee service binary")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 			return nil, errors.New("invalid install arguments")
 		}
-		return install(*workspaceRoot, *userSID)
+		return install(*workspaceRoot, *userSID, *replace)
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
-func install(workspaceRootValue, userSID string) (any, error) {
+func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 	if !workspace.IsElevated() {
 		return nil, errors.New("workspace storage installation requires elevation")
 	}
@@ -121,7 +123,7 @@ func install(workspaceRootValue, userSID string) (any, error) {
 				"workspaceRoot": workspaceRoot,
 			}, nil
 		}
-		return verifyExisting(receiptPath, workspaceRoot, userSID, existing)
+		return verifyExisting(receiptPath, workspaceRoot, userSID, existing, replace)
 	}
 
 	if existingReceipt, receiptErr := loadReceipt(receiptPath); receiptErr == nil {
@@ -207,7 +209,7 @@ func install(workspaceRootValue, userSID string) (any, error) {
 	}, nil
 }
 
-func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Service) (any, error) {
+func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Service, replace bool) (any, error) {
 	receipt, err := loadReceipt(receiptPath)
 	if err != nil {
 		return nil, err
@@ -218,6 +220,27 @@ func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Ser
 		receipt.UserSID != userSID {
 		return nil, errors.New("workspace storage install receipt does not match this user or root")
 	}
+	source, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if err := reconcileServiceExecutable(receipt.Executable, service); err != nil {
+		return nil, err
+	}
+	matches, err := sameFileContent(source, receipt.Executable)
+	if err != nil {
+		return nil, err
+	}
+	switched := false
+	if !matches {
+		if !replace {
+			return nil, errors.New("workspace storage service uses a different version; explicit replacement is required")
+		}
+		if err := replaceServiceExecutable(source, receipt.Executable, service); err != nil {
+			return nil, err
+		}
+		switched = true
+	}
 	status, err := service.Query()
 	if err != nil {
 		return nil, err
@@ -227,13 +250,198 @@ func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Ser
 			return nil, err
 		}
 	}
+	resultStatus := "ALREADY_INSTALLED"
+	if switched {
+		resultStatus = "SWITCHED"
+	}
 	return map[string]any{
 		"schemaVersion": 1,
 		"ok":            true,
-		"status":        "ALREADY_INSTALLED",
+		"status":        resultStatus,
 		"service":       receipt.ServiceName,
 		"workspaceRoot": receipt.WorkspaceRoot,
 	}, nil
+}
+
+func sameFileContent(left, right string) (bool, error) {
+	leftBytes, err := os.ReadFile(left)
+	if err != nil {
+		return false, err
+	}
+	rightBytes, err := os.ReadFile(right)
+	if err != nil {
+		return false, err
+	}
+	return sha256.Sum256(leftBytes) == sha256.Sum256(rightBytes), nil
+}
+
+func waitForServiceState(service *mgr.Service, expected svc.State, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if status.State == expected {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("workspace storage service state transition timed out")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func replaceServiceExecutable(source, destination string, service *mgr.Service) error {
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State != svc.Stopped {
+		if _, err := service.Control(svc.Stop); err != nil {
+			return err
+		}
+		if err := waitForServiceState(service, svc.Stopped, 30*time.Second); err != nil {
+			return err
+		}
+	}
+	next, previous := replacementPaths(destination)
+	_ = os.Remove(next)
+	if _, err := os.Stat(previous); err == nil {
+		return errors.New("workspace storage replacement backup was not reconciled")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := copyExclusiveVerified(source, next); err != nil {
+		return err
+	}
+	if err := os.Rename(destination, previous); err != nil {
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Rename(next, destination); err != nil {
+		_ = os.Rename(previous, destination)
+		_ = os.Remove(next)
+		return err
+	}
+	rollback := func() {
+		_ = os.Remove(destination)
+		_ = os.Rename(previous, destination)
+		_ = service.Start()
+	}
+	if err := service.Start(); err != nil {
+		rollback()
+		return err
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		_, _ = service.Control(svc.Stop)
+		_ = waitForServiceState(service, svc.Stopped, 30*time.Second)
+		rollback()
+		return err
+	}
+	matches, err := sameFileContent(source, destination)
+	if err != nil || !matches {
+		_, _ = service.Control(svc.Stop)
+		_ = waitForServiceState(service, svc.Stopped, 30*time.Second)
+		rollback()
+		return errors.New("workspace storage service replacement did not preserve the approved binary")
+	}
+	if err := os.Remove(previous); err != nil {
+		return err
+	}
+	return nil
+}
+
+func replacementPaths(destination string) (string, string) {
+	directory := filepath.Dir(destination)
+	return filepath.Join(directory, ".replacement-next.exe"), filepath.Join(directory, ".replacement-previous.exe")
+}
+
+func fileExists(target string) (bool, error) {
+	_, err := os.Stat(target)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func reconcileServiceExecutable(destination string, service *mgr.Service) error {
+	next, previous := replacementPaths(destination)
+	destinationExists, err := fileExists(destination)
+	if err != nil {
+		return err
+	}
+	previousExists, err := fileExists(previous)
+	if err != nil {
+		return err
+	}
+	nextExists, err := fileExists(next)
+	if err != nil {
+		return err
+	}
+	if !destinationExists {
+		if !previousExists {
+			return errors.New("workspace storage service executable is missing without a recoverable backup")
+		}
+		if err := os.Rename(previous, destination); err != nil {
+			return err
+		}
+		previousExists = false
+		if nextExists {
+			if err := os.Remove(next); err != nil {
+				return err
+			}
+			nextExists = false
+		}
+	}
+	if nextExists {
+		if err := os.Remove(next); err != nil {
+			return err
+		}
+	}
+	if !previousExists {
+		return nil
+	}
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State == svc.Stopped {
+		if err := service.Start(); err != nil {
+			return restorePreviousServiceExecutable(destination, previous, service, err)
+		}
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		return restorePreviousServiceExecutable(destination, previous, service, err)
+	}
+	return os.Remove(previous)
+}
+
+func restorePreviousServiceExecutable(destination, previous string, service *mgr.Service, cause error) error {
+	status, queryErr := service.Query()
+	if queryErr == nil && status.State != svc.Stopped {
+		_, _ = service.Control(svc.Stop)
+		queryErr = waitForServiceState(service, svc.Stopped, 30*time.Second)
+	}
+	if queryErr != nil {
+		return errors.Join(cause, queryErr)
+	}
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return errors.Join(cause, err)
+	}
+	if err := os.Rename(previous, destination); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := service.Start(); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		return errors.Join(cause, err)
+	}
+	return nil
 }
 
 func loadReceipt(target string) (installReceipt, error) {

@@ -10,29 +10,35 @@ import { HoneyBeeRuntimeFacade } from "honeybee-cli/runtime";
 import {
   DesktopArtifactRequestV1Schema,
   DesktopBootstrapV1Schema,
+  DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectProfileV1Schema,
-  DesktopProjectProfileV2Schema,
+  DesktopProjectProfileSchema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
-  DesktopSetupDraftV1Schema,
+  DesktopSetupDraftSchema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupInstallStorageRequestV1Schema,
   DesktopSetupInstallStorageResultV1Schema,
   DesktopSetupPathRequestV1Schema,
+  DesktopStorageActivateRequestV1Schema,
+  type ProjectComponentLockV1,
 } from "../shared/ipc.js";
+import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
 import { DesktopSettingsStore } from "./settings.js";
 import {
   DesktopSetupCoordinator,
+  ResolvedDesktopSetupDraftV1Schema,
   discoverDesktopSetup,
   installBundledWorkspaceStorage,
   materializeImportedManagedProfile,
+  upgradeManagedProfileV2,
   validateManagedEnvironment,
 } from "./setup.js";
 
@@ -52,8 +58,14 @@ const bundledToolsRoot = app.isPackaged
   ? path.join(process.resourcesPath, "win32-x64")
   : path.join(app.getAppPath(), ".tools", "win32-x64");
 const bundledWorkspaceStoragePath = path.join(bundledToolsRoot, "unity-workspace-storage.exe");
-const bundledWorkspaceStorageHostPath = path.join(
-  bundledToolsRoot,
+const compatibilityManifestPath = app.isPackaged
+  ? path.join(process.resourcesPath, "component-compatibility-v1.json")
+  : path.join(app.getAppPath(), "resources", "component-compatibility-v1.json");
+const activeWorkspaceStorageHostPath = path.join(
+  process.env.ProgramData ?? "C:\\ProgramData",
+  "HoneyBee",
+  "WorkspaceStorage",
+  "broker",
   "honeybee-workspace-storage-host.exe",
 );
 const settings = new DesktopSettingsStore(userData);
@@ -63,6 +75,15 @@ const setup = new DesktopSetupCoordinator(path.join(userData, "setups"), (profil
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
 });
+const components = new DesktopComponentManager(
+  path.join(userData, "components"),
+  bundledToolsRoot,
+  await readCompatibilityManifest(compatibilityManifestPath),
+  undefined,
+  undefined,
+  activeWorkspaceStorageHostPath,
+);
+await components.ensureBundledWorkspaceStorage();
 
 const profileKey = (value: string): string => {
   const normalized = path.resolve(value);
@@ -88,8 +109,37 @@ const profileFor = async (profileId: string) => {
 };
 
 const validateProfile = async (profile: Awaited<ReturnType<typeof profileFor>>) => {
-  if (profile.schemaVersion === 2) await validateManagedEnvironment(profile);
+  if (profile.schemaVersion === 2 || profile.schemaVersion === 3) {
+    await validateManagedEnvironment(profile);
+  }
+  if (profile.schemaVersion === 3) {
+    await components.assertLock(profile.environment.storage.component);
+    await components.assertWorkspaceStorageActive(profile.environment.storage.component);
+    if (profile.environment.testplay !== undefined) {
+      await components.assertLock(profile.environment.testplay);
+    }
+  }
   return profile;
+};
+
+const componentFile = (
+  lock: ProjectComponentLockV1,
+  role: ProjectComponentLockV1["files"][number]["role"],
+): ProjectComponentLockV1["files"][number] => {
+  const matches = lock.files.filter((file) => file.role === role);
+  if (matches.length !== 1) throw new Error("Component lock role is missing or ambiguous.");
+  return matches[0] as ProjectComponentLockV1["files"][number];
+};
+
+const assertStorageSwitchSafe = async (): Promise<void> => {
+  const runs = await runtime.listRuns();
+  if (
+    runs.some(
+      (run) => !run.terminal || run.status === "cleanup-pending" || run.status === "indeterminate",
+    )
+  ) {
+    throw new Error("workspace-storage cannot switch while a Run is active or requires recovery.");
+  }
 };
 
 const bootstrap = async () =>
@@ -195,11 +245,41 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.setupStart,
     safeHandler(async (requestValue: unknown) => {
-      const request = DesktopSetupDraftV1Schema.parse(requestValue);
-      return setup.start({
-        ...request,
-        workspaceStoragePath: bundledWorkspaceStoragePath,
-      });
+      const request = DesktopSetupDraftSchema.parse(requestValue);
+      if (request.schemaVersion === 1) {
+        return setup.start({
+          ...request,
+          workspaceStoragePath: bundledWorkspaceStoragePath,
+        });
+      }
+      const storage = await components.lock("workspace-storage", request.workspaceStorageVersion);
+      await components.assertWorkspaceStorageActive(storage);
+      const testplay =
+        request.testplayVersion === undefined
+          ? undefined
+          : await components.lock("testplay", request.testplayVersion);
+      return setup.start(
+        ResolvedDesktopSetupDraftV1Schema.parse({
+          schemaVersion: 1,
+          label: request.label,
+          projectPath: request.projectPath,
+          unityPath: request.unityPath,
+          workspaceStoragePath: componentFile(storage, "client").path,
+          workspaceRoot: request.workspaceRoot,
+          ...(testplay === undefined
+            ? {}
+            : {
+                testplayPath: componentFile(testplay, "cli").path,
+                bridgeOverlayPath: componentFile(testplay, "bridge-overlay").path,
+              }),
+          agent: request.agent,
+          editorCapacity: request.editorCapacity,
+          componentLocks: {
+            workspaceStorage: storage,
+            ...(testplay === undefined ? {} : { testplay }),
+          },
+        }),
+      );
     }),
   );
   ipcMain.handle(
@@ -227,12 +307,43 @@ const registerIpc = (): void => {
     DesktopIpcChannels.setupInstallStorage,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopSetupInstallStorageRequestV1Schema.parse(requestValue);
-      await installBundledWorkspaceStorage(bundledWorkspaceStorageHostPath, request.workspaceRoot);
+      const receipt = await components.ensureBundledWorkspaceStorage();
+      await installBundledWorkspaceStorage(
+        componentFile(await components.lock("workspace-storage", receipt.version), "host").path,
+        request.workspaceRoot,
+      );
+      await components.activateWorkspaceStorage(receipt.version, request.workspaceRoot);
       return DesktopSetupInstallStorageResultV1Schema.parse({
         schemaVersion: 1,
         installed: true,
         message: "HoneyBee workspace storage was installed for the current user.",
       });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.componentsSnapshot,
+    safeHandler(async () => components.snapshot()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.componentInstall,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopComponentInstallRequestV1Schema.parse(requestValue);
+      return components.installTestPlay(request.version, request.approved);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.storageActivate,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopStorageActivateRequestV1Schema.parse(requestValue);
+      await assertStorageSwitchSafe();
+      await components.installWorkspaceStorage(request.version);
+      const lock = await components.lock("workspace-storage", request.version);
+      await installBundledWorkspaceStorage(
+        componentFile(lock, "host").path,
+        request.workspaceRoot,
+        true,
+      );
+      return components.activateWorkspaceStorage(request.version, request.workspaceRoot);
     }),
   );
   ipcMain.handle(
@@ -245,10 +356,57 @@ const registerIpc = (): void => {
       });
       const selectedPath = selected.filePaths[0];
       if (selected.canceled || selectedPath === undefined) return null;
-      const imported = DesktopProjectProfileV2Schema.parse(
+      const imported = DesktopProjectProfileSchema.parse(
         JSON.parse(await readFile(selectedPath, "utf8")),
       );
-      const profile = await materializeImportedManagedProfile(
+      if (imported.schemaVersion === 1) {
+        throw new Error("Legacy path-only profiles cannot be imported as managed environments.");
+      }
+      let profile;
+      if (imported.schemaVersion === 2) {
+        const approvedStorage = components
+          .releases("workspace-storage")
+          .find((release) =>
+            release.payloads.some(
+              (payload) =>
+                payload.role === "client" &&
+                payload.sha256 === imported.environment.workspaceStorage.sha256,
+            ),
+          );
+        if (approvedStorage !== undefined) {
+          await components.installWorkspaceStorage(approvedStorage.version);
+          const storageLock = await components.lock("workspace-storage", approvedStorage.version);
+          const snapshot = await components.snapshot();
+          const installedTestplay =
+            imported.environment.testplay === undefined
+              ? undefined
+              : snapshot.installed.find(
+                  (receipt) =>
+                    receipt.componentId === "testplay" &&
+                    receipt.files.some(
+                      (file) =>
+                        file.role === "cli" &&
+                        file.sha256 === imported.environment.testplay?.sha256,
+                    ) &&
+                    receipt.files.some(
+                      (file) =>
+                        file.role === "bridge-overlay" &&
+                        file.sha256 === imported.environment.bridgeOverlay?.digest,
+                    ),
+                );
+          if (imported.environment.testplay === undefined || installedTestplay !== undefined) {
+            profile = await upgradeManagedProfileV2(
+              path.join(userData, "managed-environments"),
+              imported,
+              storageLock,
+              installedTestplay === undefined
+                ? undefined
+                : await components.lock("testplay", installedTestplay.version),
+            );
+          }
+        }
+      }
+      profile ??= await materializeImportedManagedProfile(
         path.join(userData, "managed-environments"),
         imported,
       );
@@ -260,7 +418,10 @@ const registerIpc = (): void => {
     DesktopIpcChannels.setupExport,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopProfileIdRequestV1Schema.parse(requestValue);
-      const profile = DesktopProjectProfileV2Schema.parse(await profileFor(request.profileId));
+      const profile = DesktopProjectProfileSchema.parse(await profileFor(request.profileId));
+      if (profile.schemaVersion === 1) {
+        throw new Error("Legacy path-only profiles cannot be exported as managed environments.");
+      }
       const selected = await showSaveDialog({
         title: "Export HoneyBee managed environment",
         defaultPath: `${profile.label.replaceAll(/[^A-Za-z0-9._-]/gu, "-")}.honeybee.json`,
@@ -289,9 +450,17 @@ const registerIpc = (): void => {
         projectPath: profile.projectPath,
         batchConfigPath: profile.batchConfigPath,
       });
-      if (profile.schemaVersion !== 2) return report;
+      if (profile.schemaVersion !== 2 && profile.schemaVersion !== 3) return report;
       try {
-        await validateManagedEnvironment(profile);
+        await validateProfile(profile);
+        const componentSummary =
+          profile.schemaVersion === 3
+            ? "workspace-storage " +
+              profile.environment.storage.component.version +
+              (profile.environment.testplay === undefined
+                ? "; TestPlay not installed (compile/warm-test not run)"
+                : "; TestPlay " + profile.environment.testplay.version)
+            : "Legacy managed paths remain pinned.";
         return {
           ...report,
           checks: [
@@ -301,8 +470,21 @@ const registerIpc = (): void => {
               label: "Managed environment",
               status: "pass" as const,
               code: "managed.pin-valid",
-              summary: "Compatibility inputs and pinned local tools still match.",
-              target: profile.environment.workspaceStorage.compatibilityKey,
+              summary: "Compatibility inputs and exact component locks still match.",
+              target:
+                profile.environment.schemaVersion === 1
+                  ? profile.environment.workspaceStorage.compatibilityKey
+                  : profile.environment.storage.compatibilityKey,
+            },
+            {
+              id: "managed.components",
+              label: "Managed components",
+              status: profile.schemaVersion === 3 ? ("pass" as const) : ("warning" as const),
+              code:
+                profile.schemaVersion === 3
+                  ? "managed.components-locked"
+                  : "managed.components-legacy",
+              summary: componentSummary,
             },
           ],
         };
@@ -319,7 +501,10 @@ const registerIpc = (): void => {
               code: "managed.pin-invalid",
               summary:
                 "Packages, required settings, Bridge, Unity, or a pinned tool changed. Run Setup Center again.",
-              target: profile.environment.workspaceStorage.compatibilityKey,
+              target:
+                profile.environment.schemaVersion === 1
+                  ? profile.environment.workspaceStorage.compatibilityKey
+                  : profile.environment.storage.compatibilityKey,
             },
           ],
         };

@@ -5,15 +5,17 @@ import path from "node:path";
 
 import {
   ContentDigestSchema,
+  PatchVerificationV1Schema,
   UnityPatchManifestSchema,
-  UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
   type ArtifactKind,
   type ArtifactMediaType,
   type ArtifactRef,
   type ContentDigest,
   type RunId,
   type UnityPatchManifest,
-  type UnityPatchManifestV2,
+  type PatchVerificationV1,
+  type UnityPatchManifestV3,
 } from "@honeybee/orchestration-contracts";
 import { HoneyBeeCoreError, type ArtifactStore } from "@honeybee/core";
 
@@ -274,6 +276,7 @@ export class UnityPatchBuilder {
       sourceProjectPath: string;
       workspacePath: string;
       baseManifest: ArtifactRef;
+      verification?: PatchVerificationV1;
       ignoredPaths?: ReadonlySet<string>;
       verifySource: () => Promise<void>;
       publishBytes: PublishBytes;
@@ -295,7 +298,7 @@ export class UnityPatchBuilder {
       const sourceByPath = new Map(sourceSnapshot.files.map((file) => [file.path, file]));
       const resultByPath = new Map(workspaceResult.files.map((file) => [file.path, file]));
       const paths = [...new Set([...sourceByPath.keys(), ...resultByPath.keys()])].sort(pathOrder);
-      const entries: UnityPatchManifestV2["entries"][number][] = [];
+      const entries: UnityPatchManifestV3["entries"][number][] = [];
       let patchBytes = 0;
       let capturedBaseBytes = 0;
       const captureBase = async (
@@ -365,11 +368,18 @@ export class UnityPatchBuilder {
           });
         }
       }
-      const manifest = UnityPatchManifestV2Schema.parse({
-        schemaVersion: 2,
+      const manifest = UnityPatchManifestV3Schema.parse({
+        schemaVersion: 3,
         baseManifest: input.baseManifest,
         baseTreeManifest,
         resultManifest,
+        verification: PatchVerificationV1Schema.parse(
+          input.verification ?? {
+            workspaceIntegrity: "verified",
+            compile: "not-run",
+            warmTest: "not-run",
+          },
+        ),
         entries,
       });
       const patch = await input.publishJson("unity-verified-patch", manifest);

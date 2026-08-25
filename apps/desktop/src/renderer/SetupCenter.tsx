@@ -12,14 +12,15 @@ import {
 } from "@phosphor-icons/react";
 
 import {
-  DesktopSetupDraftV1Schema,
-  type DesktopProjectProfileV2,
+  DesktopSetupDraftV2Schema,
+  type ComponentManagerSnapshotV1,
+  type DesktopProjectProfile,
   type DesktopSetupDiscoveryV1,
   type DesktopSetupStatusV1,
 } from "../shared/ipc.js";
 
 interface SetupCenterProps {
-  readonly onComplete: (profile: DesktopProjectProfileV2) => void;
+  readonly onComplete: (profile: DesktopProjectProfile) => void;
   readonly onError: (message: string) => void;
 }
 
@@ -28,15 +29,17 @@ const readableError = (error: unknown): string =>
 
 export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
   const [discovery, setDiscovery] = useState<DesktopSetupDiscoveryV1>();
+  const [components, setComponents] = useState<ComponentManagerSnapshotV1>();
   const [status, setStatus] = useState<DesktopSetupStatusV1>();
-  const [busy, setBusy] = useState<"discover" | "start" | "import">();
+  const [busy, setBusy] = useState<
+    "discover" | "start" | "import" | "install-testplay" | "activate-storage"
+  >();
   const [label, setLabel] = useState("");
   const [projectPath, setProjectPath] = useState("");
   const [unityPath, setUnityPath] = useState("");
-  const [testplayPath, setTestplayPath] = useState("");
-  const [storagePath, setStoragePath] = useState("");
+  const [testplayVersion, setTestplayVersion] = useState("");
+  const [storageVersion, setStorageVersion] = useState("");
   const [workspaceRoot, setWorkspaceRoot] = useState("");
-  const [bridgePath, setBridgePath] = useState("");
   const [validationEnabled, setValidationEnabled] = useState(false);
   const [agentPath, setAgentPath] = useState("");
   const [agentArgs, setAgentArgs] = useState("");
@@ -66,18 +69,26 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
   const loadDiscovery = async (selectedProject: string): Promise<void> => {
     setBusy("discover");
     try {
-      const next = await window.honeybee.discoverSetup({
-        schemaVersion: 1,
-        projectPath: selectedProject,
-      });
+      const [next, componentState] = await Promise.all([
+        window.honeybee.discoverSetup({
+          schemaVersion: 1,
+          projectPath: selectedProject,
+        }),
+        window.honeybee.components(),
+      ]);
       setDiscovery(next);
+      setComponents(componentState);
       setProjectPath(next.projectPath);
       setLabel(next.projectPath.split(/[\\/]/u).at(-1) ?? "Unity project");
       setUnityPath(next.unity[0]?.path ?? "");
-      setStoragePath(next.workspaceStorage[0]?.path ?? "");
+      setStorageVersion(
+        componentState.activeWorkspaceStorage?.version ??
+          componentState.releases.find((release) => release.componentId === "workspace-storage")
+            ?.version ??
+          "",
+      );
       setAgentPath(next.agents[0]?.path ?? "");
-      setTestplayPath("");
-      setBridgePath("");
+      setTestplayVersion("");
       setValidationEnabled(false);
       setWorkspaceRoot(next.suggestedWorkspaceRoot);
     } catch (error) {
@@ -106,15 +117,14 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
 
   const valid = useMemo(
     () =>
-      DesktopSetupDraftV1Schema.safeParse({
-        schemaVersion: 1,
+      DesktopSetupDraftV2Schema.safeParse({
+        schemaVersion: 2,
         label,
         projectPath,
         unityPath,
-        ...(validationEnabled ? { testplayPath } : {}),
-        workspaceStoragePath: storagePath,
+        workspaceStorageVersion: storageVersion,
         workspaceRoot,
-        ...(validationEnabled ? { bridgeOverlayPath: bridgePath } : {}),
+        ...(validationEnabled ? { testplayVersion } : {}),
         agent: {
           command: agentPath,
           ...(agentArgs.trim().length === 0 ? {} : { args: agentArgs.trim().split(/\s+/u) }),
@@ -124,12 +134,11 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
     [
       agentArgs,
       agentPath,
-      bridgePath,
       editorCapacity,
       label,
       projectPath,
-      storagePath,
-      testplayPath,
+      storageVersion,
+      testplayVersion,
       unityPath,
       validationEnabled,
       workspaceRoot,
@@ -139,19 +148,14 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
   const start = async (): Promise<void> => {
     setBusy("start");
     try {
-      await window.honeybee.installSetupStorage({
-        schemaVersion: 1,
-        workspaceRoot,
-      });
-      const draft = DesktopSetupDraftV1Schema.parse({
-        schemaVersion: 1,
+      const draft = DesktopSetupDraftV2Schema.parse({
+        schemaVersion: 2,
         label,
         projectPath,
         unityPath,
-        ...(validationEnabled ? { testplayPath } : {}),
-        workspaceStoragePath: storagePath,
+        workspaceStorageVersion: storageVersion,
         workspaceRoot,
-        ...(validationEnabled ? { bridgeOverlayPath: bridgePath } : {}),
+        ...(validationEnabled ? { testplayVersion } : {}),
         agent: {
           command: agentPath,
           ...(agentArgs.trim().length === 0 ? {} : { args: agentArgs.trim().split(/\s+/u) }),
@@ -171,6 +175,49 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
     try {
       const profile = await window.honeybee.importSetup();
       if (profile !== null) onComplete(profile);
+    } catch (error) {
+      onError(readableError(error));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const testplayReleases =
+    components?.releases.filter((release) => release.componentId === "testplay") ?? [];
+  const installedTestplayVersions = new Set(
+    components?.installed
+      .filter((receipt) => receipt.componentId === "testplay")
+      .map((receipt) => receipt.version) ?? [],
+  );
+  const installTestplay = async (version: string): Promise<void> => {
+    setBusy("install-testplay");
+    try {
+      await window.honeybee.installComponent({
+        schemaVersion: 1,
+        componentId: "testplay",
+        version,
+        approved: true,
+      });
+      const next = await window.honeybee.components();
+      setComponents(next);
+      setTestplayVersion(version);
+      setValidationEnabled(true);
+    } catch (error) {
+      onError(readableError(error));
+    } finally {
+      setBusy(undefined);
+    }
+  };
+  const activateStorage = async (): Promise<void> => {
+    setBusy("activate-storage");
+    try {
+      await window.honeybee.activateStorage({
+        schemaVersion: 1,
+        version: storageVersion,
+        workspaceRoot,
+        approved: true,
+      });
+      setComponents(await window.honeybee.components());
     } catch (error) {
       onError(readableError(error));
     } finally {
@@ -231,54 +278,98 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
             onChange={setUnityPath}
             onBrowse={() => void choose("unity", setUnityPath)}
           />
-          <SetupField
-            label="Bundled workspace-storage"
-            value={storagePath}
-            onChange={setStoragePath}
-            readOnly
-          />
+          <label className="setup-field">
+            <span>Bundled workspace-storage exact version</span>
+            <div>
+              <select
+                value={storageVersion}
+                onChange={(event) => setStorageVersion(event.target.value)}
+              >
+                {components?.releases
+                  .filter((release) => release.componentId === "workspace-storage")
+                  .map((release) => (
+                    <option key={release.version} value={release.version}>
+                      {release.version}
+                      {components.activeWorkspaceStorage?.version === release.version
+                        ? " (active)"
+                        : ""}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          </label>
           <SetupField
             label="Workspace root"
             value={workspaceRoot}
             onChange={setWorkspaceRoot}
             onBrowse={() => void choose("workspace-root", setWorkspaceRoot)}
           />
+          {storageVersion.length > 0 &&
+            components?.activeWorkspaceStorage?.version !== storageVersion && (
+              <button
+                className="secondary"
+                disabled={busy !== undefined || workspaceRoot.length === 0}
+                onClick={() => void activateStorage()}
+              >
+                <Wrench size={17} /> Activate workspace-storage {storageVersion}
+              </button>
+            )}
           <label className="setup-capacity">
             <span>
               <input
                 type="checkbox"
                 checked={validationEnabled}
+                disabled={installedTestplayVersions.size === 0}
                 onChange={(event) => {
                   const enabled = event.target.checked;
                   setValidationEnabled(enabled);
                   if (enabled) {
-                    setTestplayPath(discovery?.testplay[0]?.path ?? "");
-                    setBridgePath(discovery?.bridgeOverlays[0]?.path ?? "");
+                    setTestplayVersion([...installedTestplayVersions][0] ?? "");
                   } else {
-                    setTestplayPath("");
-                    setBridgePath("");
+                    setTestplayVersion("");
                   }
                 }}
               />{" "}
               Enable TestPlay compile / warm-test
             </span>
-            <small>Optional. Agent-only verified patch Work does not require TestPlay.</small>
+            <small>
+              Optional. Without it HoneyBee verifies workspace/patch integrity; compile and
+              warm-test are recorded as not run.
+            </small>
           </label>
+          {testplayReleases.length === 0 && (
+            <div className="setup-addon-note">
+              No protocol-v3 TestPlay release is approved by this HoneyBee compatibility manifest.
+            </div>
+          )}
+          {testplayReleases
+            .filter((release) => !installedTestplayVersions.has(release.version))
+            .map((release) => (
+              <button
+                key={release.version}
+                className="secondary"
+                disabled={busy !== undefined}
+                onClick={() => void installTestplay(release.version)}
+              >
+                <DownloadSimple size={17} /> Install TestPlay {release.version}
+              </button>
+            ))}
           {validationEnabled && (
-            <>
-              <SetupField
-                label="TestPlay"
-                value={testplayPath}
-                onChange={setTestplayPath}
-                onBrowse={() => void choose("testplay", setTestplayPath)}
-              />
-              <SetupField
-                label="Bridge package overlay"
-                value={bridgePath}
-                onChange={setBridgePath}
-                onBrowse={() => void choose("bridge-overlay", setBridgePath)}
-              />
-            </>
+            <label className="setup-field">
+              <span>TestPlay exact version</span>
+              <div>
+                <select
+                  value={testplayVersion}
+                  onChange={(event) => setTestplayVersion(event.target.value)}
+                >
+                  {[...installedTestplayVersions].map((version) => (
+                    <option key={version} value={version}>
+                      {version}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </label>
           )}
           <div className="setup-pair">
             <SetupField
@@ -307,7 +398,12 @@ export function SetupCenter({ onComplete, onError }: SetupCenterProps) {
           </label>
           <button
             className="primary setup-run"
-            disabled={!valid || busy !== undefined || status?.state === "running"}
+            disabled={
+              !valid ||
+              busy !== undefined ||
+              status?.state === "running" ||
+              components?.activeWorkspaceStorage?.version !== storageVersion
+            }
             onClick={() => void start()}
           >
             <Play size={17} weight="fill" />{" "}

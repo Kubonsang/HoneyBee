@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -9,6 +9,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const workspaceStorageCommit = "506695b4f063c181681e99ef2a18e118d575c4a7";
+const workspaceStorageVersion = "0.0.0+506695b4f063";
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
@@ -89,10 +90,17 @@ try {
     JSON.stringify(
       {
         schemaVersion: 1,
+        workspaceStorageVersion,
         workspaceStorageCommit,
         files: {
-          "unity-workspace-storage.exe": await sha256(clientOutput),
-          "honeybee-workspace-storage-host.exe": await sha256(hostOutput),
+          "unity-workspace-storage.exe": {
+            byteLength: (await stat(clientOutput)).size,
+            sha256: await sha256(clientOutput),
+          },
+          "honeybee-workspace-storage-host.exe": {
+            byteLength: (await stat(hostOutput)).size,
+            sha256: await sha256(hostOutput),
+          },
         },
       },
       null,

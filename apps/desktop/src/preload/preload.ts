@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import {
   DesktopArtifactRequestV1Schema,
+  DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopIpcResponseSchemas,
@@ -11,10 +12,11 @@ import {
   DesktopRunRequestV1Schema,
   DesktopStartRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
-  DesktopSetupDraftV1Schema,
+  DesktopSetupDraftSchema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupInstallStorageRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
+  DesktopStorageActivateRequestV1Schema,
   type HoneyBeeDesktopApi,
 } from "../shared/ipc.js";
 
@@ -45,7 +47,7 @@ const api: HoneyBeeDesktopApi = {
     DesktopIpcResponseSchemas.setupStart.parse(
       await ipcRenderer.invoke(
         DesktopIpcChannels.setupStart,
-        DesktopSetupDraftV1Schema.parse(request),
+        DesktopSetupDraftSchema.parse(request),
       ),
     ),
   setupStatus: async (request) =>
@@ -74,6 +76,24 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.setupInstallStorage,
         DesktopSetupInstallStorageRequestV1Schema.parse(request),
+      ),
+    ),
+  components: async () =>
+    DesktopIpcResponseSchemas.componentsSnapshot.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.componentsSnapshot),
+    ),
+  installComponent: async (request) =>
+    DesktopIpcResponseSchemas.componentInstall.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.componentInstall,
+        DesktopComponentInstallRequestV1Schema.parse(request),
+      ),
+    ),
+  activateStorage: async (request) =>
+    DesktopIpcResponseSchemas.storageActivate.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.storageActivate,
+        DesktopStorageActivateRequestV1Schema.parse(request),
       ),
     ),
   importSetup: async () =>

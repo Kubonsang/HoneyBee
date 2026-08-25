@@ -14,11 +14,13 @@ The Work runtime must remain the existing v0.6 kernel; setup cannot become a sec
 ## Decision
 
 Desktop provides a local Setup Center in the main process. The sandboxed renderer sends strict,
-versioned discovery and setup requests through preload IPC. Setup performs no downloads. The
-packaged Desktop carries a commit-pinned `unity-workspace-storage` client and a minimal HoneyBee
-service host as internal resources. Starting Setup installs or starts that bundled service with one
-explicit Windows elevation prompt; the renderer cannot substitute an external storage executable.
-All other operations run as the installed user.
+versioned discovery and setup requests through preload IPC. The packaged Desktop carries a
+commit-pinned `unity-workspace-storage` client and a minimal HoneyBee service host as internal
+resources. Component Manager installs those immutable bytes and can install an optional TestPlay
+CLI/Bridge pair only from HoneyBee's fixed URL/SHA-256 compatibility manifest. Starting Setup
+installs or explicitly switches the single machine-global storage service with one Windows
+elevation prompt; the renderer cannot substitute an external storage executable. All other
+operations run as the installed user.
 
 Setup always pins Unity, bundled `unity-workspace-storage`, and the selected Agent command.
 TestPlay protocol 3 and the TestPlay Bridge tree are an optional, all-or-nothing capability backend.
@@ -59,6 +61,6 @@ local runtime config instead of trusting an exported `batchConfigPath`.
 Ordinary Assets changes reuse the same parent, while changes that affect Library compatibility
 produce a new key. Setup is restartable and cleanup-safe without broadening HoneyBee Core's
 workspace abstraction. TestPlay is no longer a prerequisite for Agent-only verified-patch Work;
-compile and warm-test remain unavailable until TestPlay and its Bridge are configured. Automatic
-downloads, provider fallback, GUI scheduling, Git Worktree
+compile and warm-test remain unavailable until an approved TestPlay/Bridge release is installed.
+Arbitrary remote component sources, a plugin ecosystem, provider fallback, GUI scheduling, Git Worktree
 integration, Recipe/Semantic IR systems, and full power-loss durability remain out of scope.

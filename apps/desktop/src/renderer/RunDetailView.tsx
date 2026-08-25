@@ -166,6 +166,42 @@ export function RunDetailView({
               <span className={"patch-state " + patch.disposition}>{patch.disposition}</span>
             </div>
           </div>
+          <div className="patch-verification" aria-label="Patch verification level">
+            <span className="health good">
+              {patch.verification.workspaceIntegrity === "verified"
+                ? "Integrity Verified"
+                : "Legacy Integrity Unknown"}
+            </span>
+            <span
+              className={"health " + (patch.verification.compile === "passed" ? "good" : "waiting")}
+            >
+              Compile{" "}
+              {patch.verification.compile === "passed"
+                ? "Verified"
+                : patch.verification.compile === "not-run"
+                  ? "Not Run"
+                  : "Unknown"}
+            </span>
+            <span
+              className={
+                "health " + (patch.verification.warmTest === "passed" ? "good" : "waiting")
+              }
+            >
+              Warm-Test{" "}
+              {patch.verification.warmTest === "passed"
+                ? "Verified"
+                : patch.verification.warmTest === "not-run"
+                  ? "Not Run"
+                  : "Unknown"}
+            </span>
+          </div>
+          {(patch.verification.compile !== "passed" ||
+            patch.verification.warmTest !== "passed") && (
+            <p className="diagnostic-message">
+              This patch is safe to inspect and apply based on workspace/source integrity, but the
+              capabilities marked Not Run or Unknown did not validate the code.
+            </p>
+          )}
           {patch.message !== undefined && <p className="diagnostic-message">{patch.message}</p>}
           {patch.conflictPaths.length > 0 && (
             <div className="conflict-paths">

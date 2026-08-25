@@ -8,7 +8,7 @@ import {
   FileArtifactStore,
   FileRunRepository,
   RunIdSchema,
-  UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
   type ArtifactKind,
   type ArtifactMediaType,
 } from "@honeybee/core";
@@ -107,8 +107,13 @@ describe("UnityPatchBuilder", () => {
     });
 
     const serialized = await artifacts.get({ runId, artifact: verified.patch });
-    const manifest = UnityPatchManifestV2Schema.parse(JSON.parse(serialized) as unknown);
+    const manifest = UnityPatchManifestV3Schema.parse(JSON.parse(serialized) as unknown);
     expect(sourceChecks).toBe(2);
+    expect(manifest.verification).toEqual({
+      workspaceIntegrity: "verified",
+      compile: "not-run",
+      warmTest: "not-run",
+    });
     expect(manifest.entries.map((entry) => [entry.path, entry.operation])).toEqual([
       ["Assets/added.txt", "add"],
       ["Assets/delete.txt", "delete"],

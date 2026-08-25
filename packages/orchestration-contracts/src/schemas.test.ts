@@ -14,6 +14,7 @@ import {
   StepIdSchema,
   UnityPatchManifestV1Schema,
   UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
@@ -366,6 +367,23 @@ describe("orchestration contracts", () => {
       UnityPatchManifestV2Schema.safeParse({
         ...v2,
         entries: [{ ...v2.entries[0], contentBase64: "AA==" }],
+      }).success,
+    ).toBe(false);
+
+    const v3 = {
+      ...v2,
+      schemaVersion: 3,
+      verification: {
+        workspaceIntegrity: "verified",
+        compile: "not-run",
+        warmTest: "not-run",
+      },
+    } as const;
+    expect(UnityPatchManifestV3Schema.safeParse(v3).success).toBe(true);
+    expect(
+      UnityPatchManifestV3Schema.safeParse({
+        ...v3,
+        verification: { ...v3.verification, testCount: 0 },
       }).success,
     ).toBe(false);
   });

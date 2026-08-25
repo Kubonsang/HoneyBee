@@ -188,7 +188,7 @@ export class FileUnityPatchControl {
     const sourceState = await this.#sourceState(runId, sourceProjectPath, manifest);
     let remaining = MAX_TOTAL_PREVIEW_BYTES;
     const baseTree =
-      manifest.schemaVersion === 2 ? await this.#tree(runId, manifest.baseTreeManifest) : undefined;
+      manifest.schemaVersion === 1 ? undefined : await this.#tree(runId, manifest.baseTreeManifest);
     const resultTree = await this.#tree(runId, manifest.resultManifest);
     const baseFiles = new Map(baseTree?.files.map((file) => [file.path, file]) ?? []);
     const resultFiles = new Map(resultTree.files.map((file) => [file.path, file]));
@@ -224,6 +224,14 @@ export class FileUnityPatchControl {
       runId,
       patch: input.patch,
       manifestVersion: manifest.schemaVersion,
+      verification:
+        manifest.schemaVersion === 3
+          ? manifest.verification
+          : {
+              workspaceIntegrity: "legacy-unknown",
+              compile: "legacy-unknown",
+              warmTest: "legacy-unknown",
+            },
       sourceProjectPath,
       sourceState,
       disposition,
@@ -445,7 +453,7 @@ export class FileUnityPatchControl {
         state = await this.#update(runId, state, { nextEntry: index });
       }
       await this.#cleanSidecars(source, manifest, state.actionId);
-      if (manifest.schemaVersion === 2) {
+      if (manifest.schemaVersion !== 1) {
         const base = await this.#tree(runId, manifest.baseTreeManifest);
         if (!sameTree(await snapshotUnityWorkspace(source), base)) {
           state = await this.#update(runId, state, { phase: "indeterminate" });
@@ -634,7 +642,7 @@ export class FileUnityPatchControl {
       const current = await snapshotUnityWorkspace(source);
       const result = await this.#tree(runId, manifest.resultManifest);
       if (sameTree(current, result)) return "result";
-      if (manifest.schemaVersion === 2) {
+      if (manifest.schemaVersion !== 1) {
         const base = await this.#tree(runId, manifest.baseTreeManifest);
         return sameTree(current, base) ? "clean" : "drift";
       }
