@@ -70,6 +70,7 @@ describe.skipIf(configPath === undefined)("Unity real environment E2E", () => {
         expect(events.at(-1)?.type).toBe("workflow.completed");
 
         const config = await loadUnityWorkConfig(configPath as string);
+        if ("schemaVersion" in config.workspaceStorage) throw new Error("expected legacy storage");
         const status = await new UnityWorkspaceStorageCliAdapter(
           config.workspaceStorage.command,
           config.workspaceStorage.parentKey.provider,

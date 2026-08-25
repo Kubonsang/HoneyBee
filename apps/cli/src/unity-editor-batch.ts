@@ -131,7 +131,9 @@ const runtimeConfig = (
   UnityWorkConfigV2Schema.parse({
     ...config.transaction,
     schemaVersion: 2,
-    testplay: { ...config.transaction.testplay, bridgeProtocolVersion: 3 },
+    ...(config.transaction.testplay === undefined
+      ? {}
+      : { testplay: { ...config.transaction.testplay, bridgeProtocolVersion: 3 } }),
     editorPool: config.editorPool,
     priority: work.priority,
     capabilities: work.capabilities,
@@ -211,7 +213,12 @@ export class UnityEditorBatchWorkflow {
   ): Promise<UnityBatchRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
     const config = UnityBatchConfigV3Schema.parse(configValue);
-    await this.pool.declare({ poolId: config.editorPool.id, capacity: config.editorPool.capacity });
+    if (config.works.some((work) => work.capabilities.length > 0)) {
+      await this.pool.declare({
+        poolId: config.editorPool.id,
+        capacity: config.editorPool.capacity,
+      });
+    }
     const configArtifact = await this.#putConfig(runId, config);
     const writer = new BatchV5Writer(this.journal, runId, 0, this.#now, this.#randomId);
     await writer.emit("workflow.started", {
@@ -264,7 +271,12 @@ export class UnityEditorBatchWorkflow {
         "Editor pool config changed after batch start.",
       );
     }
-    await this.pool.declare({ poolId: config.editorPool.id, capacity: config.editorPool.capacity });
+    if (config.works.some((work) => work.capabilities.length > 0)) {
+      await this.pool.declare({
+        poolId: config.editorPool.id,
+        capacity: config.editorPool.capacity,
+      });
+    }
     const registered = events.filter(
       (event): event is Extract<OrchestrationEventV5, { type: "work.registered" }> =>
         event.type === "work.registered",

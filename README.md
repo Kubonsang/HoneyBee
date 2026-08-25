@@ -5,7 +5,7 @@ HoneyBee is a CLI-first orchestration kernel with a local Desktop control plane 
 Version 0.6 assigns durable Editor-pool slots to isolated Unity Work Transactions, binds each owned Editor and Warm Bridge to one exact workspace, and runs config-selected compile/warm-test capabilities under that exclusive slot. The v0.5, v0.4, and v0.3 contracts remain compatible.
 
 ```text
-prepare → acquire → one Agent → TestPlay → Evidence → release → residual 0
+prepare → acquire → one Agent → optional compile/warm-test → verified patch → release → residual 0
 ```
 
 > The former VS Code Extension and Webview packages remain retired. The runtime boundary is `packages/core`, `packages/orchestration-contracts`, and `apps/cli`; `apps/desktop` observes and invokes that runtime through strict control-plane DTOs.
@@ -14,9 +14,13 @@ prepare → acquire → one Agent → TestPlay → Evidence → release → resi
 
 - Windows 11
 - Node.js 24 or newer with Corepack
-- A running `unity-workspace-storage` broker and a provisioned immutable parent for Unity work
-- TestPlay and Unity for Unity work
+- Unity for Unity work
+- TestPlay protocol 3 plus its Bridge only when compile or warm-test capabilities are enabled
 - Codex and OpenCode only for optional real-Agent examples
+
+The packaged Desktop includes the pinned `unity-workspace-storage` client and HoneyBee service host.
+Setup Center installs/starts that bundled storage service with one Windows elevation prompt; no
+external storage executable path or separate TestPlay storage installer is required.
 
 ## Quick start
 
@@ -94,7 +98,7 @@ v0.6 adds strict single-Work config schema 2 and batch config schema 3. A Work d
     corepack pnpm honeybee unity batch run --config unity-batch.v3.json --json
     corepack pnpm honeybee unity editor list --json
 
-Start from [the v0.6 Work example](examples/unity-work.v2.example.json) or [the v0.6 batch example](examples/unity-batch.v3.example.json). The shared pool uses priority classes interactive, validation, and background; requests are FIFO within one class, active leases are never preempted, and a free stable slot such as editor-1 is assigned by the pool. Only Editor-pool ownership is a global lease. There are no separate warm-bridge or TestPlay leases.
+Start from [the v0.6 Work example](examples/unity-work.v2.example.json) or [the v0.6 batch example](examples/unity-batch.v3.example.json). An empty `capabilities` list is a valid Agent-only Work: it does not require TestPlay, a Bridge, or an Editor-pool lease. When capabilities are present, the shared pool uses priority classes interactive, validation, and background; requests are FIFO within one class, active leases are never preempted, and a free stable slot such as editor-1 is assigned by the pool. Only Editor-pool ownership is a global lease. There are no separate warm-bridge or TestPlay leases.
 
 After the Agent exits, HoneyBee launches an Editor for the assigned workspace through a deferred containment process. The launcher first publishes its own PID, process creation identity, launch ID, and nonce as an immutable containment receipt. HoneyBee verifies and journals that receipt before activation. Editor ownership is established in a separate receipt only after the exact Editor PID/incarnation is observed. Before ownership exists, recovery drains only the recorded containment tree and never kills an observed Editor PID directly.
 
@@ -119,13 +123,19 @@ packaged executable with an isolated temporary user-data directory. The smoke re
 `app.ready`, the sandboxed preload API, the renderer Command Center, and runtime bootstrap IPC to
 all succeed. It force-closes only its own process tree and removes its temporary profile.
 
-Add a Unity project and link its existing v0.6 batch schema 3 config. Doctor validates Unity project structure/version, physical path isolation, the side-effect-free TestPlay version and protocol 3 compile/warm-test command surface, Agent command availability, and the pinned workspace-storage binary without running an Agent. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. Agent choice remains the linked config; priorities and compile/warm-test capabilities are selected per Work.
+Open Setup Center and select a Unity project. It discovers local Unity and OpenCode, and displays the immutable `unity-workspace-storage` client shipped inside HoneyBee. TestPlay and its Bridge are discovered only as an optional pair for compile/warm-test. Starting Setup installs/starts the bundled storage service with one explicit Administrator prompt, provisions or reuses one immutable Library parent, and stores a strict managed profile—no handwritten batch config or external storage installation is required. Existing v0.6 batch configs remain importable as legacy project profiles.
+
+The parent compatibility key is canonical and intentionally excludes `Assets`. It includes the Unity project version, Unity executable SHA-256, Packages manifest/lock, the required ProjectSettings manifest, `StandaloneWindows64`, scripting backend, Bridge overlay digest, and Bridge protocol version. Ordinary game-code changes therefore reuse the parent; changes that can invalidate Library reuse do not.
+
+For schema-2 parent creation, storage returns a `stagingPath` that is the provider-owned `Library` mount. Setup derives `projectRoot = dirname(stagingPath)`, prepares only `Assets`, `Packages`, and `ProjectSettings` beneath that root, and never creates, overwrites, or removes `Library`. The pinned Unity process runs behind the same deferred containment boundary as Unity Runs. Commit occurs only after source, Bridge, Library identity, and non-empty Library checks; failure/cancel replays an ambiguous begin request when necessary, aborts it, and removes only the proven HoneyBee-owned project shell.
+
+Doctor validates Unity project structure/version, physical path isolation, Agent command availability, the bundled storage pin/service, and managed compatibility inputs without running an Agent. If TestPlay is configured, Doctor also validates its side-effect-free version and protocol 3 compile/warm-test command surface; otherwise it reports the capability backend as optional and unavailable. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. Agent choice remains the managed profile; compile/warm-test controls stay disabled until the optional TestPlay pair is configured.
 
 The Command Center shows live Work phases, the priority/FIFO Editor queue, Editor ownership, Run History, typed Journal activity, and bounded Evidence previews. Cleanup-pending Runs expose only runtime-authorized Resume/Cancel actions. A completed child Run exposes its local verified patch as file-by-file before/after views.
 
 New patches use a reference-only manifest v2 with detailed base/result trees and separate content-addressed before/after blobs. Apply verifies the complete source tree, uses a durable same-directory backup/checkpoint transaction, and rolls back on conflict; Reject never changes source. Patch disposition is separate from the immutable terminal orchestration Journal. Existing manifest v1 results remain viewable/rejectable but are not applied because they lack a durable detailed base tree. See [ADR-022](docs/decisions/ADR-022-desktop-results-and-patch-disposition.md).
 
-Profiles are stored as strict atomic JSON below Electron's `userData` directory. Runtime state is stored separately below `<userData>/runtime/runs`. Context isolation, renderer sandboxing, disabled Node integration, navigation denial, a restrictive CSP, and strict request/response validation keep filesystem and process authority in the main process. See [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md) and [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md).
+Profiles are stored as strict atomic JSON below Electron's `userData` directory. Runtime state is stored separately below `<userData>/runtime/runs`. Setup recovery records only typed lifecycle metadata in its own fsynced local journal; Work authority remains the existing Run Journal and Artifact Store. Context isolation, renderer sandboxing, disabled Node integration, navigation denial, a restrictive CSP, and strict request/response validation keep filesystem and process authority in the main process. See [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md), and [ADR-024](docs/decisions/ADR-024-desktop-setup-center.md).
 
 Use the [Desktop MVP dogfood checklist](docs/validation/desktop-mvp-dogfood.md) for a real v0.6
 Unity batch. The checklist treats source preservation, patch disposition, cleanup recovery, and
@@ -244,7 +254,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-HoneyBee remains a local CLI kernel with a thin Desktop operator surface. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, and config-owned compile/warm-test capabilities while preserving earlier contracts. Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, parent provisioning, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md), [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), and [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md).
+HoneyBee remains a local CLI kernel with a thin Desktop operator surface. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, config-owned compile/warm-test capabilities, and a local Setup Center that provisions schema-2 Library parents while preserving earlier contracts. Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, automatic downloads, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md), [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md), and [ADR-024](docs/decisions/ADR-024-desktop-setup-center.md).
 
 ## License
 

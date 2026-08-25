@@ -14,14 +14,24 @@ project for fault injection.
 
 ## 2. Project and Doctor
 
-1. Start the packaged executable and add the fixture Unity project plus its v0.6 batch schema 3
-   config.
-2. Restart Desktop and confirm the project remains in Recent Projects.
-3. Run Doctor. Unity, HoneyBee runtime, TestPlay version and protocol 3 compile/warm-test command
-   surface, Agent, workspace-storage pin, project/config binding, and physical path isolation must
-   pass. An Agent probe may remain skipped unless it was explicitly configured.
-4. Correct one harmless invalid path in a copy of the config and confirm Doctor fails closed without
-   starting a Run.
+1. Start the packaged executable, open Setup Center, and select the fixture Unity project.
+2. Confirm the exact project Unity version is preferred and the read-only bundled
+   `unity-workspace-storage` path is populated. Select OpenCode and the broker-owned workspace root.
+   Enable the optional TestPlay capability backend for this full-flow dogfood run, then select
+   TestPlay and its Bridge package.
+3. Run **Install & prepare environment** and approve its single storage-service elevation prompt.
+   Confirm Setup reaches `setup.completed`, the source tree
+   remains unchanged, the staging project shell is removed, and the immutable parent is reusable.
+4. Change only a fixture file under `Assets` and provision again. Confirm the compatibility key and
+   parent stay the same. Restore it, change a copy of Packages/required ProjectSettings/Bridge, and
+   confirm a different compatibility key is required.
+5. Restart Desktop and confirm the managed project remains in Recent Projects.
+6. Run Doctor. Unity, HoneyBee runtime, TestPlay version and protocol 3 compile/warm-test command
+   surface, Agent, bundled workspace-storage pin/service, managed compatibility inputs, project/config
+   binding, and physical path isolation must pass. An Agent probe may remain skipped unless it was
+   explicitly configured.
+7. Change one harmless pinned path and confirm Doctor and Work start fail closed without starting an
+   Agent. Restore it before continuing.
 
 ## 3. Batch, queue, and live detail
 

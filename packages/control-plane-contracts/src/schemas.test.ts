@@ -38,4 +38,23 @@ describe("control-plane contracts", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("accepts an Agent-only Work with no Unity validation capabilities", () => {
+    expect(
+      StartUnityWorksRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        batchConfigPath: "C:/config.json",
+        projectPath: "C:/project",
+        maxParallelWorks: 1,
+        works: [
+          {
+            id: "agent-only",
+            task: "Change one file",
+            priority: "interactive",
+            capabilities: [],
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
 });

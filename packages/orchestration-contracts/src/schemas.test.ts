@@ -614,6 +614,61 @@ describe("orchestration contracts", () => {
       }).success,
     ).toBe(false);
 
+    const managedConfig = {
+      ...config,
+      transaction: {
+        ...transaction,
+        workspaceStorage: {
+          schemaVersion: 2,
+          command: { command: "C:\\Tools\\unity-workspace-storage.exe" },
+          binarySha256: "a".repeat(64),
+          workspaceRoot: "C:\\Workspaces",
+          compatibilityKey: "b".repeat(64),
+          parentId: "parent-managed",
+          provider: "vhdx-differencing",
+        },
+        bridgeOverlay: {
+          packageName: "com.testplay.bridge",
+          sourcePath: "C:\\Tools\\com.testplay.bridge",
+          digest: "c".repeat(64),
+        },
+      },
+    } as const;
+    expect(UnityBatchConfigV3Schema.safeParse(managedConfig).success).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          testplay: undefined,
+          bridgeOverlay: undefined,
+        },
+        bridgeProtocolVersion: undefined,
+        works: managedConfig.works.map((work) => ({ ...work, capabilities: [] })),
+      }).success,
+    ).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          testplay: undefined,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          workspaceStorage: {
+            ...managedConfig.transaction.workspaceStorage,
+            parentPath: "C:\\untrusted",
+          },
+        },
+      }).success,
+    ).toBe(false);
+
     const single = {
       ...transaction,
       schemaVersion: 2,

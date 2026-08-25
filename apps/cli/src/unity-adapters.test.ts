@@ -29,6 +29,7 @@ import {
   UnityProjectBootstrap,
   UnityWorkspaceStorageCliAdapter,
   type WorkspaceAcquireRequest,
+  type WorkspaceAcquireRequestV2,
 } from "./unity-adapters.js";
 
 const directories: string[] = [];
@@ -169,6 +170,130 @@ const request = (): WorkspaceAcquireRequest => ({
 });
 
 describe("UnityWorkspaceStorageCliAdapter", () => {
+  it("uses and validates the provider-neutral schema-2 lifecycle", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-storage-v2-"));
+    directories.push(root);
+    const workspace = path.join(root, "workspace");
+    await mkdir(workspace);
+    const binary = path.join(root, "storage.exe");
+    await writeFile(binary, "pinned");
+    const digest = createHash("sha256").update("pinned").digest("hex");
+    const calls: readonly string[][] = [];
+    const mutableCalls = calls as string[][];
+    const executor: ConstructorParameters<typeof UnityWorkspaceStorageCliAdapter>[3] = async (
+      _command,
+      args,
+      options,
+    ) => {
+      mutableCalls.push([...args]);
+      const requestId = args[args.indexOf("--request-id") + 1];
+      let response: Record<string, unknown>;
+      if (args[1] === "acquire") {
+        const parsed = JSON.parse(options.input ?? "{}") as WorkspaceAcquireRequestV2;
+        const library = path.join(workspace, "Library");
+        await mkdir(library);
+        response = {
+          schemaVersion: 2,
+          requestId: parsed.requestId,
+          ok: true,
+          provider: "vhdx-differencing",
+          lease: {
+            leaseId: "lease-v2",
+            consumerId: parsed.consumerId,
+            workspaceId: parsed.workspaceId,
+            parentId: parsed.parentId,
+            workspacePath: workspace,
+            mountPath: library,
+            state: "ready",
+            createdAt: new Date().toISOString(),
+          },
+        };
+      } else if (args[1] === "release") {
+        response = {
+          schemaVersion: 2,
+          requestId,
+          ok: true,
+          provider: "vhdx-differencing",
+        };
+      } else {
+        response = {
+          schemaVersion: 2,
+          requestId,
+          ok: true,
+          provider: "vhdx-differencing",
+          status: {
+            capability: { platform: "windows" },
+            parentCount: 1,
+            activeLeaseCount: 0,
+            quarantineCount: 0,
+            allocatedBytes: 1,
+            quotaBytes: 2,
+            hostFreeBytes: 3,
+            hostFloorBytes: 1,
+            manualRecoveryRequired: false,
+          },
+        };
+      }
+      const stdout = JSON.stringify(response) + "\n";
+      return {
+        pid: process.pid,
+        exitCode: 0,
+        signal: null,
+        durationMs: 1,
+        stdoutBytes: Buffer.byteLength(stdout),
+        stderrBytes: 0,
+        stdoutDigest: ContentDigestSchema.parse(
+          "sha256:" + createHash("sha256").update(stdout).digest("hex"),
+        ),
+        stderrDigest: ContentDigestSchema.parse(
+          "sha256:" + createHash("sha256").update("").digest("hex"),
+        ),
+        termination: "exited",
+        stdout,
+        stderr: "",
+      };
+    };
+    const adapter = new UnityWorkspaceStorageCliAdapter(
+      { command: binary },
+      "vhdx-differencing",
+      digest,
+      executor,
+      2,
+    );
+    await expect(
+      adapter.acquire(
+        {
+          schemaVersion: 2,
+          operation: "workspace-acquire",
+          requestId: "request-v2",
+          consumerId: "consumer-v2",
+          workspaceId: "workspace-v2",
+          parentId: "a".repeat(64),
+          clientPid: process.pid,
+        },
+        workspace,
+      ),
+    ).resolves.toMatchObject({ lease: { leaseId: "lease-v2", runId: "consumer-v2" } });
+    await expect(adapter.release("lease-v2", "release-v2", workspace)).resolves.toMatchObject({
+      metrics: { cleanupState: "released" },
+    });
+    await expect(adapter.status("status-v2", workspace)).resolves.toMatchObject({
+      status: { activeLeaseCount: 0 },
+    });
+    expect(calls[0]).toEqual(["workspace", "acquire", "--request", "-"]);
+    expect(calls[1]).toEqual([
+      "workspace",
+      "release",
+      "--schema",
+      "2",
+      "--lease-id",
+      "lease-v2",
+      "--request-id",
+      "release-v2",
+    ]);
+    expect(calls[2]).toEqual(["workspace", "status", "--schema", "2", "--request-id", "status-v2"]);
+  });
+
   it.each([
     ["malformed", "workspace.command-ambiguous"],
     ["rejected", "workspace.command-failed"],

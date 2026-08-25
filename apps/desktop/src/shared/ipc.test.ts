@@ -5,11 +5,13 @@ import {
   DesktopPatchControlRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
+  DesktopSetupDiscoveryRequestV1Schema,
+  DesktopSetupDraftV1Schema,
   DesktopStartRequestV1Schema,
 } from "./ipc.js";
 
 describe("Desktop IPC contracts", () => {
-  it("rejects unknown renderer fields and invalid capability selections", () => {
+  it("rejects unknown renderer fields and accepts Agent-only Work", () => {
     const request = {
       schemaVersion: 1,
       profileId: "00000000-0000-4000-8000-000000000001",
@@ -40,7 +42,7 @@ describe("Desktop IPC contracts", () => {
           },
         ],
       }).success,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it("validates Run and Artifact identifiers before they cross IPC", () => {
@@ -97,5 +99,56 @@ describe("Desktop IPC contracts", () => {
         pool: { ...snapshot.pool, ownerPid: 1234 },
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps Setup requests strict at every renderer boundary", () => {
+    expect(
+      DesktopSetupDiscoveryRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        projectPath: "C:\\Project",
+        typo: true,
+      }).success,
+    ).toBe(false);
+
+    const draft = {
+      schemaVersion: 1,
+      label: "Game",
+      projectPath: "C:\\Project",
+      unityPath: "C:\\Unity\\Unity.exe",
+      testplayPath: "C:\\Tools\\testplay.exe",
+      workspaceStoragePath: "C:\\Tools\\unity-workspace-storage.exe",
+      workspaceRoot: "C:\\Workspaces",
+      bridgeOverlayPath: "C:\\Tools\\com.testplay.bridge",
+      agent: { command: "C:\\Tools\\opencode.exe" },
+      editorCapacity: 2,
+    } as const;
+    expect(DesktopSetupDraftV1Schema.safeParse(draft).success).toBe(true);
+    expect(
+      DesktopSetupDraftV1Schema.safeParse({
+        schemaVersion: 1,
+        label: "Agent only",
+        projectPath: "C:\\Project",
+        unityPath: "C:\\Unity\\Unity.exe",
+        workspaceStoragePath: "C:\\HoneyBee\\unity-workspace-storage.exe",
+        workspaceRoot: "C:\\Workspaces",
+        agent: { command: "C:\\Tools\\opencode.exe" },
+        editorCapacity: 1,
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopSetupDraftV1Schema.safeParse({
+        ...draft,
+        bridgeOverlayPath: undefined,
+      }).success,
+    ).toBe(false);
+    expect(
+      DesktopSetupDraftV1Schema.safeParse({
+        ...draft,
+        agent: { ...draft.agent, env: { SECRET: "not-allowed" } },
+      }).success,
+    ).toBe(false);
+    expect(DesktopSetupDraftV1Schema.safeParse({ ...draft, assetsDigest: "ignored" }).success).toBe(
+      false,
+    );
   });
 });

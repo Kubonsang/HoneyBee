@@ -28,13 +28,15 @@ import type {
 import {
   DesktopStartRequestV1Schema,
   type DesktopBootstrapV1,
-  type DesktopProjectProfileV1,
+  type DesktopProjectProfile,
+  type DesktopProjectProfileV2,
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { CommandCenter } from "./CommandCenter.js";
 import { RunDetailView } from "./RunDetailView.js";
+import { SetupCenter } from "./SetupCenter.js";
 
-type DesktopView = "command" | "work" | "history";
+type DesktopView = "command" | "work" | "history" | "setup";
 
 interface WorkDraft {
   readonly key: number;
@@ -51,8 +53,8 @@ const initialWork = (key = 1): WorkDraft => ({
   id: `work-${key}`,
   task: "",
   priority: "validation",
-  compile: true,
-  warmTest: true,
+  compile: false,
+  warmTest: false,
   filter: "",
 });
 
@@ -90,6 +92,7 @@ export function App() {
       .then((value) => {
         setBootstrap(value);
         setSelectedProfileId(value.profiles[0]?.profileId);
+        if (value.profiles.length === 0) setView("setup");
       })
       .catch((reason: unknown) => setError(readableError(reason)));
   }, []);
@@ -161,8 +164,11 @@ export function App() {
           ) ?? []),
     [bootstrap, selectedProfile],
   );
+  const testplayAvailable =
+    selectedProfile?.schemaVersion !== 2 || selectedProfile.environment.testplay !== undefined;
   const validWorks = works.every(
-    (work) => work.task.trim().length > 0 && (work.compile || work.warmTest),
+    (work) =>
+      work.task.trim().length > 0 && (testplayAvailable || (!work.compile && !work.warmTest)),
   );
   const primaryWork = works[0] ?? initialWork();
 
@@ -176,23 +182,7 @@ export function App() {
     setPatch(undefined);
   };
 
-  const chooseProfile = async (): Promise<void> => {
-    setBusy("profile");
-    setError(undefined);
-    try {
-      const profile = await window.honeybee.chooseProfile();
-      if (profile === null) return;
-      const value = await window.honeybee.bootstrap();
-      setBootstrap(value);
-      activateProfile(profile.profileId);
-    } catch (reason) {
-      setError(readableError(reason));
-    } finally {
-      setBusy(undefined);
-    }
-  };
-
-  const removeProfile = async (profile: DesktopProjectProfileV1): Promise<void> => {
+  const removeProfile = async (profile: DesktopProjectProfile): Promise<void> => {
     setError(undefined);
     try {
       const value = await window.honeybee.removeProfile({
@@ -203,6 +193,18 @@ export function App() {
       if (selectedProfileId === profile.profileId) {
         activateProfile(value.profiles[0]?.profileId);
       }
+    } catch (reason) {
+      setError(readableError(reason));
+    }
+  };
+
+  const completeSetup = async (profile: DesktopProjectProfileV2): Promise<void> => {
+    try {
+      const value = await window.honeybee.bootstrap();
+      setBootstrap(value);
+      activateProfile(profile.profileId);
+      setView("work");
+      setNotice(`${profile.label} is ready. Run Doctor before the first Work.`);
     } catch (reason) {
       setError(readableError(reason));
     }
@@ -376,10 +378,10 @@ export function App() {
         </div>
         <button
           className="primary wide"
-          onClick={() => void chooseProfile()}
+          onClick={() => setView("setup")}
           disabled={busy !== undefined}
         >
-          <Plus size={17} weight="bold" /> Add Unity project
+          <Plus size={17} weight="bold" /> Setup Unity project
         </button>
         <nav className="main-nav" aria-label="Workspace views">
           <button
@@ -396,6 +398,9 @@ export function App() {
             onClick={() => setView("history")}
           >
             <ClockCounterClockwise size={20} weight="duotone" /> Run History
+          </button>
+          <button className={view === "setup" ? "selected" : ""} onClick={() => setView("setup")}>
+            <Stethoscope size={20} weight="duotone" /> Setup Center
           </button>
         </nav>
         <div className="sidebar-heading">
@@ -465,7 +470,7 @@ export function App() {
                 ))}
               </select>
             ) : (
-              <button onClick={() => void chooseProfile()}>Choose Unity project</button>
+              <button onClick={() => setView("setup")}>Setup Unity project</button>
             )}
           </div>
           <span className="runtime-chip">
@@ -492,19 +497,28 @@ export function App() {
                 ? "Command Center"
                 : view === "history"
                   ? "Run History"
-                  : (selectedProfile?.label ?? "Choose a Unity project")}
+                  : view === "setup"
+                    ? "Setup Center"
+                    : (selectedProfile?.label ?? "Choose a Unity project")}
             </h1>
             <p>
               {view === "command"
                 ? "Orchestrate AI agents. Isolate workspaces. Deliver verified changes."
                 : view === "history"
                   ? "Inspect durable outcomes, Evidence, and verified patches."
-                  : "Describe focused changes and launch a bounded parallel batch."}
+                  : view === "setup"
+                    ? "Create and recover a strict local managed Unity environment."
+                    : "Describe focused changes and launch a bounded parallel batch."}
             </p>
           </div>
         </div>
 
-        {view === "work" ? (
+        {view === "setup" ? (
+          <SetupCenter
+            onComplete={(profile) => void completeSetup(profile)}
+            onError={(message) => setError(message)}
+          />
+        ) : view === "work" ? (
           <div className="content-grid">
             <section className="composer panel">
               <div className="section-title">
@@ -520,13 +534,13 @@ export function App() {
               {selectedProfile === undefined ? (
                 <div className="empty-state">
                   <span>01</span>
-                  <h3>Link an existing v0.6 config</h3>
+                  <h3>Prepare a managed Unity environment</h3>
                   <p>
-                    Select the Unity project and its HoneyBee batch config. No setup wizard or
-                    duplicate runtime config is created.
+                    Setup Center detects local tools, pins their identity, and provisions the
+                    reusable workspace parent.
                   </p>
-                  <button className="primary" onClick={() => void chooseProfile()}>
-                    Choose project
+                  <button className="primary" onClick={() => setView("setup")}>
+                    Open Setup Center
                   </button>
                 </div>
               ) : (
@@ -603,6 +617,7 @@ export function App() {
                               <input
                                 type="checkbox"
                                 checked={work.compile}
+                                disabled={!testplayAvailable}
                                 onChange={(event) =>
                                   updateWork(work.key, { compile: event.target.checked })
                                 }
@@ -613,6 +628,7 @@ export function App() {
                               <input
                                 type="checkbox"
                                 checked={work.warmTest}
+                                disabled={!testplayAvailable}
                                 onChange={(event) =>
                                   updateWork(work.key, { warmTest: event.target.checked })
                                 }
@@ -711,8 +727,8 @@ export function App() {
               Link an existing v0.6 batch config to inspect its Runs, Editor Pool, and observed
               Unity Editors.
             </p>
-            <button className="primary" onClick={() => void chooseProfile()}>
-              Choose project
+            <button className="primary" onClick={() => setView("setup")}>
+              Open Setup Center
             </button>
           </section>
         ) : (
@@ -761,6 +777,7 @@ export function App() {
                         <input
                           type="checkbox"
                           checked={primaryWork.compile}
+                          disabled={!testplayAvailable}
                           onChange={(event) =>
                             updateWork(primaryWork.key, { compile: event.target.checked })
                           }
@@ -771,6 +788,7 @@ export function App() {
                         <input
                           type="checkbox"
                           checked={primaryWork.warmTest}
+                          disabled={!testplayAvailable}
                           onChange={(event) =>
                             updateWork(primaryWork.key, { warmTest: event.target.checked })
                           }

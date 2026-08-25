@@ -1425,7 +1425,7 @@ const validV5ChildTransitions = (events: readonly OrchestrationEventV5[]): boole
         if (
           !sourceUnchanged ||
           sourceAfter === undefined ||
-          poolPhase !== "released" ||
+          (linkage.capabilityCount === 0 ? poolPhase !== "none" : poolPhase !== "released") ||
           nextCapability !== linkage.capabilityCount ||
           capabilityFailed ||
           patch !== undefined ||
@@ -1478,9 +1478,10 @@ const validV5ChildTransitions = (events: readonly OrchestrationEventV5[]): boole
           !("patch" in event.payload) ||
           decision?.outcome !== "completed" ||
           workspacePhase !== "released" ||
-          evidence.length === 0 ||
+          (linkage.capabilityCount === 0
+            ? event.payload.evidence !== undefined || evidence.length !== 0
+            : evidence.length === 0 || !sameArtifactRef(event.payload.evidence, evidence.at(-1))) ||
           patch === undefined ||
-          !sameArtifactRef(event.payload.evidence, evidence.at(-1)) ||
           !sameArtifactRef(event.payload.patch, patch.patch) ||
           !sameArtifactRef(event.payload.resultManifest, patch.resultManifest) ||
           !sameArtifactRef(event.payload.release, workspaceRelease) ||

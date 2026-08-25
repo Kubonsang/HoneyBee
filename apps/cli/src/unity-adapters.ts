@@ -17,6 +17,7 @@ import {
   type RunId,
   type StepId,
   type UnityWorkConfigV1,
+  type UnityBridgeOverlay,
   type UnityCapability,
   type WarmBridgeBindingV1,
   type UnityWorkspaceParentKey,
@@ -692,7 +693,10 @@ const realDirectory = async (directory: string, name: string): Promise<void> => 
   }
 };
 
-const treeFiles = async (root: string): Promise<readonly string[]> => {
+const treeFiles = async (
+  root: string,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): Promise<readonly string[]> => {
   await realDirectory(root, root);
   const files: string[] = [];
   const visit = async (directory: string): Promise<void> => {
@@ -708,9 +712,10 @@ const treeFiles = async (root: string): Promise<readonly string[]> => {
         );
       }
       if (metadata.isDirectory()) await visit(absolute);
-      else if (metadata.isFile())
-        files.push(path.relative(root, absolute).split(path.sep).join("/"));
-      else {
+      else if (metadata.isFile()) {
+        const relative = path.relative(root, absolute).split(path.sep).join("/");
+        if (!ignoredPaths.has(relative)) files.push(relative);
+      } else {
         throw new HoneyBeeCoreError(
           "workspace.invalid-project",
           "Unity project source contains an unsupported filesystem entry.",
@@ -722,12 +727,15 @@ const treeFiles = async (root: string): Promise<readonly string[]> => {
   return files;
 };
 
-const treeManifest = async (root: string): Promise<TreeManifest> => {
+const treeManifest = async (
+  root: string,
+  ignoredPaths: ReadonlySet<string> = new Set(),
+): Promise<TreeManifest> => {
   const hash = createHash("sha256");
   hash.update("honeybee-tree-manifest-v1\0", "utf8");
   let fileCount = 0;
   let logicalBytes = 0;
-  for (const relative of await treeFiles(root)) {
+  for (const relative of await treeFiles(root, ignoredPaths)) {
     const content = await readFile(path.join(root, ...relative.split("/")));
     const relativeBytes = Buffer.from(relative, "utf8");
     const relativeLength = Buffer.allocUnsafe(8);
@@ -757,11 +765,26 @@ const safeWorkspacePath = (workspaceRoot: string, workspaceId: string): string =
 };
 
 export class UnityProjectBootstrap {
-  public async manifest(sourceProjectPath: string): Promise<SourceManifest> {
+  public async manifest(
+    sourceProjectPath: string,
+    ignoredPaths: ReadonlySet<string> = new Set(),
+  ): Promise<SourceManifest> {
     await realDirectory(sourceProjectPath, "sourceProjectPath");
-    const assets = await treeManifest(path.join(sourceProjectPath, "Assets"));
-    const packages = await treeManifest(path.join(sourceProjectPath, "Packages"));
-    const settings = await treeManifest(path.join(sourceProjectPath, "ProjectSettings"));
+    const under = (prefix: string): ReadonlySet<string> =>
+      new Set(
+        [...ignoredPaths]
+          .filter((relative) => relative.startsWith(prefix + "/"))
+          .map((relative) => relative.slice(prefix.length + 1)),
+      );
+    const assets = await treeManifest(path.join(sourceProjectPath, "Assets"), under("Assets"));
+    const packages = await treeManifest(
+      path.join(sourceProjectPath, "Packages"),
+      under("Packages"),
+    );
+    const settings = await treeManifest(
+      path.join(sourceProjectPath, "ProjectSettings"),
+      under("ProjectSettings"),
+    );
     return {
       schemaVersion: 1,
       digest: createHash("sha256")
@@ -783,6 +806,7 @@ export class UnityProjectBootstrap {
     sourceProjectPath: string,
     workspaceRoot: string,
     workspaceId: string,
+    bridgeOverlay?: UnityBridgeOverlay,
   ): Promise<string> {
     await realDirectory(workspaceRoot, "workspaceStorage.workspaceRoot");
     if (await physicalPathsOverlap(sourceProjectPath, workspaceRoot)) {
@@ -814,6 +838,9 @@ export class UnityProjectBootstrap {
           await copyFile(path.join(source, ...relative.split("/")), target);
         }
       }
+      if (bridgeOverlay !== undefined) {
+        await this.installBridgeOverlay(workspacePath, bridgeOverlay);
+      }
       try {
         await lstat(path.join(workspacePath, "Library"));
         throw new HoneyBeeCoreError(
@@ -829,6 +856,65 @@ export class UnityProjectBootstrap {
       await rm(workspacePath, { recursive: true, force: true });
       throw error;
     }
+  }
+
+  public async bridgeOverlayPaths(overlay: UnityBridgeOverlay): Promise<ReadonlySet<string>> {
+    const sourcePath = path.resolve(overlay.sourcePath);
+    const manifest = await treeManifest(sourcePath);
+    if (manifest.digest !== overlay.digest) {
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "The TestPlay Bridge overlay digest does not match the managed profile.",
+      );
+    }
+    const files = await treeFiles(sourcePath);
+    if (!files.includes("package.json")) {
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "The TestPlay Bridge overlay has no package.json.",
+      );
+    }
+    return new Set(files.map((relative) => `Packages/${overlay.packageName}/${relative}`));
+  }
+
+  public async verifyBridgeOverlay(
+    projectRoot: string,
+    overlay: UnityBridgeOverlay,
+  ): Promise<void> {
+    const target = path.join(projectRoot, "Packages", overlay.packageName);
+    const manifest = await treeManifest(target);
+    if (manifest.digest !== overlay.digest) {
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "The workspace-only TestPlay Bridge overlay changed during execution.",
+      );
+    }
+  }
+
+  private async installBridgeOverlay(
+    projectRoot: string,
+    overlay: UnityBridgeOverlay,
+  ): Promise<void> {
+    await this.bridgeOverlayPaths(overlay);
+    const source = path.resolve(overlay.sourcePath);
+    const destination = path.join(projectRoot, "Packages", overlay.packageName);
+    try {
+      await lstat(destination);
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "The source project already contains the reserved TestPlay Bridge package.",
+      );
+    } catch (error) {
+      if (error instanceof HoneyBeeCoreError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    await mkdir(destination);
+    for (const relative of await treeFiles(source)) {
+      const target = path.join(destination, ...relative.split("/"));
+      await mkdir(path.dirname(target), { recursive: true });
+      await copyFile(path.join(source, ...relative.split("/")), target);
+    }
+    await this.verifyBridgeOverlay(projectRoot, overlay);
   }
 
   public async cleanupUnacquired(workspaceRoot: string, workspaceId: string): Promise<void> {
@@ -873,6 +959,22 @@ export interface WorkspaceAcquireRequest {
   readonly storeMaxAllocatedBytes?: number;
   readonly minimumHostFreeBytes?: number;
 }
+
+export interface WorkspaceAcquireRequestV2 {
+  readonly schemaVersion: 2;
+  readonly operation: "workspace-acquire";
+  readonly requestId: string;
+  readonly consumerId: string;
+  readonly workspaceId: string;
+  readonly parentId: string;
+  readonly clientPid: number;
+  readonly limits?: Readonly<{
+    storeMaxAllocatedBytes?: number;
+    minimumHostFreeBytes?: number;
+  }>;
+}
+
+export type AnyWorkspaceAcquireRequest = WorkspaceAcquireRequest | WorkspaceAcquireRequestV2;
 
 export interface WorkspaceLease {
   readonly leaseId: string;
@@ -921,19 +1023,27 @@ const leaseFrom = (value: unknown): WorkspaceLease => {
 };
 
 export class UnityWorkspaceStorageCliAdapter {
+  private readonly execute: typeof runCommand;
+  private readonly protocolVersion: 1 | 2;
+
   public constructor(
     private readonly command: AgentCommand,
     private readonly expectedProvider: string,
     private readonly expectedBinarySha256: string,
-    private readonly execute: typeof runCommand = runCommand,
-  ) {}
+    executeOrProtocol: typeof runCommand | 1 | 2 = runCommand,
+    protocolVersion: 1 | 2 = 1,
+  ) {
+    this.execute = typeof executeOrProtocol === "function" ? executeOrProtocol : runCommand;
+    this.protocolVersion =
+      typeof executeOrProtocol === "number" ? executeOrProtocol : protocolVersion;
+  }
 
   public preflight(): Promise<void> {
     return this.verifyBinary();
   }
 
   public async acquire(
-    request: WorkspaceAcquireRequest,
+    request: AnyWorkspaceAcquireRequest,
     workspacePath: string,
     signal?: AbortSignal,
   ): Promise<WorkspaceAcquireReceipt> {
@@ -1005,7 +1115,25 @@ export class UnityWorkspaceStorageCliAdapter {
     }
     let lease: WorkspaceLease;
     try {
-      lease = leaseFrom(parsed.lease);
+      if (request.schemaVersion === 1) {
+        lease = leaseFrom(parsed.lease);
+      } else {
+        if (!isRecord(parsed.lease)) throw new Error("Workspace response has no lease.");
+        if (
+          requiredString(parsed.lease, "workspaceId") !== request.workspaceId ||
+          !samePath(requiredString(parsed.lease, "workspacePath"), workspacePath)
+        ) {
+          throw new Error("Workspace response identity does not match the schema-2 request.");
+        }
+        lease = {
+          leaseId: requiredString(parsed.lease, "leaseId"),
+          runId: requiredString(parsed.lease, "consumerId"),
+          parentKey: requiredString(parsed.lease, "parentId"),
+          mountPath: requiredString(parsed.lease, "mountPath"),
+          state: requiredString(parsed.lease, "state"),
+          retained: false,
+        };
+      }
     } catch {
       throw new HoneyBeeCoreError(
         "workspace.protocol-invalid",
@@ -1013,12 +1141,18 @@ export class UnityWorkspaceStorageCliAdapter {
       );
     }
     const expectedMount = path.resolve(workspacePath, "Library");
+    const expectedParent =
+      request.schemaVersion === 1 ? request.parentKey.digest : request.parentId;
+    const schemaValid =
+      request.schemaVersion === 1
+        ? parsed.schemaVersion === 1
+        : parsed.schemaVersion === 2 && parsed.ok === true;
     if (
-      parsed.schemaVersion !== 1 ||
+      !schemaValid ||
       parsed.requestId !== request.requestId ||
       parsed.provider !== this.expectedProvider ||
       lease.runId !== request.consumerId ||
-      lease.parentKey !== request.parentKey.digest ||
+      lease.parentKey !== expectedParent ||
       lease.state !== "ready" ||
       lease.retained ||
       !samePath(lease.mountPath, expectedMount)
@@ -1061,7 +1195,15 @@ export class UnityWorkspaceStorageCliAdapter {
     try {
       result = await this.execute(
         this.command,
-        ["workspace", "release", "--lease-id", leaseId, "--request-id", requestId],
+        [
+          "workspace",
+          "release",
+          ...(this.protocolVersion === 2 ? ["--schema", "2"] : []),
+          "--lease-id",
+          leaseId,
+          "--request-id",
+          requestId,
+        ],
         { cwd, timeoutMs: 120_000 },
       );
     } catch (error) {
@@ -1095,17 +1237,28 @@ export class UnityWorkspaceStorageCliAdapter {
         "Workspace release response was not valid JSON.",
       );
     }
-    if (!isRecord(parsed) || !isRecord(parsed.metrics)) {
+    if (!isRecord(parsed)) {
+      throw new HoneyBeeCoreError(
+        "workspace.protocol-invalid",
+        "Workspace release response violated the public contract.",
+      );
+    }
+    const metrics = isRecord(parsed.metrics) ? parsed.metrics : undefined;
+    if (
+      (this.protocolVersion === 1 && metrics === undefined) ||
+      (this.protocolVersion === 2 && parsed.metrics !== undefined && metrics === undefined)
+    ) {
       throw new HoneyBeeCoreError(
         "workspace.protocol-invalid",
         "Workspace release response violated the public contract.",
       );
     }
     if (
-      parsed.schemaVersion !== 1 ||
+      parsed.schemaVersion !== this.protocolVersion ||
       parsed.requestId !== requestId ||
       parsed.provider !== this.expectedProvider ||
-      parsed.metrics.cleanupState !== "released"
+      (this.protocolVersion === 1 && metrics?.cleanupState !== "released") ||
+      (this.protocolVersion === 2 && parsed.ok !== true)
     ) {
       throw new HoneyBeeCoreError(
         "workspace.release-failed",
@@ -1117,7 +1270,10 @@ export class UnityWorkspaceStorageCliAdapter {
       schemaVersion: 1,
       requestId,
       provider: this.expectedProvider,
-      metrics: parsed.metrics as WorkspaceReleaseReceipt["metrics"],
+      metrics:
+        this.protocolVersion === 2
+          ? { ...metrics, cleanupState: "released" }
+          : (metrics as WorkspaceReleaseReceipt["metrics"]),
     };
   }
 
@@ -1125,7 +1281,13 @@ export class UnityWorkspaceStorageCliAdapter {
     await this.verifyBinary();
     const result = await this.execute(
       this.command,
-      ["workspace", "status", "--request-id", requestId],
+      [
+        "workspace",
+        "status",
+        ...(this.protocolVersion === 2 ? ["--schema", "2"] : []),
+        "--request-id",
+        requestId,
+      ],
       { cwd, timeoutMs: 30_000 },
     );
     if (result.termination !== "exited" || result.exitCode !== 0) {
@@ -1134,10 +1296,11 @@ export class UnityWorkspaceStorageCliAdapter {
     const parsed = parseOneJson(result.stdout, "unity-workspace-storage status");
     if (
       !isRecord(parsed) ||
-      parsed.schemaVersion !== 1 ||
+      parsed.schemaVersion !== this.protocolVersion ||
       parsed.requestId !== requestId ||
       parsed.provider !== this.expectedProvider ||
-      !isRecord(parsed.status)
+      !isRecord(parsed.status) ||
+      (this.protocolVersion === 2 && parsed.ok !== true)
     ) {
       throw new HoneyBeeCoreError(
         "workspace.protocol-invalid",

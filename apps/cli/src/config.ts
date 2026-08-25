@@ -10,6 +10,7 @@ import {
   WorkflowConfigV3Schema,
   UnityWorkConfigSchema,
   UnityBatchConfigSchema,
+  UnityBatchTransactionV3Schema,
   type AgentCommand,
   type AgentDefinition,
   type WorkflowConfigV3,
@@ -17,6 +18,7 @@ import {
   type UnityWorkConfigV2,
   type UnityWorkConfig,
   type UnityBatchConfig,
+  type UnityBatchTransactionV3,
 } from "@honeybee/orchestration-contracts";
 
 import { physicalPathsOverlap } from "./path-safety.js";
@@ -229,10 +231,16 @@ function normalizeUnityWorkConfig(
   original: UnityWorkConfigV2,
   directory: string,
 ): Promise<UnityWorkConfigV2>;
-async function normalizeUnityWorkConfig(
-  original: UnityWorkConfig,
+function normalizeUnityWorkConfig(
+  original: UnityBatchTransactionV3,
   directory: string,
-): Promise<UnityWorkConfig> {
+  batchV3: true,
+): Promise<UnityBatchTransactionV3>;
+async function normalizeUnityWorkConfig(
+  original: UnityWorkConfig | UnityBatchTransactionV3,
+  directory: string,
+  batchV3 = false,
+): Promise<UnityWorkConfig | UnityBatchTransactionV3> {
   const workspaceCommand = readAgentCommand(
     original.workspaceStorage.command,
     "workspaceStorage.command",
@@ -241,7 +249,7 @@ async function normalizeUnityWorkConfig(
   if (!path.isAbsolute(workspaceCommand.command)) {
     throw new Error("workspaceStorage.command.command must be an absolute path.");
   }
-  const normalized = UnityWorkConfigSchema.parse({
+  const candidate = {
     ...original,
     sourceProjectPath: absoluteExpandedPath(original.sourceProjectPath, "sourceProjectPath"),
     workspaceStorage: {
@@ -256,12 +264,19 @@ async function normalizeUnityWorkConfig(
       ...original.agent,
       command: readAgentCommand(original.agent.command, "agent.command", directory),
     },
-    testplay: {
-      ...original.testplay,
-      command: readAgentCommand(original.testplay.command, "testplay.command", directory),
-      unityPath: absoluteExpandedPath(original.testplay.unityPath, "testplay.unityPath"),
-    },
-  });
+    ...(original.testplay === undefined
+      ? {}
+      : {
+          testplay: {
+            ...original.testplay,
+            command: readAgentCommand(original.testplay.command, "testplay.command", directory),
+            unityPath: absoluteExpandedPath(original.testplay.unityPath, "testplay.unityPath"),
+          },
+        }),
+  };
+  const normalized = batchV3
+    ? UnityBatchTransactionV3Schema.parse(candidate)
+    : UnityWorkConfigSchema.parse(candidate);
   if (
     await physicalPathsOverlap(
       normalized.sourceProjectPath,
@@ -294,11 +309,15 @@ export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBat
       "Invalid Unity batch schemaVersion 1, 2, or 3 config: " + original.error.message,
     );
   }
+  const directory = path.dirname(absolutePath);
+  if (original.data.schemaVersion === 3) {
+    return UnityBatchConfigSchema.parse({
+      ...original.data,
+      transaction: await normalizeUnityWorkConfig(original.data.transaction, directory, true),
+    });
+  }
   return UnityBatchConfigSchema.parse({
     ...original.data,
-    transaction: await normalizeUnityWorkConfig(
-      original.data.transaction,
-      path.dirname(absolutePath),
-    ),
+    transaction: await normalizeUnityWorkConfig(original.data.transaction, directory),
   });
 };

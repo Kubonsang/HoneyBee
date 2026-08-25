@@ -6,6 +6,8 @@ import {
   StepIdSchema,
   type FileRunControl,
   type UnityBatchConfigV3,
+  type UnityWorkspaceStorageV1,
+  type UnityWorkspaceStorageV2,
   type UnityWorkConfigV2,
   type VersionedOrchestrationJournal,
 } from "@honeybee/core";
@@ -27,6 +29,22 @@ import {
 } from "./unity-editor-transaction.js";
 import { physicalPathsOverlap } from "./path-safety.js";
 import { UnityPatchBuilder } from "./unity-patch.js";
+
+const storageAdapter = (
+  storage: UnityWorkspaceStorageV1 | UnityWorkspaceStorageV2,
+): UnityWorkspaceStorageCliAdapter =>
+  "schemaVersion" in storage
+    ? new UnityWorkspaceStorageCliAdapter(
+        storage.command,
+        storage.provider,
+        storage.binarySha256,
+        2,
+      )
+    : new UnityWorkspaceStorageCliAdapter(
+        storage.command,
+        storage.parentKey.provider,
+        storage.binarySha256,
+      );
 
 export const assertUnityPathsDisjoint = async (
   root: string,
@@ -69,12 +87,8 @@ export const createUnityEditorTransactionServices = (
       journal,
       controls,
       bootstrap,
-      new UnityWorkspaceStorageCliAdapter(
-        config.workspaceStorage.command,
-        config.workspaceStorage.parentKey.provider,
-        config.workspaceStorage.binarySha256,
-      ),
-      new TestPlayCliAdapter(config.testplay),
+      storageAdapter(config.workspaceStorage),
+      config.testplay === undefined ? undefined : new TestPlayCliAdapter(config.testplay),
       new SystemUnityEditorLauncher(root),
       new FileOsUnityEditorRegistry(root),
       new FileWarmBridgeBindingResolver(),
@@ -111,12 +125,10 @@ export const createUnityEditorBatchWorkflow = (
     journal,
     controls,
     bootstrap,
-    new UnityWorkspaceStorageCliAdapter(
-      config.transaction.workspaceStorage.command,
-      config.transaction.workspaceStorage.parentKey.provider,
-      config.transaction.workspaceStorage.binarySha256,
-    ),
-    new TestPlayCliAdapter(config.transaction.testplay),
+    storageAdapter(config.transaction.workspaceStorage),
+    config.transaction.testplay === undefined
+      ? undefined
+      : new TestPlayCliAdapter(config.transaction.testplay),
     new SystemUnityEditorLauncher(root),
     new FileOsUnityEditorRegistry(root),
     new FileWarmBridgeBindingResolver(),

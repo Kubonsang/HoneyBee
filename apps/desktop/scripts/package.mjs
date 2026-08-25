@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
@@ -8,6 +8,7 @@ import { packager } from "@electron/packager";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const staging = path.join(appRoot, "dist", "package");
 const output = path.join(appRoot, "release");
+const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 
 const assertOwned = (target, parent) => {
   const relative = path.relative(parent, target);
@@ -21,6 +22,8 @@ assertOwned(output, appRoot);
 await rm(staging, { recursive: true, force: true });
 await rm(output, { recursive: true, force: true });
 await mkdir(staging, { recursive: true });
+await access(path.join(bundledTools, "unity-workspace-storage.exe"));
+await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
 
 for (const directory of ["main", "preload", "renderer"]) {
   await cp(path.join(appRoot, "dist", directory), path.join(staging, directory), {
@@ -56,6 +59,7 @@ const paths = await packager({
   out: output,
   overwrite: true,
   asar: true,
+  extraResource: [bundledTools],
   appCopyright: "Copyright HoneyBee contributors",
   win32metadata: {
     CompanyName: "HoneyBee",

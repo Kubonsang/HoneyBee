@@ -192,6 +192,7 @@ describe("loadUnityWorkConfig", () => {
       await withConfig(candidate(directory), async (configPath) => {
         const config = await loadUnityWorkConfig(configPath);
         expect(config.agent.harness).toBe("stdio-framed-v2");
+        if ("schemaVersion" in config.workspaceStorage) throw new Error("expected legacy storage");
         expect(config.workspaceStorage.parentKey.provider).toBe("vhdx-differencing");
         expect(config.sourceProjectPath).toBe(path.join(directory, "source"));
       });

@@ -12,12 +12,14 @@ import {
   FileRunRepository,
   OrchestrationEventV5Schema,
   RunIdSchema,
+  UnityBatchConfigV3Schema,
   type ArtifactRef,
   type OrchestrationEventV5,
   type RunId,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+import { loadUnityBatchConfig } from "./config.js";
 import { HoneyBeeRuntimeFacade } from "./runtime-api.js";
 
 const roots: string[] = [];
@@ -332,13 +334,50 @@ describe("HoneyBeeRuntimeFacade", () => {
       batchConfigPath: fixture.configPath,
     });
 
-    expect(report.ok).toBe(true);
+    expect(report.ok, JSON.stringify(report.checks)).toBe(true);
     expect(report.checks).toContainEqual(
       expect.objectContaining({
         id: "testplay.protocol-v3",
         status: "pass",
         code: "testplay.protocol-v3-available",
         version: "v0.14.0-test",
+      }),
+    );
+  });
+
+  it("accepts an Agent-only batch without TestPlay or a Bridge capability backend", async () => {
+    const root = await temporaryRoot();
+    const fixture = await doctorFixture(root, true);
+    const config = JSON.parse(await readFile(fixture.configPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    const transaction = config.transaction as Record<string, unknown>;
+    delete transaction.testplay;
+    delete config.bridgeProtocolVersion;
+    config.works = (config.works as Array<Record<string, unknown>>).map((work) => ({
+      ...work,
+      capabilities: [],
+    }));
+    const parsed = UnityBatchConfigV3Schema.safeParse(config);
+    expect(parsed.success, JSON.stringify(parsed.error?.issues)).toBe(true);
+    await writeFile(fixture.configPath, JSON.stringify(config), "utf8");
+    await expect(loadUnityBatchConfig(fixture.configPath)).resolves.toMatchObject({
+      schemaVersion: 3,
+    });
+
+    const report = await new HoneyBeeRuntimeFacade({ stateRoot: fixture.stateRoot }).doctor({
+      schemaVersion: 1,
+      projectPath: fixture.project,
+      batchConfigPath: fixture.configPath,
+    });
+
+    expect(report.ok, JSON.stringify(report.checks)).toBe(true);
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({
+        id: "testplay.protocol-v3",
+        status: "warning",
+        code: "testplay.not-configured",
       }),
     );
   });

@@ -274,13 +274,15 @@ export class UnityPatchBuilder {
       sourceProjectPath: string;
       workspacePath: string;
       baseManifest: ArtifactRef;
+      ignoredPaths?: ReadonlySet<string>;
       verifySource: () => Promise<void>;
       publishBytes: PublishBytes;
       publishJson: PublishJson;
     }>,
   ): Promise<VerifiedUnityPatch> {
     await input.verifySource();
-    const workspaceResult = await snapshotUnityWorkspace(input.workspacePath);
+    const ignoredPaths = input.ignoredPaths ?? new Set<string>();
+    const workspaceResult = await snapshotUnityWorkspace(input.workspacePath, ignoredPaths);
     const resultManifest = await input.publishJson("unity-workspace-manifest", workspaceResult);
     await mkdir(this.scratchRoot, { recursive: true });
     const temporary = await mkdtemp(path.join(this.scratchRoot, "patch-verify-"));
@@ -375,7 +377,7 @@ export class UnityPatchBuilder {
         JSON.parse(await this.artifacts.get({ runId: input.runId, artifact: patch })) as unknown,
       );
       await applyManifest(input.runId, verificationRoot, this.artifacts, stored);
-      const applied = await snapshotUnityWorkspace(verificationRoot);
+      const applied = await snapshotUnityWorkspace(verificationRoot, ignoredPaths);
       if (!sameSnapshot(applied, workspaceResult)) {
         throw new HoneyBeeCoreError(
           "patch.verification-failed",

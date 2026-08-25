@@ -10,6 +10,11 @@ import {
   DesktopProfileIdRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopStartRequestV1Schema,
+  DesktopSetupDiscoveryRequestV1Schema,
+  DesktopSetupDraftV1Schema,
+  DesktopSetupIdRequestV1Schema,
+  DesktopSetupInstallStorageRequestV1Schema,
+  DesktopSetupPathRequestV1Schema,
   type HoneyBeeDesktopApi,
 } from "../shared/ipc.js";
 
@@ -21,6 +26,66 @@ const api: HoneyBeeDesktopApi = {
   chooseProfile: async () =>
     DesktopIpcResponseSchemas.chooseProfile.parse(
       await ipcRenderer.invoke(DesktopIpcChannels.chooseProfile),
+    ),
+  chooseSetupPath: async (request) =>
+    DesktopIpcResponseSchemas.chooseSetupPath.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.chooseSetupPath,
+        DesktopSetupPathRequestV1Schema.parse(request),
+      ),
+    ),
+  discoverSetup: async (request) =>
+    DesktopIpcResponseSchemas.setupDiscover.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupDiscover,
+        DesktopSetupDiscoveryRequestV1Schema.parse(request),
+      ),
+    ),
+  startSetup: async (request) =>
+    DesktopIpcResponseSchemas.setupStart.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupStart,
+        DesktopSetupDraftV1Schema.parse(request),
+      ),
+    ),
+  setupStatus: async (request) =>
+    DesktopIpcResponseSchemas.setupStatus.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupStatus,
+        DesktopSetupIdRequestV1Schema.parse(request),
+      ),
+    ),
+  resumeSetup: async (request) =>
+    DesktopIpcResponseSchemas.setupResume.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupResume,
+        DesktopSetupIdRequestV1Schema.parse(request),
+      ),
+    ),
+  cancelSetup: async (request) =>
+    DesktopIpcResponseSchemas.setupCancel.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupCancel,
+        DesktopSetupIdRequestV1Schema.parse(request),
+      ),
+    ),
+  installSetupStorage: async (request) =>
+    DesktopIpcResponseSchemas.setupInstallStorage.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupInstallStorage,
+        DesktopSetupInstallStorageRequestV1Schema.parse(request),
+      ),
+    ),
+  importSetup: async () =>
+    DesktopIpcResponseSchemas.setupImport.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.setupImport),
+    ),
+  exportSetup: async (request) =>
+    DesktopIpcResponseSchemas.setupExport.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.setupExport,
+        DesktopProfileIdRequestV1Schema.parse(request),
+      ),
     ),
   removeProfile: async (request) =>
     DesktopIpcResponseSchemas.removeProfile.parse(

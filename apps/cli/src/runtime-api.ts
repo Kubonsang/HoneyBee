@@ -62,6 +62,8 @@ import { physicalPath, samePath } from "./path-safety.js";
 import { FileUnityEditorPoolCoordinator } from "./unity-editor-pool.js";
 import { FileOsUnityEditorRegistry } from "./unity-editor-registry.js";
 import { FileUnityPatchControl } from "./unity-patch-control.js";
+import { SystemUnityProcessControl } from "./process-control.js";
+import { runCommand, UnityWorkspaceStorageCliAdapter } from "./unity-adapters.js";
 import {
   assertUnityPathsDisjoint,
   createUnityEditorBatchWorkflow,
@@ -80,6 +82,76 @@ const TEXT_MEDIA_TYPES = new Set<ArtifactRef["mediaType"]>([
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
+
+export interface RuntimeContainedProcessRequest {
+  readonly command: AgentCommand;
+  readonly args: readonly string[];
+  readonly cwd: string;
+  readonly timeoutMs: number;
+  readonly maxOutputBytes?: number;
+  readonly signal?: AbortSignal;
+}
+
+export interface RuntimeContainedProcessResult {
+  readonly pid: number;
+  readonly exitCode: number | null;
+  readonly signal: NodeJS.Signals | null;
+  readonly durationMs: number;
+  readonly stdoutBytes: number;
+  readonly stderrBytes: number;
+  readonly stdoutDigest?: string;
+  readonly stderrDigest?: string;
+  readonly stdout: string;
+  readonly stderr: string;
+  readonly termination: "exited" | "timed-out" | "output-limit" | "cancelled";
+}
+
+export interface RuntimeContainedProcessLifecycle {
+  readonly onStarted?: (
+    pid: number,
+    metadata?: Readonly<{ containment?: "deferred-v1" }>,
+  ) => Promise<void>;
+  readonly onRegistered?: (pid: number) => Promise<void>;
+  readonly onExited?: (
+    observation: Omit<RuntimeContainedProcessResult, "stdout" | "stderr" | "termination">,
+  ) => Promise<void>;
+}
+
+/**
+ * A narrow public adapter for Desktop-owned bootstrap processes. It preserves
+ * the same deferred-start and process-tree cleanup boundary as Unity Runs;
+ * orchestration decisions remain outside this primitive.
+ */
+export class RuntimeProcessContainment {
+  readonly #control = new SystemUnityProcessControl();
+
+  public captureIdentity(pid: number): Promise<string | undefined> {
+    return this.#control.captureIdentity(pid);
+  }
+
+  public drain(
+    pid: number,
+    processIdentity?: string,
+    missingPolicy: "unsafe" | "safe" = "unsafe",
+  ): Promise<"drained" | "missing"> {
+    return this.#control.drain(pid, processIdentity, missingPolicy);
+  }
+
+  public run(
+    request: RuntimeContainedProcessRequest,
+    lifecycle: RuntimeContainedProcessLifecycle,
+  ): Promise<RuntimeContainedProcessResult> {
+    return runCommand(request.command, request.args, {
+      cwd: request.cwd,
+      timeoutMs: request.timeoutMs,
+      lifecycle,
+      terminateTree: true,
+      deferExecutionUntilStarted: true,
+      ...(request.maxOutputBytes === undefined ? {} : { maxOutputBytes: request.maxOutputBytes }),
+      ...(request.signal === undefined ? {} : { signal: request.signal }),
+    });
+  }
+}
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -464,26 +536,66 @@ export class HoneyBeeRuntimeFacade {
         });
       }
 
+      if ("schemaVersion" in config.transaction.workspaceStorage) {
+        const storage = config.transaction.workspaceStorage;
+        try {
+          const status = await new UnityWorkspaceStorageCliAdapter(
+            storage.command,
+            storage.provider,
+            storage.binarySha256,
+            2,
+          ).status(`desktop-doctor-${randomUUID()}`, storage.workspaceRoot);
+          if (
+            !isRecord(status.status) ||
+            status.status.manualRecoveryRequired === true ||
+            status.status.capability === undefined
+          ) {
+            throw new Error("storage unavailable");
+          }
+          add({
+            id: "workspace-storage.schema2",
+            label: "workspace-storage service",
+            status: "pass",
+            code: "workspace-storage.schema2-ready",
+            summary: "The schema-2 storage service is installed and ready.",
+            target: storage.workspaceRoot,
+          });
+        } catch {
+          add({
+            id: "workspace-storage.schema2",
+            label: "workspace-storage service",
+            status: "fail",
+            code: "workspace-storage.schema2-unavailable",
+            summary: "The schema-2 storage service is unavailable or requires manual recovery.",
+            target: storage.workspaceRoot,
+          });
+        }
+      }
+
       const commandChecks = [
-        {
-          id: "unity.editor",
-          label: "Unity Editor",
-          command: config.transaction.testplay.unityPath,
-          cwd: undefined,
-        },
-        {
-          id: "testplay.command",
-          label: "TestPlay",
-          command: config.transaction.testplay.command.command,
-          cwd: config.transaction.testplay.command.cwd,
-        },
+        ...(config.transaction.testplay === undefined
+          ? []
+          : [
+              {
+                id: "unity.editor",
+                label: "Unity Editor",
+                command: config.transaction.testplay.unityPath,
+                cwd: undefined,
+              },
+              {
+                id: "testplay.command",
+                label: "TestPlay",
+                command: config.transaction.testplay.command.command,
+                cwd: config.transaction.testplay.command.cwd,
+              },
+            ]),
         {
           id: "agent.command",
           label: "Agent",
           command: config.transaction.agent.command.command,
           cwd: config.transaction.agent.command.cwd,
         },
-      ] as const;
+      ];
       for (const candidate of commandChecks) {
         const resolved = await resolveExecutable(candidate.command, candidate.cwd);
         add(
@@ -507,50 +619,61 @@ export class HoneyBeeRuntimeFacade {
         );
       }
 
-      const testplayCommand = config.transaction.testplay.command;
-      try {
-        const versionResult = await runDoctorCommand(testplayCommand, ["version"]);
-        const versionValue = JSON.parse(versionResult.stdout.trim()) as unknown;
-        if (!isRecord(versionValue) || typeof versionValue.version !== "string") {
-          throw new Error("invalid version response");
-        }
-        const [compileHelp, warmTestHelp] = await Promise.all([
-          runDoctorCommand(testplayCommand, ["capability", "compile", "--help"]),
-          runDoctorCommand(testplayCommand, ["capability", "warm-test", "--help"]),
-        ]);
-        const compileSurface = compileHelp.stdout + compileHelp.stderr;
-        const warmTestSurface = warmTestHelp.stdout + warmTestHelp.stderr;
-        for (const required of [
-          "--require-bridge-session",
-          "--require-editor-pid",
-          "--workspace-id",
-          "--no-fallback",
-        ]) {
-          if (!compileSurface.includes(required) || !warmTestSurface.includes(required)) {
-            throw new Error("missing protocol v3 flag");
+      const testplay = config.transaction.testplay;
+      if (testplay === undefined) {
+        add({
+          id: "testplay.protocol-v3",
+          label: "TestPlay protocol v3",
+          status: "warning",
+          code: "testplay.not-configured",
+          summary: "TestPlay is optional; compile and warm-test capabilities are unavailable.",
+        });
+      } else {
+        const testplayCommand = testplay.command;
+        try {
+          const versionResult = await runDoctorCommand(testplayCommand, ["version"]);
+          const versionValue = JSON.parse(versionResult.stdout.trim()) as unknown;
+          if (!isRecord(versionValue) || typeof versionValue.version !== "string") {
+            throw new Error("invalid version response");
           }
+          const [compileHelp, warmTestHelp] = await Promise.all([
+            runDoctorCommand(testplayCommand, ["capability", "compile", "--help"]),
+            runDoctorCommand(testplayCommand, ["capability", "warm-test", "--help"]),
+          ]);
+          const compileSurface = compileHelp.stdout + compileHelp.stderr;
+          const warmTestSurface = warmTestHelp.stdout + warmTestHelp.stderr;
+          for (const required of [
+            "--require-bridge-session",
+            "--require-editor-pid",
+            "--workspace-id",
+            "--no-fallback",
+          ]) {
+            if (!compileSurface.includes(required) || !warmTestSurface.includes(required)) {
+              throw new Error("missing protocol v3 flag");
+            }
+          }
+          if (!warmTestSurface.includes("--filter") || !warmTestSurface.includes("--category")) {
+            throw new Error("missing warm-test selectors");
+          }
+          add({
+            id: "testplay.protocol-v3",
+            label: "TestPlay protocol v3",
+            status: "pass",
+            code: "testplay.protocol-v3-available",
+            summary: "TestPlay exposes strict compile and warm-test capability commands.",
+            target: testplayCommand.command,
+            version: versionValue.version,
+          });
+        } catch {
+          add({
+            id: "testplay.protocol-v3",
+            label: "TestPlay protocol v3",
+            status: "fail",
+            code: "testplay.protocol-v3-unavailable",
+            summary: "TestPlay does not expose the required protocol v3 capability surface.",
+            target: testplayCommand.command,
+          });
         }
-        if (!warmTestSurface.includes("--filter") || !warmTestSurface.includes("--category")) {
-          throw new Error("missing warm-test selectors");
-        }
-        add({
-          id: "testplay.protocol-v3",
-          label: "TestPlay protocol v3",
-          status: "pass",
-          code: "testplay.protocol-v3-available",
-          summary: "TestPlay exposes strict compile and warm-test capability commands.",
-          target: testplayCommand.command,
-          version: versionValue.version,
-        });
-      } catch {
-        add({
-          id: "testplay.protocol-v3",
-          label: "TestPlay protocol v3",
-          status: "fail",
-          code: "testplay.protocol-v3-unavailable",
-          summary: "TestPlay does not expose the required protocol v3 capability surface.",
-          target: testplayCommand.command,
-        });
       }
     }
 
@@ -635,7 +758,14 @@ export class HoneyBeeRuntimeFacade {
           const singleConfig = UnityWorkConfigV2Schema.parse({
             ...baseConfig.transaction,
             schemaVersion: 2,
-            testplay: { ...baseConfig.transaction.testplay, bridgeProtocolVersion: 3 },
+            ...(baseConfig.transaction.testplay === undefined
+              ? {}
+              : {
+                  testplay: {
+                    ...baseConfig.transaction.testplay,
+                    bridgeProtocolVersion: 3,
+                  },
+                }),
             editorPool: baseConfig.editorPool,
             priority: work.priority,
             capabilities: work.capabilities,
@@ -646,10 +776,12 @@ export class HoneyBeeRuntimeFacade {
             journal,
             controls,
           );
-          await services.execution.pool.declare({
-            poolId: singleConfig.editorPool.id,
-            capacity: singleConfig.editorPool.capacity,
-          });
+          if (singleConfig.capabilities.length > 0) {
+            await services.execution.pool.declare({
+              poolId: singleConfig.editorPool.id,
+              capacity: singleConfig.editorPool.capacity,
+            });
+          }
           await services.transaction.run(runId, work.task, singleConfig, services.execution);
           return;
         }

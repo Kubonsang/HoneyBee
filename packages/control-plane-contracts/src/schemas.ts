@@ -226,7 +226,7 @@ export const StartUnityWorkV1Schema = z
     id: StepIdSchema,
     task: z.string().trim().min(1).max(100_000),
     priority: UnityWorkPrioritySchema,
-    capabilities: z.array(UnityCapabilitySchema).min(1).max(16),
+    capabilities: z.array(UnityCapabilitySchema).max(16),
   })
   .strict();
 

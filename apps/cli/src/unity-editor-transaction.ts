@@ -43,6 +43,7 @@ import {
 } from "@honeybee/core";
 
 import type {
+  AnyWorkspaceAcquireRequest,
   SourceManifest,
   UnityCapabilityRunResult,
   UnityProjectBootstrap,
@@ -236,7 +237,7 @@ export class UnityEditorWorkTransaction {
     private readonly controls: RunControlPort,
     private readonly bootstrap: UnityProjectBootstrap,
     private readonly storage: UnityWorkspaceStorageCliAdapter,
-    private readonly capabilities: UnityCapabilityRunner,
+    private readonly capabilities: UnityCapabilityRunner | undefined,
     private readonly launcher: UnityEditorLauncher,
     private readonly registry: UnityEditorRegistry,
     private readonly bridge: WarmBridgeBindingResolver,
@@ -378,8 +379,13 @@ export class UnityEditorWorkTransaction {
     let decision: Decision | undefined;
     let activeCapabilityFailure: FailureMetadata | undefined;
     const aborter = new AbortController();
+    let bridgeOverlayPaths: ReadonlySet<string>;
 
     try {
+      bridgeOverlayPaths =
+        config.bridgeOverlay === undefined
+          ? new Set<string>()
+          : await this.bootstrap.bridgeOverlayPaths(config.bridgeOverlay);
       await this.storage.preflight();
       sourceBeforeValue = await this.bootstrap.manifest(config.sourceProjectPath);
       sourceBefore = await this.#storeJson(
@@ -393,8 +399,9 @@ export class UnityEditorWorkTransaction {
         config.sourceProjectPath,
         config.workspaceStorage.workspaceRoot,
         workspaceId,
+        config.bridgeOverlay,
       );
-      const preparedManifest = await this.bootstrap.manifest(workspacePath);
+      const preparedManifest = await this.bootstrap.manifest(workspacePath, bridgeOverlayPaths);
       if (!sameManifest(sourceBeforeValue, preparedManifest)) {
         throw new HoneyBeeCoreError(
           "workspace.invalid-project",
@@ -462,236 +469,252 @@ export class UnityEditorWorkTransaction {
         aborter.signal,
       );
 
-      const requestId = EventIdSchema.parse(this.#randomId());
-      const request = {
-        poolId: execution.poolId,
-        requestId,
-        ownerRunId: runId,
-        ownerWorkId: execution.workId,
-        priority: execution.priority,
-      };
-      await writer.emit("editor.pool-requested", poolRequestPayload(request));
-      try {
-        await execution.pool.declare({
-          poolId: execution.poolId,
-          capacity: config.editorPool.capacity,
-        });
-        const ticket = await execution.pool.enqueue(request);
-        await writer.emit("editor.pool-queued", {
-          ...poolRequestPayload(ticket),
-          ticket: ticket.ticket,
-        });
-        poolLease = await execution.pool.acquire(request, aborter.signal);
-      } catch (error) {
-        if (aborter.signal.aborted) {
-          await execution.pool.cancel(request).catch(() => undefined);
-          await writer.emit("editor.pool-cancelled", poolRequestPayload(request));
-        } else {
-          await execution.pool.cancel(request).catch(() => undefined);
-          await writer.emit("editor.pool-acquire-failed", {
-            ...poolRequestPayload(request),
-            failure: failureMetadata(error),
-          });
+      if (execution.capabilities.length === 0) {
+        decision = { outcome: "completed" };
+      } else {
+        const testplay = config.testplay;
+        if (testplay === undefined || this.capabilities === undefined) {
+          throw new HoneyBeeCoreError(
+            "validation.invalid-workflow",
+            "TestPlay is required for Unity validation capabilities.",
+          );
         }
-        throw error;
-      }
-      await writer.emit("editor.pool-acquired", poolLeasePayload(poolLease));
-
-      const executablePath = path.resolve(config.testplay.unityPath);
-      const executableDigest = `sha256:${createHash("sha256")
-        .update(await readFile(executablePath))
-        .digest("hex")}` as const;
-      const launchId = EventIdSchema.parse(this.#randomId());
-      const intent = EditorLaunchIntentV1Schema.parse({
-        schemaVersion: 1,
-        launchId,
-        nonce: randomBytes(32).toString("hex"),
-        poolId: execution.poolId,
-        slotId: poolLease.slotId,
-        poolLeaseId: poolLease.leaseId,
-        ownerRunId: runId,
-        ownerWorkId: execution.workId,
-        workspaceId,
-        projectPath: workspacePath,
-        unityExecutablePath: executablePath,
-        unityExecutableDigest: executableDigest,
-        containmentReceiptPath: path.join(this.root, runId, "control", `editor-${launchId}.json`),
-        registrationTimeoutMs: config.editorPool.registrationTimeoutMs,
-        activationTimeoutMs: config.editorPool.activationTimeoutMs,
-        shutdownTimeoutMs: config.editorPool.shutdownTimeoutMs,
-      });
-      const intentArtifact = await this.#storeJson(writer, runId, "editor-launch-intent", intent);
-      await writer.emit("editor.launch-intended", {
-        launchId,
-        slotId: poolLease.slotId,
-        leaseId: poolLease.leaseId,
-        intent: intentArtifact,
-      });
-      launchIntent = intent;
-
-      const handle = await this.launcher.launch(
-        intent,
-        {
-          command: executablePath,
-          args: [
-            "-batchmode",
-            "-nographics",
-            "-projectPath",
-            workspacePath,
-            "-logFile",
-            path.join(this.root, runId, "unity-editor.log"),
-          ],
-          cwd: workspacePath,
-          env: { HONEYBEE_WORKSPACE_ID: workspaceId, HONEYBEE_EDITOR_LAUNCH_ID: launchId },
-        },
-        {
-          onContainmentReady: async (receiptValue) => {
-            containment = EditorContainmentReceiptV1Schema.parse(receiptValue);
-            containmentArtifact = await this.#storeJson(
-              writer,
-              runId,
-              "editor-containment-receipt",
-              containment,
-            );
-            await writer.emit("editor.containment-registered", {
-              launchId,
-              pid: containment.containmentPid,
-              processIdentity: containment.processIdentity,
-              receipt: containmentArtifact,
-            });
-          },
-          onActivated: () => writer.emit("editor.activated", { launchId }),
-          onEditorStarted: async (editor) => {
-            if (containmentArtifact === undefined)
-              throw new HoneyBeeCoreError(
-                "editor.receipt-invalid",
-                "Containment receipt is not durable.",
-              );
-            const editorId = EventIdSchema.parse(this.#randomId());
-            const receiptValue = EditorOwnershipReceiptV1Schema.parse({
-              schemaVersion: 1,
-              launchId,
-              nonce: intent.nonce,
-              editorId,
-              editorPid: editor.pid,
-              editorProcessIdentity: editor.processIdentity,
-              containment: containmentArtifact,
-              poolId: execution.poolId,
-              slotId: poolLease?.slotId,
-              poolLeaseId: poolLease?.leaseId,
-              ownerRunId: runId,
-              ownerWorkId: execution.workId,
-              workspaceId,
-              projectPath: workspacePath,
-              unityExecutablePath: executablePath,
-              unityExecutableDigest: executableDigest,
-              establishedAt: this.#now().toISOString(),
-            });
-            const ownershipArtifact = await this.#storeJson(
-              writer,
-              runId,
-              "editor-ownership-receipt",
-              receiptValue,
-            );
-            await writer.emit("editor.ownership-established", {
-              launchId,
-              editorId,
-              slotId: poolLease?.slotId,
-              pid: editor.pid,
-              processIdentity: editor.processIdentity,
-              receipt: ownershipArtifact,
-            });
-            ownership = receiptValue;
-            await this.registry.recordOwned(
-              UnityEditorObservationV1Schema.parse({
-                schemaVersion: 1,
-                editorId,
-                pid: editor.pid,
-                processIdentity: editor.processIdentity,
-                executablePath,
-                projectPath: workspacePath,
-                workspaceId,
-                ownership: "honeybee",
-                ownerRunId: runId,
-                ownerWorkId: execution.workId,
-                slotId: poolLease?.slotId,
-                launchId,
-                state: "alive",
-                pathObservation: "confirmed",
-                observedAt: this.#now().toISOString(),
-              }),
-            );
-          },
-        },
-      );
-      if (ownership === undefined)
-        throw new HoneyBeeCoreError(
-          "editor.ownership-failed",
-          "Editor ownership was not established.",
-        );
-      binding = await this.bridge.bind({
-        editor: UnityEditorObservationV1Schema.parse({
-          schemaVersion: 1,
-          editorId: ownership.editorId,
-          pid: ownership.editorPid,
-          processIdentity: ownership.editorProcessIdentity,
-          executablePath,
-          projectPath: workspacePath,
-          workspaceId,
-          ownership: "honeybee",
+        const requestId = EventIdSchema.parse(this.#randomId());
+        const request = {
+          poolId: execution.poolId,
+          requestId,
           ownerRunId: runId,
           ownerWorkId: execution.workId,
-          slotId: poolLease.slotId,
-          launchId,
-          state: "alive",
-          pathObservation: "confirmed",
-          observedAt: this.#now().toISOString(),
-        }),
-        workspaceId,
-        workspacePath,
-        timeoutMs: config.editorPool.bridgeReadyTimeoutMs,
-        signal: aborter.signal,
-      });
-      const bindingArtifact = await this.#storeJson(writer, runId, "warm-bridge-binding", binding);
-      await writer.emit("editor.bridge-bound", {
-        editorId: binding.editorId,
-        bridgeSessionId: binding.bridgeSessionId,
-        binding: bindingArtifact,
-      });
+          priority: execution.priority,
+        };
+        await writer.emit("editor.pool-requested", poolRequestPayload(request));
+        try {
+          await execution.pool.declare({
+            poolId: execution.poolId,
+            capacity: config.editorPool.capacity,
+          });
+          const ticket = await execution.pool.enqueue(request);
+          await writer.emit("editor.pool-queued", {
+            ...poolRequestPayload(ticket),
+            ticket: ticket.ticket,
+          });
+          poolLease = await execution.pool.acquire(request, aborter.signal);
+        } catch (error) {
+          if (aborter.signal.aborted) {
+            await execution.pool.cancel(request).catch(() => undefined);
+            await writer.emit("editor.pool-cancelled", poolRequestPayload(request));
+          } else {
+            await execution.pool.cancel(request).catch(() => undefined);
+            await writer.emit("editor.pool-acquire-failed", {
+              ...poolRequestPayload(request),
+              failure: failureMetadata(error),
+            });
+          }
+          throw error;
+        }
+        await writer.emit("editor.pool-acquired", poolLeasePayload(poolLease));
 
-      for (const [index, capability] of execution.capabilities.entries()) {
-        lastEvidence = await this.#runCapability(
-          runId,
-          capability,
-          index,
-          binding,
-          workspacePath,
-          config,
-          writer,
-          aborter.signal,
+        const executablePath = path.resolve(testplay.unityPath);
+        const executableDigest = `sha256:${createHash("sha256")
+          .update(await readFile(executablePath))
+          .digest("hex")}` as const;
+        const launchId = EventIdSchema.parse(this.#randomId());
+        const intent = EditorLaunchIntentV1Schema.parse({
+          schemaVersion: 1,
+          launchId,
+          nonce: randomBytes(32).toString("hex"),
+          poolId: execution.poolId,
+          slotId: poolLease.slotId,
+          poolLeaseId: poolLease.leaseId,
+          ownerRunId: runId,
+          ownerWorkId: execution.workId,
+          workspaceId,
+          projectPath: workspacePath,
+          unityExecutablePath: executablePath,
+          unityExecutableDigest: executableDigest,
+          containmentReceiptPath: path.join(this.root, runId, "control", `editor-${launchId}.json`),
+          registrationTimeoutMs: config.editorPool.registrationTimeoutMs,
+          activationTimeoutMs: config.editorPool.activationTimeoutMs,
+          shutdownTimeoutMs: config.editorPool.shutdownTimeoutMs,
+        });
+        const intentArtifact = await this.#storeJson(writer, runId, "editor-launch-intent", intent);
+        await writer.emit("editor.launch-intended", {
+          launchId,
+          slotId: poolLease.slotId,
+          leaseId: poolLease.leaseId,
+          intent: intentArtifact,
+        });
+        launchIntent = intent;
+
+        const handle = await this.launcher.launch(
+          intent,
+          {
+            command: executablePath,
+            args: [
+              "-batchmode",
+              "-nographics",
+              "-projectPath",
+              workspacePath,
+              "-logFile",
+              path.join(this.root, runId, "unity-editor.log"),
+            ],
+            cwd: workspacePath,
+            env: { HONEYBEE_WORKSPACE_ID: workspaceId, HONEYBEE_EDITOR_LAUNCH_ID: launchId },
+          },
+          {
+            onContainmentReady: async (receiptValue) => {
+              containment = EditorContainmentReceiptV1Schema.parse(receiptValue);
+              containmentArtifact = await this.#storeJson(
+                writer,
+                runId,
+                "editor-containment-receipt",
+                containment,
+              );
+              await writer.emit("editor.containment-registered", {
+                launchId,
+                pid: containment.containmentPid,
+                processIdentity: containment.processIdentity,
+                receipt: containmentArtifact,
+              });
+            },
+            onActivated: () => writer.emit("editor.activated", { launchId }),
+            onEditorStarted: async (editor) => {
+              if (containmentArtifact === undefined)
+                throw new HoneyBeeCoreError(
+                  "editor.receipt-invalid",
+                  "Containment receipt is not durable.",
+                );
+              const editorId = EventIdSchema.parse(this.#randomId());
+              const receiptValue = EditorOwnershipReceiptV1Schema.parse({
+                schemaVersion: 1,
+                launchId,
+                nonce: intent.nonce,
+                editorId,
+                editorPid: editor.pid,
+                editorProcessIdentity: editor.processIdentity,
+                containment: containmentArtifact,
+                poolId: execution.poolId,
+                slotId: poolLease?.slotId,
+                poolLeaseId: poolLease?.leaseId,
+                ownerRunId: runId,
+                ownerWorkId: execution.workId,
+                workspaceId,
+                projectPath: workspacePath,
+                unityExecutablePath: executablePath,
+                unityExecutableDigest: executableDigest,
+                establishedAt: this.#now().toISOString(),
+              });
+              const ownershipArtifact = await this.#storeJson(
+                writer,
+                runId,
+                "editor-ownership-receipt",
+                receiptValue,
+              );
+              await writer.emit("editor.ownership-established", {
+                launchId,
+                editorId,
+                slotId: poolLease?.slotId,
+                pid: editor.pid,
+                processIdentity: editor.processIdentity,
+                receipt: ownershipArtifact,
+              });
+              ownership = receiptValue;
+              await this.registry.recordOwned(
+                UnityEditorObservationV1Schema.parse({
+                  schemaVersion: 1,
+                  editorId,
+                  pid: editor.pid,
+                  processIdentity: editor.processIdentity,
+                  executablePath,
+                  projectPath: workspacePath,
+                  workspaceId,
+                  ownership: "honeybee",
+                  ownerRunId: runId,
+                  ownerWorkId: execution.workId,
+                  slotId: poolLease?.slotId,
+                  launchId,
+                  state: "alive",
+                  pathObservation: "confirmed",
+                  observedAt: this.#now().toISOString(),
+                }),
+              );
+            },
+          },
         );
+        if (ownership === undefined)
+          throw new HoneyBeeCoreError(
+            "editor.ownership-failed",
+            "Editor ownership was not established.",
+          );
+        binding = await this.bridge.bind({
+          editor: UnityEditorObservationV1Schema.parse({
+            schemaVersion: 1,
+            editorId: ownership.editorId,
+            pid: ownership.editorPid,
+            processIdentity: ownership.editorProcessIdentity,
+            executablePath,
+            projectPath: workspacePath,
+            workspaceId,
+            ownership: "honeybee",
+            ownerRunId: runId,
+            ownerWorkId: execution.workId,
+            slotId: poolLease.slotId,
+            launchId,
+            state: "alive",
+            pathObservation: "confirmed",
+            observedAt: this.#now().toISOString(),
+          }),
+          workspaceId,
+          workspacePath,
+          timeoutMs: config.editorPool.bridgeReadyTimeoutMs,
+          signal: aborter.signal,
+        });
+        const bindingArtifact = await this.#storeJson(
+          writer,
+          runId,
+          "warm-bridge-binding",
+          binding,
+        );
+        await writer.emit("editor.bridge-bound", {
+          editorId: binding.editorId,
+          bridgeSessionId: binding.bridgeSessionId,
+          binding: bindingArtifact,
+        });
+
+        for (const [index, capability] of execution.capabilities.entries()) {
+          lastEvidence = await this.#runCapability(
+            runId,
+            capability,
+            index,
+            binding,
+            workspacePath,
+            config,
+            writer,
+            aborter.signal,
+          );
+        }
+        await writer.emit("editor.stop-started", { editorId: ownership.editorId, launchId });
+        editorStopStarted = true;
+        await handle.stop();
+        await writer.emit("editor.exited", {
+          editorId: ownership.editorId,
+          launchId,
+          pid: ownership.editorPid,
+          processIdentity: ownership.editorProcessIdentity,
+        });
+        editorExited = true;
+        await this.registry.recordExited(ownership.editorId);
+        if (containment === undefined || containmentArtifact === undefined)
+          throw new HoneyBeeCoreError("editor.receipt-invalid", "Containment receipt was lost.");
+        await writer.emit("editor.containment-drained", { launchId, receipt: containmentArtifact });
+        containmentDrained = true;
+        containment = undefined;
+        containmentArtifact = undefined;
+        ownership = undefined;
+        await this.#releasePool(execution.pool, poolLease, writer);
+        poolLease = undefined;
+        decision = { outcome: "completed" };
       }
-      await writer.emit("editor.stop-started", { editorId: ownership.editorId, launchId });
-      editorStopStarted = true;
-      await handle.stop();
-      await writer.emit("editor.exited", {
-        editorId: ownership.editorId,
-        launchId,
-        pid: ownership.editorPid,
-        processIdentity: ownership.editorProcessIdentity,
-      });
-      editorExited = true;
-      await this.registry.recordExited(ownership.editorId);
-      if (containment === undefined || containmentArtifact === undefined)
-        throw new HoneyBeeCoreError("editor.receipt-invalid", "Containment receipt was lost.");
-      await writer.emit("editor.containment-drained", { launchId, receipt: containmentArtifact });
-      containmentDrained = true;
-      containment = undefined;
-      containmentArtifact = undefined;
-      ownership = undefined;
-      await this.#releasePool(execution.pool, poolLease, writer);
-      poolLease = undefined;
-      decision = { outcome: "completed" };
     } catch (error) {
       const pollingError = watcher.error();
       const failure = failureMetadata(pollingError ?? error);
@@ -784,11 +807,15 @@ export class UnityEditorWorkTransaction {
       await writer.emit("source.checked", { before: sourceBefore, after: sourceAfter, unchanged });
       if (!unchanged) decision = { outcome: "failed", failure: { errorCode: "source.modified" } };
       if (decision.outcome === "completed") {
+        if (config.bridgeOverlay !== undefined) {
+          await this.bootstrap.verifyBridgeOverlay(workspacePath, config.bridgeOverlay);
+        }
         const verified = await execution.patchBuilder.build({
           runId,
           sourceProjectPath: config.sourceProjectPath,
           workspacePath,
           baseManifest: sourceBefore,
+          ignoredPaths: bridgeOverlayPaths,
           verifySource: async () => {
             if (
               !sameManifest(
@@ -975,6 +1002,12 @@ export class UnityEditorWorkTransaction {
     writer: V5Writer,
     signal: AbortSignal,
   ): Promise<ArtifactRef> {
+    if (this.capabilities === undefined) {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "TestPlay is required for Unity validation capabilities.",
+      );
+    }
     const identity = { capabilityId: capability.id, index, kind: capability.kind } as const;
     await writer.emit("capability.started", identity);
     let started: OrchestrationEventV5 | undefined;
@@ -1663,9 +1696,9 @@ export class UnityEditorWorkTransaction {
       }
       if (input.decision.outcome === "completed") {
         if (
-          input.lastEvidence === undefined ||
           input.patch === undefined ||
-          input.resultManifest === undefined
+          input.resultManifest === undefined ||
+          (input.config.capabilities.length > 0 && input.lastEvidence === undefined)
         ) {
           throw new HoneyBeeCoreError(
             "run.indeterminate",
@@ -1673,7 +1706,7 @@ export class UnityEditorWorkTransaction {
           );
         }
         await input.writer.emit("workflow.completed", {
-          evidence: input.lastEvidence,
+          ...(input.lastEvidence === undefined ? {} : { evidence: input.lastEvidence }),
           patch: input.patch,
           resultManifest: input.resultManifest,
           release,
@@ -1685,7 +1718,7 @@ export class UnityEditorWorkTransaction {
           sourceBefore: input.sourceBefore,
           sourceAfter: input.sourceAfter,
           ...(input.agentOutput === undefined ? {} : { agentOutput: input.agentOutput }),
-          evidence: input.lastEvidence,
+          ...(input.lastEvidence === undefined ? {} : { evidence: input.lastEvidence }),
           patch: input.patch,
           resultManifest: input.resultManifest,
           release,
@@ -1778,7 +1811,31 @@ export class UnityEditorWorkTransaction {
     return true;
   }
 
-  #acquireRequest(runId: RunId, config: UnityWorkConfigV2, workspaceId: string) {
+  #acquireRequest(
+    runId: RunId,
+    config: UnityWorkConfigV2,
+    workspaceId: string,
+  ): AnyWorkspaceAcquireRequest {
+    if ("schemaVersion" in config.workspaceStorage) {
+      const limits = {
+        ...(config.workspaceStorage.storeMaxAllocatedBytes === undefined
+          ? {}
+          : { storeMaxAllocatedBytes: config.workspaceStorage.storeMaxAllocatedBytes }),
+        ...(config.workspaceStorage.minimumHostFreeBytes === undefined
+          ? {}
+          : { minimumHostFreeBytes: config.workspaceStorage.minimumHostFreeBytes }),
+      };
+      return {
+        schemaVersion: 2,
+        operation: "workspace-acquire",
+        requestId: acquireRequestIdFor(runId),
+        consumerId: runId,
+        workspaceId,
+        parentId: config.workspaceStorage.parentId,
+        clientPid: process.pid,
+        ...(Object.keys(limits).length === 0 ? {} : { limits }),
+      };
+    }
     return {
       schemaVersion: 1 as const,
       requestId: acquireRequestIdFor(runId),
@@ -1868,7 +1925,7 @@ export class UnityEditorWorkTransaction {
         ...(agentOutput?.type === "artifact.stored"
           ? { agentOutput: agentOutput.payload.artifact }
           : {}),
-        evidence: terminal.payload.evidence,
+        ...(terminal.payload.evidence === undefined ? {} : { evidence: terminal.payload.evidence }),
         patch: terminal.payload.patch,
         resultManifest: terminal.payload.resultManifest,
         release: terminal.payload.release,

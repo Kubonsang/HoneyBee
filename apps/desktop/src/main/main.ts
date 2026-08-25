@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,11 +16,25 @@ import {
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectProfileV1Schema,
+  DesktopProjectProfileV2Schema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV1Schema,
+  DesktopSetupDiscoveryRequestV1Schema,
+  DesktopSetupDraftV1Schema,
+  DesktopSetupIdRequestV1Schema,
+  DesktopSetupInstallStorageRequestV1Schema,
+  DesktopSetupInstallStorageResultV1Schema,
+  DesktopSetupPathRequestV1Schema,
 } from "../shared/ipc.js";
 import { DesktopSettingsStore } from "./settings.js";
+import {
+  DesktopSetupCoordinator,
+  discoverDesktopSetup,
+  installBundledWorkspaceStorage,
+  materializeImportedManagedProfile,
+  validateManagedEnvironment,
+} from "./setup.js";
 
 let mainWindow: BrowserWindow | undefined;
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
@@ -34,7 +48,18 @@ const writeSmokeStage = async (stage: string): Promise<void> => {
   await writeFile(target, JSON.stringify({ stage }) + "\n", "utf8");
 };
 const userData = app.getPath("userData");
+const bundledToolsRoot = app.isPackaged
+  ? path.join(process.resourcesPath, "win32-x64")
+  : path.join(app.getAppPath(), ".tools", "win32-x64");
+const bundledWorkspaceStoragePath = path.join(bundledToolsRoot, "unity-workspace-storage.exe");
+const bundledWorkspaceStorageHostPath = path.join(
+  bundledToolsRoot,
+  "honeybee-workspace-storage-host.exe",
+);
 const settings = new DesktopSettingsStore(userData);
+const setup = new DesktopSetupCoordinator(path.join(userData, "setups"), (profile) =>
+  settings.upsertProfile(profile),
+);
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
 });
@@ -49,11 +74,21 @@ const showOpenDialog = (options: Electron.OpenDialogOptions) =>
     ? dialog.showOpenDialog(options)
     : dialog.showOpenDialog(mainWindow, options);
 
+const showSaveDialog = (options: Electron.SaveDialogOptions) =>
+  mainWindow === undefined
+    ? dialog.showSaveDialog(options)
+    : dialog.showSaveDialog(mainWindow, options);
+
 const profileFor = async (profileId: string) => {
   const profile = (await settings.listProfiles()).find(
     (candidate) => candidate.profileId === profileId,
   );
   if (profile === undefined) throw new Error("Project profile was not found.");
+  return profile;
+};
+
+const validateProfile = async (profile: Awaited<ReturnType<typeof profileFor>>) => {
+  if (profile.schemaVersion === 2) await validateManagedEnvironment(profile);
   return profile;
 };
 
@@ -124,6 +159,119 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.chooseSetupPath,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupPathRequestV1Schema.parse(requestValue);
+      const directory = ["project", "workspace-root", "bridge-overlay"].includes(request.kind);
+      const result = await showOpenDialog({
+        title: `Choose ${request.kind.replaceAll("-", " ")}`,
+        properties: [directory ? "openDirectory" : "openFile"],
+        ...(directory
+          ? {}
+          : {
+              filters:
+                request.kind === "profile-import"
+                  ? [{ name: "HoneyBee environment", extensions: ["json"] }]
+                  : process.platform === "win32"
+                    ? [
+                        {
+                          name: "Executable",
+                          extensions: request.kind === "agent" ? ["exe", "cmd", "bat"] : ["exe"],
+                        },
+                      ]
+                    : [],
+            }),
+      });
+      return result.canceled ? null : (result.filePaths[0] ?? null);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupDiscover,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupDiscoveryRequestV1Schema.parse(requestValue);
+      return discoverDesktopSetup(request.projectPath, bundledWorkspaceStoragePath);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupStart,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupDraftV1Schema.parse(requestValue);
+      return setup.start({
+        ...request,
+        workspaceStoragePath: bundledWorkspaceStoragePath,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupStatus,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupIdRequestV1Schema.parse(requestValue);
+      return setup.status(request.setupId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupResume,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupIdRequestV1Schema.parse(requestValue);
+      return setup.resume(request.setupId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupCancel,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupIdRequestV1Schema.parse(requestValue);
+      return setup.cancel(request.setupId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupInstallStorage,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopSetupInstallStorageRequestV1Schema.parse(requestValue);
+      await installBundledWorkspaceStorage(bundledWorkspaceStorageHostPath, request.workspaceRoot);
+      return DesktopSetupInstallStorageResultV1Schema.parse({
+        schemaVersion: 1,
+        installed: true,
+        message: "HoneyBee workspace storage was installed for the current user.",
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupImport,
+    safeHandler(async () => {
+      const selected = await showOpenDialog({
+        title: "Import a HoneyBee managed environment",
+        properties: ["openFile"],
+        filters: [{ name: "HoneyBee environment", extensions: ["json"] }],
+      });
+      const selectedPath = selected.filePaths[0];
+      if (selected.canceled || selectedPath === undefined) return null;
+      const imported = DesktopProjectProfileV2Schema.parse(
+        JSON.parse(await readFile(selectedPath, "utf8")),
+      );
+      const profile = await materializeImportedManagedProfile(
+        path.join(userData, "managed-environments"),
+        imported,
+      );
+      await settings.upsertProfile(profile);
+      return profile;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.setupExport,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProfileIdRequestV1Schema.parse(requestValue);
+      const profile = DesktopProjectProfileV2Schema.parse(await profileFor(request.profileId));
+      const selected = await showSaveDialog({
+        title: "Export HoneyBee managed environment",
+        defaultPath: `${profile.label.replaceAll(/[^A-Za-z0-9._-]/gu, "-")}.honeybee.json`,
+        filters: [{ name: "HoneyBee environment", extensions: ["json"] }],
+      });
+      if (selected.canceled || selected.filePath === undefined) return false;
+      await writeFile(selected.filePath, JSON.stringify(profile, null, 2) + "\n", "utf8");
+      return true;
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.removeProfile,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopProfileIdRequestV1Schema.parse(requestValue);
@@ -136,18 +284,53 @@ const registerIpc = (): void => {
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopDoctorRequestV1Schema.parse(requestValue);
       const profile = await profileFor(request.profileId);
-      return runtime.doctor({
+      const report = await runtime.doctor({
         schemaVersion: 1,
         projectPath: profile.projectPath,
         batchConfigPath: profile.batchConfigPath,
       });
+      if (profile.schemaVersion !== 2) return report;
+      try {
+        await validateManagedEnvironment(profile);
+        return {
+          ...report,
+          checks: [
+            ...report.checks,
+            {
+              id: "managed.compatibility",
+              label: "Managed environment",
+              status: "pass" as const,
+              code: "managed.pin-valid",
+              summary: "Compatibility inputs and pinned local tools still match.",
+              target: profile.environment.workspaceStorage.compatibilityKey,
+            },
+          ],
+        };
+      } catch {
+        return {
+          ...report,
+          ok: false,
+          checks: [
+            ...report.checks,
+            {
+              id: "managed.compatibility",
+              label: "Managed environment",
+              status: "fail" as const,
+              code: "managed.pin-invalid",
+              summary:
+                "Packages, required settings, Bridge, Unity, or a pinned tool changed. Run Setup Center again.",
+              target: profile.environment.workspaceStorage.compatibilityKey,
+            },
+          ],
+        };
+      }
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.startWorks,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopStartRequestV1Schema.parse(requestValue);
-      const profile = await profileFor(request.profileId);
+      const profile = await validateProfile(await profileFor(request.profileId));
       return runtime.startUnityWorks({
         schemaVersion: 1,
         projectPath: profile.projectPath,
@@ -320,11 +503,21 @@ const startDesktop = async (): Promise<void> => {
   await createWindow();
 };
 
-void startDesktop().catch(async () => {
-  await writeSmokeStage("failed").catch(() => undefined);
-  process.stderr.write("HoneyBee Desktop failed to start.\n");
-  app.exit(1);
-});
+const ownsDesktopInstance = app.requestSingleInstanceLock();
+if (!ownsDesktopInstance) {
+  app.quit();
+} else {
+  app.on("second-instance", () => {
+    if (mainWindow?.isMinimized() === true) mainWindow.restore();
+    mainWindow?.show();
+    mainWindow?.focus();
+  });
+  void startDesktop().catch(async () => {
+    await writeSmokeStage("failed").catch(() => undefined);
+    process.stderr.write("HoneyBee Desktop failed to start.\n");
+    app.exit(1);
+  });
+}
 
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) void createWindow();

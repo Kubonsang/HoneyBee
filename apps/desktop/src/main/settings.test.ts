@@ -40,8 +40,8 @@ describe("DesktopSettingsStore", () => {
     await store.upsertProfile(older);
     await store.upsertProfile(newer);
     expect(await store.listProfiles()).toEqual([newer, older]);
-    expect(JSON.parse(await readFile(path.join(root, "settings-v1.json"), "utf8"))).toEqual({
-      schemaVersion: 1,
+    expect(JSON.parse(await readFile(path.join(root, "settings-v2.json"), "utf8"))).toEqual({
+      schemaVersion: 2,
       profiles: [newer, older],
     });
 
@@ -52,12 +52,27 @@ describe("DesktopSettingsStore", () => {
   it("fails closed on unknown settings fields", async () => {
     const root = await temporaryRoot();
     await writeFile(
-      path.join(root, "settings-v1.json"),
-      JSON.stringify({ schemaVersion: 1, profiles: [], typo: true }),
+      path.join(root, "settings-v2.json"),
+      JSON.stringify({ schemaVersion: 2, profiles: [], typo: true }),
       "utf8",
     );
     await expect(new DesktopSettingsStore(root).listProfiles()).rejects.toThrow(
       "Desktop settings are invalid",
     );
+  });
+
+  it("reads existing settings v1 profiles without mutating the legacy file", async () => {
+    const root = await temporaryRoot();
+    const legacy = profile(new Date(3).toISOString(), "Legacy");
+    await writeFile(
+      path.join(root, "settings-v1.json"),
+      JSON.stringify({ schemaVersion: 1, profiles: [legacy] }),
+      "utf8",
+    );
+    expect(await new DesktopSettingsStore(root).listProfiles()).toEqual([legacy]);
+    expect(JSON.parse(await readFile(path.join(root, "settings-v1.json"), "utf8"))).toEqual({
+      schemaVersion: 1,
+      profiles: [legacy],
+    });
   });
 });

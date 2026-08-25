@@ -529,6 +529,36 @@ const transactionFixture = async (
 };
 
 describe("UnityEditorWorkTransaction", () => {
+  it("runs Agent-only Work without TestPlay, Editor, Bridge, or pool lifecycle", async () => {
+    const fixture = await transactionFixture();
+    const config = UnityWorkConfigV2Schema.parse({
+      ...fixture.config,
+      testplay: undefined,
+      capabilities: [],
+    });
+    const result = await fixture.transaction.run(
+      fixture.runId,
+      "change the isolated project without validation",
+      config,
+      { ...fixture.execution, capabilities: [] },
+    );
+
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    expect(replay.events.at(-1)?.type).toBe("workflow.completed");
+    expect(result.failure).toBeUndefined();
+    expect(result).toMatchObject({ status: "completed" });
+    expect(fixture.storage.released).toBe(1);
+    expect(replay.status).toBe("terminal");
+    const types = replay.events.map((event) => event.type);
+    expect(types).not.toContain("editor.pool-requested");
+    expect(types).not.toContain("editor.launch-intended");
+    expect(types).not.toContain("editor.bridge-bound");
+    expect(types).not.toContain("capability.started");
+    expect(types).toContain("patch.verified");
+    expect(types.at(-1)).toBe("workflow.completed");
+  });
+
   it("runs config-owned capabilities sequentially and leaves workspace/editor/pool residual zero", async () => {
     const root = await temporaryRoot();
     const source = path.join(root, "source");

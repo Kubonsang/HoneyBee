@@ -482,10 +482,12 @@ const executeUnity = async (
         ? await unityTransactionFor(root, config, journal, controls).run(runId, task, config)
         : await (async () => {
             const services = createUnityEditorTransactionServices(root, config, journal, controls);
-            await services.execution.pool.declare({
-              poolId: config.editorPool.id,
-              capacity: config.editorPool.capacity,
-            });
+            if (config.capabilities.length > 0) {
+              await services.execution.pool.declare({
+                poolId: config.editorPool.id,
+                capacity: config.editorPool.capacity,
+              });
+            }
             return services.transaction.run(runId, task, config, services.execution);
           })();
     finishUnityExecution(result, journalPath, args.json);
