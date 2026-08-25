@@ -75,4 +75,70 @@ describe("DesktopSettingsStore", () => {
       profiles: [legacy],
     });
   });
+
+  it("keeps one managed environment per Unity project when Project Settings is reapplied", async () => {
+    const root = await temporaryRoot();
+    const store = new DesktopSettingsStore(root);
+    const managed = (id: string, configuredAt: string) => ({
+      schemaVersion: 3 as const,
+      profileId: id,
+      label: "Game",
+      projectPath: "C:\\Game",
+      batchConfigPath: `C:\\HoneyBee\\${id}.json`,
+      configLabel: "Managed components",
+      lastOpenedAt: configuredAt,
+      environment: {
+        schemaVersion: 2 as const,
+        environmentId: id,
+        projectPath: "C:\\Game",
+        unity: { path: "C:\\Unity\\Unity.exe", version: "6000.0.1f1", sha256: "a".repeat(64) },
+        storage: {
+          component: {
+            schemaVersion: 1 as const,
+            componentId: "workspace-storage" as const,
+            version: "1.0.0",
+            receiptDigest: "b".repeat(64),
+            files: [
+              {
+                role: "client" as const,
+                path: "C:\\client.exe",
+                kind: "file" as const,
+                byteLength: 1,
+                sha256: "c".repeat(64),
+              },
+              {
+                role: "host" as const,
+                path: "C:\\host.exe",
+                kind: "file" as const,
+                byteLength: 1,
+                sha256: "d".repeat(64),
+              },
+            ],
+          },
+          workspaceRoot: "C:\\Workspaces",
+          provider: "vhdx",
+          parentId: "vhdx:parent",
+          compatibilityKey: "e".repeat(64),
+        },
+        agent: { command: "opencode" },
+        editorPool: { id: "unity-editor" as const, capacity: 2 },
+        compatibilityInputs: {
+          schemaVersion: 1 as const,
+          unityVersion: "6000.0.1f1",
+          unityExecutableSha256: "a".repeat(64),
+          packagesManifestSha256: "f".repeat(64),
+          packagesLockSha256: "missing" as const,
+          projectSettingsManifestSha256: "1".repeat(64),
+          buildTarget: "StandaloneWindows64" as const,
+          scriptingBackend: "Mono2x",
+        },
+        configuredAt,
+      },
+    });
+    const first = managed("00000000-0000-4000-8000-000000000011", new Date(4).toISOString());
+    const second = managed("00000000-0000-4000-8000-000000000012", new Date(5).toISOString());
+    await store.upsertProfile(first);
+    await store.upsertProfile(second);
+    expect(await store.listProfiles()).toEqual([second]);
+  });
 });

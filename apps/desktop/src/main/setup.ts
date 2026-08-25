@@ -108,7 +108,7 @@ interface StorageResponse {
   readonly error?: Readonly<{ code?: string }>;
 }
 
-interface CommandResult {
+export interface CommandResult {
   readonly exitCode: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly stdout: string;
@@ -592,13 +592,13 @@ export const discoverDesktopSetup = async (
     bridgeOverlays: bridges,
     suggestedWorkspaceRoot: path.join(
       process.env.LOCALAPPDATA ?? path.dirname(projectPath),
-      "TestPlay",
+      "HoneyBee",
       "Workspaces",
     ),
   });
 };
 
-const runCommand = (
+export const runCommand = (
   command: string,
   args: readonly string[],
   options: Readonly<{
@@ -1627,11 +1627,30 @@ export class DesktopSetupCoordinator {
   }
 }
 
+export const WorkspaceStorageMachineReceiptV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    serviceName: z.literal("UnityWorkspaceStorage"),
+    pipeName: z.literal("\\\\.\\pipe\\unity-workspace-storage-v2"),
+    componentVersion: z.string().min(1).max(128),
+    storeRoot: z.string().min(1),
+    workspaceRoot: z.string().min(1),
+    configPath: z.string().min(1),
+    userSid: z.string().min(1),
+    executable: z.string().min(1),
+    executableSha256: z.string().regex(/^[0-9a-f]{64}$/u),
+  })
+  .strict();
+export type WorkspaceStorageMachineReceiptV2 = z.infer<
+  typeof WorkspaceStorageMachineReceiptV2Schema
+>;
+
 export const installBundledWorkspaceStorage = async (
   storageHostPathValue: string,
   workspaceRootValue: string,
+  componentVersion: string,
   replaceExisting = false,
-): Promise<void> => {
+): Promise<WorkspaceStorageMachineReceiptV2> => {
   if (process.platform !== "win32") {
     throw setupError(
       "workspace-storage.install-unsupported",
@@ -1649,6 +1668,8 @@ export const installBundledWorkspaceStorage = async (
     quote(workspaceRoot),
     "'--user-sid'",
     "$sid",
+    "'--component-version'",
+    quote(componentVersion),
     ...(replaceExisting ? ["'--replace'"] : []),
   ].join(",");
   const script = [
@@ -1668,9 +1689,15 @@ export const installBundledWorkspaceStorage = async (
     { cwd: path.dirname(storageHostPath), timeoutMs: 10 * 60_000 },
   );
   if (result.exitCode !== 0 || result.signal !== null) {
+    if (result.exitCode === 23) {
+      throw setupError(
+        "workspace-storage.service-conflict",
+        "A Unity Workspace Storage service exists without HoneyBee's matching machine receipt.",
+      );
+    }
     throw setupError(
       "workspace-storage.install-failed",
-      "Storage installation was cancelled or failed.",
+      "Storage installation was cancelled, denied, or failed.",
     );
   }
   if ((await hashFile(storageHostPath)) !== pinned) {
@@ -1679,6 +1706,43 @@ export const installBundledWorkspaceStorage = async (
       "HoneyBee workspace-storage host changed during installation.",
     );
   }
+  const programData = process.env.ProgramData;
+  if (programData === undefined || !path.isAbsolute(programData)) {
+    throw setupError("workspace-storage.receipt-invalid", "ProgramData is unavailable.");
+  }
+  let receipt: WorkspaceStorageMachineReceiptV2;
+  try {
+    receipt = WorkspaceStorageMachineReceiptV2Schema.parse(
+      JSON.parse(
+        await readFile(
+          path.join(programData, "UnityWorkspaceStorage", "install-receipt.json"),
+          "utf8",
+        ),
+      ),
+    );
+  } catch {
+    throw setupError(
+      "workspace-storage.receipt-invalid",
+      "Workspace storage did not publish a valid machine receipt.",
+    );
+  }
+  const samePath = (left: string, right: string): boolean =>
+    process.platform === "win32"
+      ? path.resolve(left).toLowerCase() === path.resolve(right).toLowerCase()
+      : path.resolve(left) === path.resolve(right);
+  if (
+    receipt.componentVersion !== componentVersion ||
+    !samePath(receipt.workspaceRoot, workspaceRoot) ||
+    !samePath(receipt.storeRoot, path.join(programData, "UnityWorkspaceStorage")) ||
+    receipt.executableSha256 !== pinned ||
+    (await hashFile(receipt.executable)) !== receipt.executableSha256
+  ) {
+    throw setupError(
+      "workspace-storage.receipt-mismatch",
+      "Workspace storage machine identity does not match this HoneyBee build.",
+    );
+  }
+  return receipt;
 };
 
 export const validateManagedEnvironment = async (

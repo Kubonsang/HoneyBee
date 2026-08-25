@@ -16,18 +16,16 @@ import {
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
+  DesktopProjectAddRequestV1Schema,
+  DesktopProjectDiscoveryV1Schema,
   DesktopProjectProfileV1Schema,
   DesktopProjectProfileSchema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
-  DesktopSetupDraftSchema,
   DesktopSetupIdRequestV1Schema,
-  DesktopSetupInstallStorageRequestV1Schema,
-  DesktopSetupInstallStorageResultV1Schema,
   DesktopSetupPathRequestV1Schema,
-  DesktopStorageActivateRequestV1Schema,
   type ProjectComponentLockV1,
 } from "../shared/ipc.js";
 import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
@@ -40,6 +38,7 @@ import {
   materializeImportedManagedProfile,
   upgradeManagedProfileV2,
   validateManagedEnvironment,
+  runCommand,
 } from "./setup.js";
 
 let mainWindow: BrowserWindow | undefined;
@@ -63,10 +62,9 @@ const compatibilityManifestPath = app.isPackaged
   : path.join(app.getAppPath(), "resources", "component-compatibility-v1.json");
 const activeWorkspaceStorageHostPath = path.join(
   process.env.ProgramData ?? "C:\\ProgramData",
-  "HoneyBee",
-  "WorkspaceStorage",
+  "UnityWorkspaceStorage",
   "broker",
-  "honeybee-workspace-storage-host.exe",
+  "unity-workspace-storage-host.exe",
 );
 const settings = new DesktopSettingsStore(userData);
 const setup = new DesktopSetupCoordinator(path.join(userData, "setups"), (profile) =>
@@ -142,6 +140,109 @@ const assertStorageSwitchSafe = async (): Promise<void> => {
   }
 };
 
+const hiddenWorkspaceRoot = (): string => {
+  const localAppData = process.env.LOCALAPPDATA;
+  if (localAppData === undefined || !path.isAbsolute(localAppData)) {
+    throw Object.assign(new Error("LOCALAPPDATA is unavailable."), {
+      code: "workspace-storage.local-app-data-unavailable",
+    });
+  }
+  return path.join(localAppData, "HoneyBee", "Workspaces");
+};
+
+let storageProvisioning:
+  | Promise<{
+      readonly lock: ProjectComponentLockV1;
+      readonly workspaceRoot: string;
+    }>
+  | undefined;
+
+const verifyStorageBroker = async (clientPath: string): Promise<void> => {
+  const result = await runCommand(
+    clientPath,
+    ["workspace", "status", "--schema", "2", "--request-id", `desktop-${randomUUID()}`],
+    { cwd: path.dirname(clientPath), timeoutMs: 30_000 },
+  );
+  let response: unknown;
+  try {
+    response = JSON.parse(result.stdout);
+  } catch {
+    response = undefined;
+  }
+  if (
+    result.exitCode !== 0 ||
+    result.signal !== null ||
+    typeof response !== "object" ||
+    response === null ||
+    !("ok" in response) ||
+    response.ok !== true ||
+    !("schemaVersion" in response) ||
+    response.schemaVersion !== 2
+  ) {
+    throw Object.assign(new Error("Unity Workspace Storage broker did not answer schema 2."), {
+      code: "workspace-storage.broker-unavailable",
+    });
+  }
+};
+
+const provisionWorkspaceStorage = async (): Promise<{
+  readonly lock: ProjectComponentLockV1;
+  readonly workspaceRoot: string;
+}> => {
+  if (storageProvisioning !== undefined) return storageProvisioning;
+  storageProvisioning = (async () => {
+    const snapshot = await components.snapshot();
+    const supportedActive =
+      snapshot.activeWorkspaceStorage === undefined
+        ? undefined
+        : components
+            .releases("workspace-storage")
+            .find((release) => release.version === snapshot.activeWorkspaceStorage?.version);
+    const release = supportedActive ?? components.releases("workspace-storage")[0];
+    if (release === undefined) {
+      throw Object.assign(new Error("No workspace-storage release is approved."), {
+        code: "workspace-storage.release-unavailable",
+      });
+    }
+    if (
+      snapshot.activeWorkspaceStorage !== undefined &&
+      snapshot.activeWorkspaceStorage.version !== release.version
+    ) {
+      await assertStorageSwitchSafe();
+    }
+    await components.installWorkspaceStorage(release.version);
+    const lock = await components.lock("workspace-storage", release.version);
+    const workspaceRoot = hiddenWorkspaceRoot();
+    await installBundledWorkspaceStorage(
+      componentFile(lock, "host").path,
+      workspaceRoot,
+      release.version,
+      snapshot.activeWorkspaceStorage !== undefined,
+    );
+    await components.activateWorkspaceStorage(release.version, workspaceRoot);
+    await verifyStorageBroker(componentFile(lock, "client").path);
+    await components.assertWorkspaceStorageActive(lock);
+    return { lock, workspaceRoot };
+  })()
+    .catch((error: unknown) => {
+      if (
+        typeof error === "object" &&
+        error !== null &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        throw Object.assign(new Error("The bundled workspace-storage payload is missing."), {
+          code: "workspace-storage.payload-missing",
+        });
+      }
+      throw error;
+    })
+    .finally(() => {
+      storageProvisioning = undefined;
+    });
+  return storageProvisioning;
+};
+
 const bootstrap = async () =>
   DesktopBootstrapV1Schema.parse({
     schemaVersion: 1,
@@ -164,7 +265,22 @@ const safeHandler =
         typeof error.code === "string"
           ? error.code
           : "desktop.operation-failed";
-      throw new Error(`HoneyBee operation failed (${code}).`, { cause: error });
+      const publicMessages: Readonly<Record<string, string>> = {
+        "workspace-storage.service-conflict":
+          "Another Unity Workspace Storage service exists without HoneyBee's machine receipt.",
+        "workspace-storage.install-failed":
+          "Windows permission was denied, cancelled, or the storage service could not be installed.",
+        "workspace-storage.payload-missing":
+          "This HoneyBee installation is missing its bundled workspace-storage payload.",
+        "workspace-storage.receipt-invalid":
+          "The storage service did not publish a valid machine receipt.",
+        "workspace-storage.receipt-mismatch":
+          "The installed storage service does not match this HoneyBee build.",
+        "workspace-storage.broker-unavailable":
+          "The storage service was installed but did not become ready.",
+      };
+      const message = publicMessages[code] ?? "The operation could not be completed.";
+      throw new Error(`HoneyBee operation failed (${code}): ${message}`, { cause: error });
     }
   };
 
@@ -236,24 +352,29 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
-    DesktopIpcChannels.setupDiscover,
+    DesktopIpcChannels.projectDiscover,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopSetupDiscoveryRequestV1Schema.parse(requestValue);
-      return discoverDesktopSetup(request.projectPath, bundledWorkspaceStoragePath);
+      const discovery = await discoverDesktopSetup(
+        request.projectPath,
+        bundledWorkspaceStoragePath,
+      );
+      return DesktopProjectDiscoveryV1Schema.parse({
+        schemaVersion: 1,
+        projectPath: discovery.projectPath,
+        ...(discovery.projectVersion === undefined
+          ? {}
+          : { projectVersion: discovery.projectVersion }),
+        unity: discovery.unity,
+        agents: discovery.agents,
+      });
     }),
   );
   ipcMain.handle(
-    DesktopIpcChannels.setupStart,
+    DesktopIpcChannels.projectAdd,
     safeHandler(async (requestValue: unknown) => {
-      const request = DesktopSetupDraftSchema.parse(requestValue);
-      if (request.schemaVersion === 1) {
-        return setup.start({
-          ...request,
-          workspaceStoragePath: bundledWorkspaceStoragePath,
-        });
-      }
-      const storage = await components.lock("workspace-storage", request.workspaceStorageVersion);
-      await components.assertWorkspaceStorageActive(storage);
+      const request = DesktopProjectAddRequestV1Schema.parse(requestValue);
+      const storage = await provisionWorkspaceStorage();
       const testplay =
         request.testplayVersion === undefined
           ? undefined
@@ -261,11 +382,11 @@ const registerIpc = (): void => {
       return setup.start(
         ResolvedDesktopSetupDraftV1Schema.parse({
           schemaVersion: 1,
-          label: request.label,
+          label: path.basename(path.resolve(request.projectPath)),
           projectPath: request.projectPath,
           unityPath: request.unityPath,
-          workspaceStoragePath: componentFile(storage, "client").path,
-          workspaceRoot: request.workspaceRoot,
+          workspaceStoragePath: componentFile(storage.lock, "client").path,
+          workspaceRoot: storage.workspaceRoot,
           ...(testplay === undefined
             ? {}
             : {
@@ -273,9 +394,9 @@ const registerIpc = (): void => {
                 bridgeOverlayPath: componentFile(testplay, "bridge-overlay").path,
               }),
           agent: request.agent,
-          editorCapacity: request.editorCapacity,
+          editorCapacity: 2,
           componentLocks: {
-            workspaceStorage: storage,
+            workspaceStorage: storage.lock,
             ...(testplay === undefined ? {} : { testplay }),
           },
         }),
@@ -304,23 +425,6 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
-    DesktopIpcChannels.setupInstallStorage,
-    safeHandler(async (requestValue: unknown) => {
-      const request = DesktopSetupInstallStorageRequestV1Schema.parse(requestValue);
-      const receipt = await components.ensureBundledWorkspaceStorage();
-      await installBundledWorkspaceStorage(
-        componentFile(await components.lock("workspace-storage", receipt.version), "host").path,
-        request.workspaceRoot,
-      );
-      await components.activateWorkspaceStorage(receipt.version, request.workspaceRoot);
-      return DesktopSetupInstallStorageResultV1Schema.parse({
-        schemaVersion: 1,
-        installed: true,
-        message: "HoneyBee workspace storage was installed for the current user.",
-      });
-    }),
-  );
-  ipcMain.handle(
     DesktopIpcChannels.componentsSnapshot,
     safeHandler(async () => components.snapshot()),
   );
@@ -329,21 +433,6 @@ const registerIpc = (): void => {
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopComponentInstallRequestV1Schema.parse(requestValue);
       return components.installTestPlay(request.version, request.approved);
-    }),
-  );
-  ipcMain.handle(
-    DesktopIpcChannels.storageActivate,
-    safeHandler(async (requestValue: unknown) => {
-      const request = DesktopStorageActivateRequestV1Schema.parse(requestValue);
-      await assertStorageSwitchSafe();
-      await components.installWorkspaceStorage(request.version);
-      const lock = await components.lock("workspace-storage", request.version);
-      await installBundledWorkspaceStorage(
-        componentFile(lock, "host").path,
-        request.workspaceRoot,
-        true,
-      );
-      return components.activateWorkspaceStorage(request.version, request.workspaceRoot);
     }),
   );
   ipcMain.handle(
@@ -631,7 +720,7 @@ const createWindow = async (): Promise<void> => {
         "  const inspect = async () => {",
         "    try {",
         "      const api = window.honeybee;",
-        "      const ready = document.body.textContent?.includes('Command Center') === true;",
+        "      const ready = document.body.textContent?.includes('Your Unity projects') === true;",
         "      if (api !== undefined && ready) {",
         "        const bootstrap = await api.bootstrap();",
         "        resolve({",

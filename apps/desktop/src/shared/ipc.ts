@@ -440,6 +440,28 @@ export const DesktopSetupDiscoveryV1Schema = z
   .strict();
 export type DesktopSetupDiscoveryV1 = z.infer<typeof DesktopSetupDiscoveryV1Schema>;
 
+export const DesktopProjectDiscoveryV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectPath: z.string().min(1),
+    projectVersion: z.string().min(1).optional(),
+    unity: z.array(SetupCandidateV1Schema),
+    agents: z.array(SetupCandidateV1Schema),
+  })
+  .strict();
+export type DesktopProjectDiscoveryV1 = z.infer<typeof DesktopProjectDiscoveryV1Schema>;
+
+export const DesktopProjectAddRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectPath: z.string().min(1),
+    unityPath: z.string().min(1),
+    agent: SetupCommandSchema,
+    testplayVersion: SemanticVersionSchema.optional(),
+  })
+  .strict();
+export type DesktopProjectAddRequestV1 = z.infer<typeof DesktopProjectAddRequestV1Schema>;
+
 export const DesktopSetupDraftV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -512,17 +534,7 @@ export type DesktopSetupStatusV1 = z.infer<typeof DesktopSetupStatusV1Schema>;
 export const DesktopSetupPathRequestV1Schema = z
   .object({
     schemaVersion: z.literal(1),
-    kind: z.enum([
-      "project",
-      "unity",
-      "testplay",
-      "workspace-storage",
-      "workspace-root",
-      "agent",
-      "bridge-overlay",
-      "profile-import",
-      "profile-export",
-    ]),
+    kind: z.enum(["project", "unity", "agent", "profile-import", "profile-export"]),
   })
   .strict();
 
@@ -613,15 +625,13 @@ export const DesktopIpcChannels = {
   bootstrap: "desktop.bootstrap.v1",
   chooseProfile: "desktop.profile.choose.v1",
   chooseSetupPath: "desktop.setup.path.choose.v1",
-  setupDiscover: "desktop.setup.discover.v1",
-  setupStart: "desktop.setup.start.v1",
+  projectDiscover: "desktop.project.discover.v1",
+  projectAdd: "desktop.project.add.v1",
   setupStatus: "desktop.setup.status.v1",
   setupResume: "desktop.setup.resume.v1",
   setupCancel: "desktop.setup.cancel.v1",
-  setupInstallStorage: "desktop.setup.storage.install.v1",
   componentsSnapshot: "desktop.components.snapshot.v1",
   componentInstall: "desktop.components.install.v1",
-  storageActivate: "desktop.components.storage.activate.v1",
   setupImport: "desktop.setup.import.v1",
   setupExport: "desktop.setup.export.v1",
   removeProfile: "desktop.profile.remove.v1",
@@ -640,10 +650,10 @@ export interface HoneyBeeDesktopApi {
   bootstrap(): Promise<DesktopBootstrapV1>;
   chooseProfile(): Promise<DesktopProjectProfile | null>;
   chooseSetupPath(request: z.infer<typeof DesktopSetupPathRequestV1Schema>): Promise<string | null>;
-  discoverSetup(
+  discoverProject(
     request: z.infer<typeof DesktopSetupDiscoveryRequestV1Schema>,
-  ): Promise<DesktopSetupDiscoveryV1>;
-  startSetup(request: DesktopSetupDraft): Promise<DesktopSetupStatusV1>;
+  ): Promise<DesktopProjectDiscoveryV1>;
+  addProject(request: DesktopProjectAddRequestV1): Promise<DesktopSetupStatusV1>;
   setupStatus(
     request: z.infer<typeof DesktopSetupIdRequestV1Schema>,
   ): Promise<DesktopSetupStatusV1>;
@@ -653,16 +663,10 @@ export interface HoneyBeeDesktopApi {
   cancelSetup(
     request: z.infer<typeof DesktopSetupIdRequestV1Schema>,
   ): Promise<DesktopSetupStatusV1>;
-  installSetupStorage(
-    request: z.infer<typeof DesktopSetupInstallStorageRequestV1Schema>,
-  ): Promise<z.infer<typeof DesktopSetupInstallStorageResultV1Schema>>;
   components(): Promise<ComponentManagerSnapshotV1>;
   installComponent(
     request: z.infer<typeof DesktopComponentInstallRequestV1Schema>,
   ): Promise<InstalledComponentReceiptV1>;
-  activateStorage(
-    request: z.infer<typeof DesktopStorageActivateRequestV1Schema>,
-  ): Promise<ActiveWorkspaceStorageV1>;
   importSetup(): Promise<DesktopProjectProfile | null>;
   exportSetup(request: DesktopProfileIdRequestV1): Promise<boolean>;
   removeProfile(request: DesktopProfileIdRequestV1): Promise<DesktopBootstrapV1>;
@@ -681,15 +685,13 @@ export const DesktopIpcResponseSchemas = {
   bootstrap: DesktopBootstrapV1Schema,
   chooseProfile: DesktopProjectProfileSchema.nullable(),
   chooseSetupPath: z.string().min(1).nullable(),
-  setupDiscover: DesktopSetupDiscoveryV1Schema,
-  setupStart: DesktopSetupStatusV1Schema,
+  projectDiscover: DesktopProjectDiscoveryV1Schema,
+  projectAdd: DesktopSetupStatusV1Schema,
   setupStatus: DesktopSetupStatusV1Schema,
   setupResume: DesktopSetupStatusV1Schema,
   setupCancel: DesktopSetupStatusV1Schema,
-  setupInstallStorage: DesktopSetupInstallStorageResultV1Schema,
   componentsSnapshot: ComponentManagerSnapshotV1Schema,
   componentInstall: InstalledComponentReceiptV1Schema,
-  storageActivate: ActiveWorkspaceStorageV1Schema,
   setupImport: DesktopProjectProfileSchema.nullable(),
   setupExport: z.boolean(),
   removeProfile: DesktopBootstrapV1Schema,

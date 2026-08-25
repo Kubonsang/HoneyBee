@@ -5,7 +5,7 @@ import path from "node:path";
 
 import { describe, expect, it } from "vitest";
 
-import { DesktopComponentManager } from "./component-manager.js";
+import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
 
 const digest = (value: Uint8Array | string): string =>
   createHash("sha256").update(value).digest("hex");
@@ -112,6 +112,13 @@ const fixture = async () => {
 };
 
 describe("DesktopComponentManager", () => {
+  it("pins the repository compatibility manifest bytes", async () => {
+    const manifest = await readCompatibilityManifest(
+      path.resolve("apps", "desktop", "resources", "component-compatibility-v1.json"),
+    );
+    expect(manifest.workspaceStorage[0]?.version).toBe("0.0.0+e69fb8a0c55c");
+  });
+
   it("installs immutable storage versions and requires an exact active service lock", async () => {
     const { root, manager, host } = await fixture();
     const first = await manager.installWorkspaceStorage("1.0.0");

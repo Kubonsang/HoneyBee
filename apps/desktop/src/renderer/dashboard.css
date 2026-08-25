@@ -1355,6 +1355,68 @@ select:focus {
   }
 }
 
+.projects-home {
+  display: grid;
+  gap: 16px;
+}
+
+.projects-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 22px 24px;
+}
+
+.projects-toolbar h2,
+.project-tile h3 {
+  margin: 5px 0;
+}
+
+.projects-toolbar p,
+.project-tile p {
+  margin: 0;
+  color: var(--muted, #8e999f);
+}
+
+.projects-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+  gap: 16px;
+}
+
+.project-tile {
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px;
+}
+
+.project-tile .project-glyph {
+  width: 42px;
+  height: 42px;
+}
+
+.project-tile p {
+  overflow: hidden;
+  margin: 7px 0;
+  font-family: ui-monospace, "Cascadia Code", monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.project-tile small {
+  color: #60d978;
+}
+
+.project-tile-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 9px;
+  margin-top: 7px;
+}
+
 .setup-center {
   display: grid;
   gap: 16px;
@@ -1412,6 +1474,7 @@ select:focus {
 }
 
 .setup-field input,
+.setup-field select,
 .setup-capacity input {
   min-width: 0;
   width: 100%;

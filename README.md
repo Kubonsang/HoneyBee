@@ -19,8 +19,9 @@ prepare → acquire → one Agent → optional compile/warm-test → verified pa
 - Codex and OpenCode only for optional real-Agent examples
 
 The packaged Desktop includes the pinned `unity-workspace-storage` client and HoneyBee service host.
-Component Manager installs those bundled bytes and Setup Center activates the single machine-global
-storage service with one Windows elevation prompt; no external storage path is required. TestPlay is
+Component Manager installs those bundled bytes and Add Project provisions the neutral
+`UnityWorkspaceStorage` machine service in the background, with one Windows elevation prompt when
+first needed. No storage version, root, or activation control is exposed. TestPlay is
 an optional, explicitly installed protocol-3 CLI/Bridge pair from HoneyBee's fixed URL/SHA-256
 compatibility manifest.
 
@@ -122,12 +123,13 @@ corepack pnpm --filter honeybee-desktop package:smoke
 
 `package:smoke` produces `apps/desktop/release/HoneyBee-win32-x64/HoneyBee.exe` and launches that
 packaged executable with an isolated temporary user-data directory. The smoke requires Electron
-`app.ready`, the sandboxed preload API, the renderer Command Center, and runtime bootstrap IPC to
+`app.ready`, the sandboxed preload API, the renderer Projects home, and runtime bootstrap IPC to
 all succeed. It force-closes only its own process tree and removes its temporary profile.
 
-Open Setup Center and select a Unity project. It discovers local Unity and OpenCode, installs the
-immutable `unity-workspace-storage` version shipped inside HoneyBee, and requires that exact version
-to be the explicitly selected machine-global service. TestPlay and its Bridge are one optional
+Open Projects and choose **Add project**. The one-time Environment Profile step discovers local
+Unity and OpenCode; HoneyBee then installs or reuses the immutable `unity-workspace-storage` version
+and its private workspace root without asking for storage settings. The legacy
+`TestPlayStorageBroker` service is never adopted, replaced, or stopped. TestPlay and its Bridge are one optional
 Component Manager unit for compile/warm-test; only releases in HoneyBee's fixed compatibility
 manifest can be installed. Starting Setup provisions or reuses one immutable Library parent and
 stores a strict schema-3 profile with exact component locks—no handwritten batch config or external

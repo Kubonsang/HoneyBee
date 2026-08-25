@@ -9,14 +9,12 @@ import {
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
+  DesktopProjectAddRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopStartRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
-  DesktopSetupDraftSchema,
   DesktopSetupIdRequestV1Schema,
-  DesktopSetupInstallStorageRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
-  DesktopStorageActivateRequestV1Schema,
   type HoneyBeeDesktopApi,
 } from "../shared/ipc.js";
 
@@ -36,18 +34,18 @@ const api: HoneyBeeDesktopApi = {
         DesktopSetupPathRequestV1Schema.parse(request),
       ),
     ),
-  discoverSetup: async (request) =>
-    DesktopIpcResponseSchemas.setupDiscover.parse(
+  discoverProject: async (request) =>
+    DesktopIpcResponseSchemas.projectDiscover.parse(
       await ipcRenderer.invoke(
-        DesktopIpcChannels.setupDiscover,
+        DesktopIpcChannels.projectDiscover,
         DesktopSetupDiscoveryRequestV1Schema.parse(request),
       ),
     ),
-  startSetup: async (request) =>
-    DesktopIpcResponseSchemas.setupStart.parse(
+  addProject: async (request) =>
+    DesktopIpcResponseSchemas.projectAdd.parse(
       await ipcRenderer.invoke(
-        DesktopIpcChannels.setupStart,
-        DesktopSetupDraftSchema.parse(request),
+        DesktopIpcChannels.projectAdd,
+        DesktopProjectAddRequestV1Schema.parse(request),
       ),
     ),
   setupStatus: async (request) =>
@@ -71,13 +69,6 @@ const api: HoneyBeeDesktopApi = {
         DesktopSetupIdRequestV1Schema.parse(request),
       ),
     ),
-  installSetupStorage: async (request) =>
-    DesktopIpcResponseSchemas.setupInstallStorage.parse(
-      await ipcRenderer.invoke(
-        DesktopIpcChannels.setupInstallStorage,
-        DesktopSetupInstallStorageRequestV1Schema.parse(request),
-      ),
-    ),
   components: async () =>
     DesktopIpcResponseSchemas.componentsSnapshot.parse(
       await ipcRenderer.invoke(DesktopIpcChannels.componentsSnapshot),
@@ -87,13 +78,6 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.componentInstall,
         DesktopComponentInstallRequestV1Schema.parse(request),
-      ),
-    ),
-  activateStorage: async (request) =>
-    DesktopIpcResponseSchemas.storageActivate.parse(
-      await ipcRenderer.invoke(
-        DesktopIpcChannels.storageActivate,
-        DesktopStorageActivateRequestV1Schema.parse(request),
       ),
     ),
   importSetup: async () =>

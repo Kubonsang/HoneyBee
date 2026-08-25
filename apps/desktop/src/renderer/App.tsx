@@ -4,6 +4,8 @@ import {
   ClockCounterClockwise,
   Cube,
   FirstAidKit,
+  Folders,
+  Gear,
   Hexagon,
   ListChecks,
   Plus,
@@ -35,7 +37,7 @@ import { CommandCenter } from "./CommandCenter.js";
 import { RunDetailView } from "./RunDetailView.js";
 import { SetupCenter } from "./SetupCenter.js";
 
-type DesktopView = "command" | "work" | "history" | "setup";
+type DesktopView = "projects" | "command" | "work" | "history" | "setup";
 
 interface WorkDraft {
   readonly key: number;
@@ -72,7 +74,8 @@ const statusMark = (status: "pass" | "warning" | "fail") =>
 export function App() {
   const [bootstrap, setBootstrap] = useState<DesktopBootstrapV1>();
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
-  const [view, setView] = useState<DesktopView>("command");
+  const [editingProfileId, setEditingProfileId] = useState<string>();
+  const [view, setView] = useState<DesktopView>("projects");
   const [doctor, setDoctor] = useState<DoctorReportV1>();
   const [works, setWorks] = useState<readonly WorkDraft[]>([initialWork()]);
   const [busy, setBusy] = useState<"profile" | "doctor" | "start">();
@@ -91,7 +94,7 @@ export function App() {
       .then((value) => {
         setBootstrap(value);
         setSelectedProfileId(value.profiles[0]?.profileId);
-        if (value.profiles.length === 0) setView("setup");
+        setView("projects");
       })
       .catch((reason: unknown) => setError(readableError(reason)));
   }, []);
@@ -204,7 +207,8 @@ export function App() {
       const value = await window.honeybee.bootstrap();
       setBootstrap(value);
       activateProfile(profile.profileId);
-      setView("work");
+      setEditingProfileId(undefined);
+      setView("command");
       setNotice(`${profile.label} is ready. Run Doctor before the first Work.`);
     } catch (reason) {
       setError(readableError(reason));
@@ -379,12 +383,21 @@ export function App() {
         </div>
         <button
           className="primary wide"
-          onClick={() => setView("setup")}
+          onClick={() => {
+            setEditingProfileId(undefined);
+            setView("setup");
+          }}
           disabled={busy !== undefined}
         >
-          <Plus size={17} weight="bold" /> Setup Unity project
+          <Plus size={17} weight="bold" /> Add Unity project
         </button>
         <nav className="main-nav" aria-label="Workspace views">
+          <button
+            className={view === "projects" ? "selected" : ""}
+            onClick={() => setView("projects")}
+          >
+            <Folders size={20} weight="duotone" /> Projects
+          </button>
           <button
             className={view === "command" ? "selected" : ""}
             onClick={() => setView("command")}
@@ -400,9 +413,6 @@ export function App() {
           >
             <ClockCounterClockwise size={20} weight="duotone" /> Run History
           </button>
-          <button className={view === "setup" ? "selected" : ""} onClick={() => setView("setup")}>
-            <Stethoscope size={20} weight="duotone" /> Setup Center
-          </button>
         </nav>
         <div className="sidebar-heading">
           <span>Recent projects</span>
@@ -415,6 +425,7 @@ export function App() {
               key={profile.profileId}
               onClick={() => {
                 activateProfile(profile.profileId);
+                setView("command");
               }}
             >
               <span className="project-glyph">
@@ -471,7 +482,14 @@ export function App() {
                 ))}
               </select>
             ) : (
-              <button onClick={() => setView("setup")}>Setup Unity project</button>
+              <button
+                onClick={() => {
+                  setEditingProfileId(undefined);
+                  setView("setup");
+                }}
+              >
+                Add Unity project
+              </button>
             )}
           </div>
           <span className="runtime-chip">
@@ -479,13 +497,25 @@ export function App() {
           </span>
           <div className="topbar-actions">
             {selectedProfile !== undefined && (
-              <button
-                className="topbar-button"
-                onClick={() => void runDoctor()}
-                disabled={busy !== undefined}
-              >
-                <Stethoscope size={17} /> {busy === "doctor" ? "Checking…" : "Doctor"}
-              </button>
+              <>
+                <button
+                  className="topbar-button"
+                  onClick={() => {
+                    setEditingProfileId(selectedProfile.profileId);
+                    setView("setup");
+                  }}
+                  disabled={busy !== undefined}
+                >
+                  <Gear size={17} /> Project Settings
+                </button>
+                <button
+                  className="topbar-button"
+                  onClick={() => void runDoctor()}
+                  disabled={busy !== undefined}
+                >
+                  <Stethoscope size={17} /> {busy === "doctor" ? "Checking…" : "Doctor"}
+                </button>
+              </>
             )}
             <span className="avatar">HB</span>
           </div>
@@ -494,28 +524,116 @@ export function App() {
         <div className="page-heading">
           <div>
             <h1>
-              {view === "command"
-                ? "Command Center"
-                : view === "history"
-                  ? "Run History"
-                  : view === "setup"
-                    ? "Setup Center"
-                    : (selectedProfile?.label ?? "Choose a Unity project")}
+              {view === "projects"
+                ? "Projects"
+                : view === "command"
+                  ? "Command Center"
+                  : view === "history"
+                    ? "Run History"
+                    : view === "setup"
+                      ? "Setup Center"
+                      : (selectedProfile?.label ?? "Choose a Unity project")}
             </h1>
             <p>
-              {view === "command"
-                ? "Orchestrate AI agents. Isolate workspaces. Deliver verified changes."
-                : view === "history"
-                  ? "Inspect durable outcomes, Evidence, and verified patches."
-                  : view === "setup"
-                    ? "Create and recover a strict local managed Unity environment."
-                    : "Describe focused changes and launch a bounded parallel batch."}
+              {view === "projects"
+                ? "Choose a Unity project or add an existing project to HoneyBee."
+                : view === "command"
+                  ? "Orchestrate AI agents. Isolate workspaces. Deliver verified changes."
+                  : view === "history"
+                    ? "Inspect durable outcomes, Evidence, and verified patches."
+                    : view === "setup"
+                      ? "Create and recover a strict local managed Unity environment."
+                      : "Describe focused changes and launch a bounded parallel batch."}
             </p>
           </div>
         </div>
 
-        {view === "setup" ? (
+        {view === "projects" ? (
+          <section className="projects-home">
+            <div className="projects-toolbar panel">
+              <div>
+                <span className="eyebrow">RECENT PROJECTS</span>
+                <h2>Your Unity projects</h2>
+                <p>Environment setup appears once when a project is added.</p>
+              </div>
+              <button
+                className="primary"
+                onClick={() => {
+                  setEditingProfileId(undefined);
+                  setView("setup");
+                }}
+              >
+                <Plus size={17} weight="bold" /> Add project
+              </button>
+            </div>
+            {bootstrap?.profiles.length === 0 ? (
+              <div className="panel runtime-empty">
+                <Folders size={38} weight="duotone" />
+                <h2>Add your first Unity project</h2>
+                <p>
+                  HoneyBee will detect Unity and your Agent, then prepare isolation automatically.
+                </p>
+                <button
+                  className="primary"
+                  onClick={() => {
+                    setEditingProfileId(undefined);
+                    setView("setup");
+                  }}
+                >
+                  Choose project
+                </button>
+              </div>
+            ) : (
+              <div className="projects-grid">
+                {bootstrap?.profiles.map((profile) => (
+                  <article className="project-tile panel" key={profile.profileId}>
+                    <span className="project-glyph">
+                      <Cube size={22} weight="duotone" />
+                    </span>
+                    <div>
+                      <h3>{profile.label}</h3>
+                      <p title={profile.projectPath}>{profile.projectPath}</p>
+                      <small>
+                        {profile.schemaVersion === 3
+                          ? "Ready · managed environment"
+                          : profile.configLabel}
+                      </small>
+                    </div>
+                    <div className="project-tile-actions">
+                      <button
+                        className="primary"
+                        onClick={() => {
+                          activateProfile(profile.profileId);
+                          setView("command");
+                        }}
+                      >
+                        Open Command Center
+                      </button>
+                      <button
+                        className="secondary"
+                        onClick={() => {
+                          activateProfile(profile.profileId);
+                          setEditingProfileId(profile.profileId);
+                          setView("setup");
+                        }}
+                      >
+                        Project Settings
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        ) : view === "setup" ? (
           <SetupCenter
+            key={editingProfileId ?? "new-project"}
+            {...(() => {
+              const initialProfile = bootstrap?.profiles.find(
+                (profile) => profile.profileId === editingProfileId,
+              );
+              return initialProfile === undefined ? {} : { initialProfile };
+            })()}
             onComplete={(profile) => void completeSetup(profile)}
             onError={(message) => setError(message)}
           />

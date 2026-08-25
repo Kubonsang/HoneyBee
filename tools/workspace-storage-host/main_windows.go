@@ -22,28 +22,49 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-const receiptSchema = 1
+const (
+	receiptSchema           = 2
+	serviceConflictExitCode = 23
+)
+
+type hostError struct {
+	code     string
+	message  string
+	exitCode int
+}
+
+func (err hostError) Error() string { return err.message }
 
 type installReceipt struct {
-	SchemaVersion int
-	ServiceName   string
-	StoreRoot     string
-	WorkspaceRoot string
-	ConfigPath    string
-	UserSID       string
-	Executable    string
+	SchemaVersion    int    `json:"schemaVersion"`
+	ServiceName      string `json:"serviceName"`
+	PipeName         string `json:"pipeName"`
+	ComponentVersion string `json:"componentVersion"`
+	StoreRoot        string `json:"storeRoot"`
+	WorkspaceRoot    string `json:"workspaceRoot"`
+	ConfigPath       string `json:"configPath"`
+	UserSID          string `json:"userSid"`
+	Executable       string `json:"executable"`
+	ExecutableSHA256 string `json:"executableSha256"`
 }
 
 func main() {
 	result, err := execute(os.Args[1:])
 	if err != nil {
+		code := "workspace-storage.install-failed"
+		exitCode := 1
+		var typed hostError
+		if errors.As(err, &typed) {
+			code = typed.code
+			exitCode = typed.exitCode
+		}
 		writeJSON(map[string]any{
 			"schemaVersion": 1,
 			"ok":            false,
-			"error":         map[string]string{"code": "workspace-storage-install-failed"},
+			"error":         map[string]string{"code": code},
 		})
 		_, _ = fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(exitCode)
 	}
 	writeJSON(result)
 }
@@ -68,23 +89,29 @@ func execute(args []string) (any, error) {
 		flags.SetOutput(io.Discard)
 		workspaceRoot := flags.String("workspace-root", "", "absolute workspace root")
 		userSID := flags.String("user-sid", "", "installed user SID")
+		componentVersion := flags.String("component-version", "", "pinned component version")
 		replace := flags.Bool("replace", false, "replace the existing HoneyBee service binary")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 			return nil, errors.New("invalid install arguments")
 		}
-		return install(*workspaceRoot, *userSID, *replace)
+		return install(*workspaceRoot, *userSID, *componentVersion, *replace)
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
 }
 
-func install(workspaceRootValue, userSID string, replace bool) (any, error) {
+func install(workspaceRootValue, userSID, componentVersion string, replace bool) (any, error) {
 	if !workspace.IsElevated() {
 		return nil, errors.New("workspace storage installation requires elevation")
 	}
+	releaseInstaller, err := acquireInstallerMutex()
+	if err != nil {
+		return nil, err
+	}
+	defer releaseInstaller()
 	workspaceRoot := filepath.Clean(workspaceRootValue)
-	if !filepath.IsAbs(workspaceRoot) || userSID == "" {
-		return nil, errors.New("workspace root and installed user SID are required")
+	if !filepath.IsAbs(workspaceRoot) || userSID == "" || componentVersion == "" {
+		return nil, errors.New("workspace root, installed user SID, and component version are required")
 	}
 	if _, err := windows.StringToSid(userSID); err != nil {
 		return nil, errors.New("installed user SID is invalid")
@@ -93,18 +120,32 @@ func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 	if !filepath.IsAbs(programData) {
 		return nil, errors.New("ProgramData is unavailable")
 	}
-	storeRoot := filepath.Join(programData, "HoneyBee", "WorkspaceStorage")
+	storeRoot := filepath.Join(programData, "UnityWorkspaceStorage")
 	configPath := filepath.Join(storeRoot, "broker-config.json")
-	installedExecutable := filepath.Join(storeRoot, "broker", "honeybee-workspace-storage-host.exe")
-	receiptPath := filepath.Join(programData, "HoneyBee", "workspace-storage-install.json")
+	installedExecutable := filepath.Join(storeRoot, "broker", "unity-workspace-storage-host.exe")
+	receiptPath := filepath.Join(storeRoot, "install-receipt.json")
+	if err := reconcileReceiptFile(receiptPath); err != nil {
+		return nil, err
+	}
+	source, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	executableSHA256, err := hashFileHex(source)
+	if err != nil {
+		return nil, err
+	}
 	receipt := installReceipt{
-		SchemaVersion: receiptSchema,
-		ServiceName:   workspace.WindowsServiceName,
-		StoreRoot:     storeRoot,
-		WorkspaceRoot: workspaceRoot,
-		ConfigPath:    configPath,
-		UserSID:       userSID,
-		Executable:    installedExecutable,
+		SchemaVersion:    receiptSchema,
+		ServiceName:      workspace.WindowsServiceName,
+		PipeName:         workspace.DefaultPipeName,
+		ComponentVersion: componentVersion,
+		StoreRoot:        storeRoot,
+		WorkspaceRoot:    workspaceRoot,
+		ConfigPath:       configPath,
+		UserSID:          userSID,
+		Executable:       installedExecutable,
+		ExecutableSHA256: executableSHA256,
 	}
 
 	manager, err := mgr.Connect()
@@ -115,15 +156,9 @@ func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 	if existing, openErr := manager.OpenService(workspace.WindowsServiceName); openErr == nil {
 		defer existing.Close()
 		if _, receiptErr := os.Stat(receiptPath); os.IsNotExist(receiptErr) {
-			return map[string]any{
-				"schemaVersion": 1,
-				"ok":            true,
-				"status":        "EXTERNAL_BROKER_PRESENT",
-				"service":       workspace.WindowsServiceName,
-				"workspaceRoot": workspaceRoot,
-			}, nil
+			return nil, serviceWithoutReceiptError()
 		}
-		return verifyExisting(receiptPath, workspaceRoot, userSID, existing, replace)
+		return verifyExisting(receiptPath, receipt, existing, replace)
 	}
 
 	if existingReceipt, receiptErr := loadReceipt(receiptPath); receiptErr == nil {
@@ -156,10 +191,6 @@ func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 	if err := rejectReparse(workspaceRoot); err != nil {
 		return nil, err
 	}
-	source, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
 	if err := copyOrVerify(source, installedExecutable); err != nil {
 		return nil, err
 	}
@@ -186,8 +217,8 @@ func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 		workspace.WindowsServiceName,
 		installedExecutable,
 		mgr.Config{
-			DisplayName: "HoneyBee Workspace Storage",
-			Description: "Owns isolated Unity workspace lifecycle for HoneyBee",
+			DisplayName: "Unity Workspace Storage",
+			Description: "Owns isolated Unity workspace lifecycle",
 			StartType:   mgr.StartAutomatic,
 		},
 		"broker-run", "--service-config", configPath,
@@ -201,23 +232,55 @@ func install(workspaceRootValue, userSID string, replace bool) (any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"schemaVersion": 1,
-		"ok":            true,
-		"status":        "INSTALLED",
-		"service":       workspace.WindowsServiceName,
-		"workspaceRoot": workspaceRoot,
+		"schemaVersion":    1,
+		"ok":               true,
+		"status":           "INSTALLED",
+		"service":          workspace.WindowsServiceName,
+		"pipeName":         workspace.DefaultPipeName,
+		"componentVersion": componentVersion,
+		"executableSha256": executableSHA256,
+		"workspaceRoot":    workspaceRoot,
 	}, nil
 }
 
-func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Service, replace bool) (any, error) {
+func serviceWithoutReceiptError() error {
+	return hostError{
+		code:     "workspace-storage.service-conflict",
+		message:  "the UnityWorkspaceStorage service exists without a matching HoneyBee installation receipt",
+		exitCode: serviceConflictExitCode,
+	}
+}
+
+func acquireInstallerMutex() (func(), error) {
+	name, err := windows.UTF16PtrFromString(`Global\UnityWorkspaceStorageInstallerV1`)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateMutex(nil, false, name)
+	if err != nil {
+		return nil, err
+	}
+	result, err := windows.WaitForSingleObject(handle, uint32((10*time.Minute)/time.Millisecond))
+	if err != nil || (result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED) {
+		windows.CloseHandle(handle)
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("workspace storage installer mutex timed out")
+	}
+	return func() {
+		_ = windows.ReleaseMutex(handle)
+		_ = windows.CloseHandle(handle)
+	}, nil
+}
+
+func verifyExisting(receiptPath string, expected installReceipt, service *mgr.Service, replace bool) (any, error) {
 	receipt, err := loadReceipt(receiptPath)
 	if err != nil {
 		return nil, err
 	}
-	if receipt.SchemaVersion != receiptSchema ||
-		receipt.ServiceName != workspace.WindowsServiceName ||
-		!strings.EqualFold(filepath.Clean(receipt.WorkspaceRoot), workspaceRoot) ||
-		receipt.UserSID != userSID {
+	receiptChanged := sameReceipt(receipt, expected) != nil
+	if receiptChanged && (!replace || sameMachineIdentity(receipt, expected) != nil) {
 		return nil, errors.New("workspace storage install receipt does not match this user or root")
 	}
 	source, err := os.Executable()
@@ -241,6 +304,16 @@ func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Ser
 		}
 		switched = true
 	}
+	installedSHA256, err := hashFileHex(receipt.Executable)
+	if err != nil || installedSHA256 != expected.ExecutableSHA256 {
+		return nil, errors.New("workspace storage installed executable digest does not match its receipt")
+	}
+	if receiptChanged {
+		if err := replaceReceiptFile(receiptPath, expected); err != nil {
+			return nil, err
+		}
+		receipt = expected
+	}
 	status, err := service.Query()
 	if err != nil {
 		return nil, err
@@ -255,12 +328,24 @@ func verifyExisting(receiptPath, workspaceRoot, userSID string, service *mgr.Ser
 		resultStatus = "SWITCHED"
 	}
 	return map[string]any{
-		"schemaVersion": 1,
-		"ok":            true,
-		"status":        resultStatus,
-		"service":       receipt.ServiceName,
-		"workspaceRoot": receipt.WorkspaceRoot,
+		"schemaVersion":    1,
+		"ok":               true,
+		"status":           resultStatus,
+		"service":          receipt.ServiceName,
+		"pipeName":         receipt.PipeName,
+		"componentVersion": receipt.ComponentVersion,
+		"executableSha256": receipt.ExecutableSHA256,
+		"workspaceRoot":    receipt.WorkspaceRoot,
 	}, nil
+}
+
+func hashFileHex(target string) (string, error) {
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:]), nil
 }
 
 func sameFileContent(left, right string) (bool, error) {
@@ -457,25 +542,112 @@ func loadReceipt(target string) (installReceipt, error) {
 	}
 	if receipt.SchemaVersion != receiptSchema ||
 		receipt.ServiceName != workspace.WindowsServiceName ||
+		receipt.PipeName != workspace.DefaultPipeName ||
+		receipt.ComponentVersion == "" ||
 		!filepath.IsAbs(receipt.StoreRoot) ||
 		!filepath.IsAbs(receipt.WorkspaceRoot) ||
 		!filepath.IsAbs(receipt.ConfigPath) ||
 		!filepath.IsAbs(receipt.Executable) ||
-		receipt.UserSID == "" {
+		receipt.UserSID == "" ||
+		len(receipt.ExecutableSHA256) != 64 {
 		return installReceipt{}, errors.New("invalid workspace storage install receipt")
 	}
 	return receipt, nil
 }
 
 func sameReceipt(left, right installReceipt) error {
+	if err := sameMachineIdentity(left, right); err != nil ||
+		left.ComponentVersion != right.ComponentVersion ||
+		left.ExecutableSHA256 != right.ExecutableSHA256 {
+		return errors.New("workspace storage install receipt identity mismatch")
+	}
+	return nil
+}
+
+func sameMachineIdentity(left, right installReceipt) error {
 	if left.SchemaVersion != right.SchemaVersion ||
 		left.ServiceName != right.ServiceName ||
+		left.PipeName != right.PipeName ||
 		!strings.EqualFold(filepath.Clean(left.StoreRoot), filepath.Clean(right.StoreRoot)) ||
 		!strings.EqualFold(filepath.Clean(left.WorkspaceRoot), filepath.Clean(right.WorkspaceRoot)) ||
 		!strings.EqualFold(filepath.Clean(left.ConfigPath), filepath.Clean(right.ConfigPath)) ||
 		!strings.EqualFold(filepath.Clean(left.Executable), filepath.Clean(right.Executable)) ||
 		left.UserSID != right.UserSID {
 		return errors.New("workspace storage install receipt identity mismatch")
+	}
+	return nil
+}
+
+func receiptReplacementPaths(target string) (string, string) {
+	directory := filepath.Dir(target)
+	return filepath.Join(directory, ".install-receipt-next.json"), filepath.Join(directory, ".install-receipt-previous.json")
+}
+
+func reconcileReceiptFile(target string) error {
+	next, previous := receiptReplacementPaths(target)
+	targetExists, err := fileExists(target)
+	if err != nil {
+		return err
+	}
+	previousExists, err := fileExists(previous)
+	if err != nil {
+		return err
+	}
+	if !targetExists && previousExists {
+		if err := os.Rename(previous, target); err != nil {
+			return err
+		}
+		targetExists = true
+		previousExists = false
+	}
+	if !targetExists {
+		if err := os.Remove(next); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := loadReceipt(target); err != nil {
+		if !previousExists {
+			return err
+		}
+		if removeErr := os.Remove(target); removeErr != nil {
+			return errors.Join(err, removeErr)
+		}
+		if renameErr := os.Rename(previous, target); renameErr != nil {
+			return errors.Join(err, renameErr)
+		}
+		previousExists = false
+	}
+	if previousExists {
+		if err := os.Remove(previous); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(next); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func replaceReceiptFile(target string, value installReceipt) error {
+	if err := reconcileReceiptFile(target); err != nil {
+		return err
+	}
+	next, previous := receiptReplacementPaths(target)
+	if err := writeExclusiveJSON(next, value); err != nil {
+		return err
+	}
+	if err := os.Rename(target, previous); err != nil {
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Rename(next, target); err != nil {
+		_ = os.Rename(previous, target)
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Remove(previous); err != nil {
+		return err
 	}
 	return nil
 }

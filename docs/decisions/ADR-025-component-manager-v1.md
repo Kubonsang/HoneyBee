@@ -24,10 +24,12 @@ followed by immutable publish. Receipts and every later lock lookup re-hash all 
 
 The packaged workspace-storage client and service host are installed automatically from bundled
 bytes. Multiple exact versions may coexist in Component Manager storage, but Windows has one
-machine-global HoneyBee workspace-storage service. Switching it is an explicit elevated operation
-that is refused while a Run is active, cleanup-pending, or indeterminate. The installer compares the
+machine-global `UnityWorkspaceStorage` service. Add Project chooses the already active supported
+version or the manifest's preferred bundled version and performs any required elevated transition
+internally; a transition is refused while a Run is active, cleanup-pending, or indeterminate. The installer compares the
 approved service binary, uses durable fixed replacement/backup paths, and reconciles an interrupted
-switch on the next invocation. Work start and Doctor require the project lock, the active-version
+switch on the next invocation. A service without HoneyBee's exact machine receipt is a typed
+`workspace-storage.service-conflict`, never an externally adopted success. Work start and Doctor require the project lock, the active-version
 receipt, and the actual installed service executable digest to agree; mismatch fails closed.
 
 New managed profiles use schema 3 and contain exact workspace-storage and optional TestPlay locks.
@@ -43,7 +45,7 @@ compile and warm-test as `not-run`. It is not presented as capability-verified.
 
 ## Consequences
 
-Fresh Desktop installs need no external storage path. Project execution is reproducible against
+Fresh Desktop installs need no external storage path, version selector, or activation step. Project execution is reproducible against
 exact local component locks, and an out-of-band service replacement is detected before Agent work.
 TestPlay can evolve independently without becoming a hard HoneyBee dependency. Plugin discovery,
 third-party manifests, dependency solving, automatic updates, registries, and arbitrary download

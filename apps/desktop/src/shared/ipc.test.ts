@@ -3,11 +3,10 @@ import { describe, expect, it } from "vitest";
 import {
   DesktopArtifactRequestV1Schema,
   DesktopPatchControlRequestV1Schema,
+  DesktopProjectAddRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
-  DesktopSetupDraftV1Schema,
-  DesktopSetupDraftV2Schema,
   DesktopStartRequestV1Schema,
   HoneyBeeCompatibilityManifestV1Schema,
 } from "./ipc.js";
@@ -103,7 +102,7 @@ describe("Desktop IPC contracts", () => {
     ).toBe(false);
   });
 
-  it("keeps Setup requests strict at every renderer boundary", () => {
+  it("keeps Add Project strict and never accepts storage configuration from the renderer", () => {
     expect(
       DesktopSetupDiscoveryRequestV1Schema.safeParse({
         schemaVersion: 1,
@@ -112,49 +111,32 @@ describe("Desktop IPC contracts", () => {
       }).success,
     ).toBe(false);
 
-    const draft = {
+    const request = {
       schemaVersion: 1,
-      label: "Game",
       projectPath: "C:\\Project",
       unityPath: "C:\\Unity\\Unity.exe",
-      testplayPath: "C:\\Tools\\testplay.exe",
-      workspaceStoragePath: "C:\\Tools\\unity-workspace-storage.exe",
-      workspaceRoot: "C:\\Workspaces",
-      bridgeOverlayPath: "C:\\Tools\\com.testplay.bridge",
       agent: { command: "C:\\Tools\\opencode.exe" },
-      editorCapacity: 2,
     } as const;
-    expect(DesktopSetupDraftV1Schema.safeParse(draft).success).toBe(true);
+    expect(DesktopProjectAddRequestV1Schema.safeParse(request).success).toBe(true);
     expect(
-      DesktopSetupDraftV1Schema.safeParse({
-        schemaVersion: 1,
-        label: "Agent only",
-        projectPath: "C:\\Project",
-        unityPath: "C:\\Unity\\Unity.exe",
-        workspaceStoragePath: "C:\\HoneyBee\\unity-workspace-storage.exe",
-        workspaceRoot: "C:\\Workspaces",
-        agent: { command: "C:\\Tools\\opencode.exe" },
-        editorCapacity: 1,
-      }).success,
-    ).toBe(true);
+      DesktopProjectAddRequestV1Schema.safeParse({ ...request, workspaceRoot: "C:\\Workspaces" })
+        .success,
+    ).toBe(false);
     expect(
-      DesktopSetupDraftV1Schema.safeParse({
-        ...draft,
-        bridgeOverlayPath: undefined,
+      DesktopProjectAddRequestV1Schema.safeParse({
+        ...request,
+        workspaceStorageVersion: "1.0.0",
       }).success,
     ).toBe(false);
     expect(
-      DesktopSetupDraftV1Schema.safeParse({
-        ...draft,
-        agent: { ...draft.agent, env: { SECRET: "not-allowed" } },
+      DesktopProjectAddRequestV1Schema.safeParse({
+        ...request,
+        agent: { ...request.agent, env: { SECRET: "not-allowed" } },
       }).success,
     ).toBe(false);
-    expect(DesktopSetupDraftV1Schema.safeParse({ ...draft, assetsDigest: "ignored" }).success).toBe(
-      false,
-    );
   });
 
-  it("accepts only fixed Component Manager IDs, releases, and exact Setup versions", () => {
+  it("accepts only fixed Component Manager IDs and releases", () => {
     const payloads = [
       {
         role: "client",
@@ -195,17 +177,5 @@ describe("Desktop IPC contracts", () => {
         marketplace: "https://untrusted.example",
       }).success,
     ).toBe(false);
-    expect(
-      DesktopSetupDraftV2Schema.safeParse({
-        schemaVersion: 2,
-        label: "Game",
-        projectPath: "C:\\Project",
-        unityPath: "C:\\Unity\\Unity.exe",
-        workspaceStorageVersion: "1.0.0",
-        workspaceRoot: "C:\\Workspaces",
-        agent: { command: "opencode" },
-        editorCapacity: 1,
-      }).success,
-    ).toBe(true);
   });
 });

@@ -14,14 +14,17 @@ project for fault injection.
 
 ## 2. Project and Doctor
 
-1. Start the packaged executable, open Setup Center, and select the fixture Unity project.
-2. Confirm the exact project Unity version is preferred and Component Manager lists the bundled
-   `unity-workspace-storage` version. Select OpenCode and the broker-owned workspace root, then
-   explicitly activate that storage version with the Administrator prompt.
+1. Start the packaged executable on the Projects home, choose **Add project**, and select the fixture
+   Unity project.
+2. Confirm the one-time Environment Profile prefers the exact project Unity version and detects
+   OpenCode. There must be no workspace root, storage version, or Activate control. Continue and
+   approve the Administrator prompt if this machine has not installed `UnityWorkspaceStorage` yet.
+   A second Add/Project Settings run must reuse it without another prompt. If the legacy
+   `TestPlayStorageBroker` service exists, confirm it remains running and unchanged.
 3. If the fixed compatibility manifest offers TestPlay, explicitly install that CLI/Bridge version
    and enable compile/warm-test. Otherwise keep validation disabled and verify that the UI identifies
    the resulting patch as workspace-integrity-only with compile/warm-test `not-run`. Run
-   **Install & prepare environment**.
+   **Add to HoneyBee**.
    Confirm Setup reaches `setup.completed`, the source tree
    remains unchanged, the staging project shell is removed, and the immutable parent is reusable.
 4. Change only a fixture file under `Assets` and provision again. Confirm the compatibility key and

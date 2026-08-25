@@ -13,14 +13,23 @@ The Work runtime must remain the existing v0.6 kernel; setup cannot become a sec
 
 ## Decision
 
-Desktop provides a local Setup Center in the main process. The sandboxed renderer sends strict,
-versioned discovery and setup requests through preload IPC. The packaged Desktop carries a
+Desktop provides a Projects home with a one-time Environment Profile step backed by the existing
+Setup Coordinator in the main process. The sandboxed renderer sends strict, versioned project
+discovery and add requests containing only project, Unity, Agent, and optional TestPlay identity;
+it cannot send storage versions or paths. The packaged Desktop carries a
 commit-pinned `unity-workspace-storage` client and a minimal HoneyBee service host as internal
 resources. Component Manager installs those immutable bytes and can install an optional TestPlay
-CLI/Bridge pair only from HoneyBee's fixed URL/SHA-256 compatibility manifest. Starting Setup
-installs or explicitly switches the single machine-global storage service with one Windows
-elevation prompt; the renderer cannot substitute an external storage executable. All other
+CLI/Bridge pair only from HoneyBee's fixed URL/SHA-256 compatibility manifest. Add Project
+automatically installs or reuses the single machine-global `UnityWorkspaceStorage` service with one
+Windows elevation prompt when required. Its fixed pipe is
+`\\.\pipe\unity-workspace-storage-v2`; an existing service without HoneyBee's matching machine
+receipt fails closed, and the legacy TestPlay broker is never adopted or modified. All other
 operations run as the installed user.
+
+The machine receipt pins service and pipe names, component version, installed-user SID, store and
+workspace roots, installed executable path, and executable SHA-256. Installation is serialized by a
+global mutex. After installation the main process revalidates the receipt and executable and
+requires a schema-2 broker response before publishing the active component lock.
 
 Setup always pins Unity, bundled `unity-workspace-storage`, and the selected Agent command.
 TestPlay protocol 3 and the TestPlay Bridge tree are an optional, all-or-nothing capability backend.

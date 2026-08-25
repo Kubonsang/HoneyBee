@@ -46,9 +46,18 @@ export class DesktopSettingsStore {
   public async upsertProfile(profileValue: DesktopProjectProfile): Promise<void> {
     const profile = DesktopProjectProfileSchema.parse(profileValue);
     const settings = await this.#read();
+    const projectKey = (value: string): string => {
+      const resolved = path.resolve(value);
+      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+    };
     const profiles = settings.profiles.filter(
       (candidate) =>
         candidate.profileId !== profile.profileId &&
+        !(
+          profile.schemaVersion !== 1 &&
+          candidate.schemaVersion !== 1 &&
+          projectKey(candidate.projectPath) === projectKey(profile.projectPath)
+        ) &&
         !(
           candidate.projectPath === profile.projectPath &&
           candidate.batchConfigPath === profile.batchConfigPath
