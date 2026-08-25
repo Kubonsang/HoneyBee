@@ -274,7 +274,7 @@ describe("FileUnityPatchControl", () => {
 
     await writeFile(
       path.join(stateRoot, seeded.runId, "patch-disposition.json"),
-      "{\"schemaVersion\":1",
+      '{"schemaVersion":1',
       "utf8",
     );
     await expect(control.assertDeletionSafe(seeded.runId)).rejects.toMatchObject({

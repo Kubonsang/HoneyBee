@@ -5,7 +5,6 @@ packages:
 allowBuilds:
   electron: true
   esbuild: true
-  node-pty: true
 
 overrides:
   "brace-expansion": "5.0.9"

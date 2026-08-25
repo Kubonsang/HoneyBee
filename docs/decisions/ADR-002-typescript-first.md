@@ -1,8 +1,8 @@
 # ADR-002: TypeScript-first 아키텍처
 
-- 상태: 승인
+- 상태: 폐기됨 — ADR-013의 Core/CLI 구조로 대체
 - 결정일: 2026-07-29
-- 적용 범위: 전체 저장소와 현재 Vertical Slice
+- 적용 범위: 폐기된 VS Code Vertical Slice의 역사적 기록
 
 ## 맥락
 

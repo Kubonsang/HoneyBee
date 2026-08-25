@@ -26,6 +26,7 @@ Agent CLI 계약은 의도적으로 작다. executable과 argv는 shell 문자�
 
 - `packages/core`가 handoff workflow와 child-process Adapter를 소유한다.
 - `apps/cli`가 `run`과 `demo` 명령을 제공한다.
-- 기존 `packages/session-runtime`은 보존하지만 이번 proof의 실행 경로에는 포함되지 않는다.
+- 기존 PTY/session 실험 패키지는 제품 그래프와 install graph에서 제거한다. 필요해질 경우
+  현재 Core/CLI 계약을 기준으로 다시 설계한다.
 - `apps/vscode-extension`과 `packages/ui-shared`는 제거한다.
 - PTY/TUI, 병렬 fan-out, 세션 영속화, 재시도와 다단계 graph orchestration은 이 proof 이후의 별도 결정으로 남긴다.
