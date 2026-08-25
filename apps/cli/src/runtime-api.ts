@@ -17,6 +17,7 @@ import {
   RuntimeInfoV1Schema,
   RuntimeProjectProfileV1Schema,
   StartUnityWorksRequestV1Schema,
+  StartUnityWorksRequestV2Schema,
   StartUnityWorksResultV1Schema,
   type PatchActionV1,
   type PatchControlResultV1,
@@ -31,6 +32,7 @@ import {
   type RuntimeInfoV1,
   type RuntimeProjectProfileV1,
   type StartUnityWorksRequestV1,
+  type StartUnityWorksRequestV2,
   type StartUnityWorksResultV1,
   type VerifiedPatchViewV1,
 } from "@honeybee/control-plane-contracts";
@@ -48,6 +50,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
   UnityEditorSlotIdSchema,
   UnityWorkConfigV2Schema,
   type AnyOrchestrationEvent,
@@ -387,11 +390,17 @@ export class HoneyBeeRuntimeFacade {
       target: this.#root,
     });
 
-    let config: ReturnType<typeof UnityBatchConfigV3Schema.parse> | undefined;
+    let config:
+      | ReturnType<typeof UnityBatchConfigV3Schema.parse>
+      | ReturnType<typeof UnityBatchConfigV4Schema.parse>
+      | undefined;
     try {
       const loaded = await loadUnityBatchConfig(profile.batchConfigPath);
-      if (loaded.schemaVersion !== 3) throw new Error("not v0.6");
-      config = UnityBatchConfigV3Schema.parse(loaded);
+      if (loaded.schemaVersion !== 3 && loaded.schemaVersion !== 4) throw new Error("not v0.6");
+      config =
+        loaded.schemaVersion === 4
+          ? UnityBatchConfigV4Schema.parse(loaded)
+          : UnityBatchConfigV3Schema.parse(loaded);
       add({
         id: "config.batch",
         label: "Unity batch config",
@@ -721,17 +730,23 @@ export class HoneyBeeRuntimeFacade {
   }
 
   public async startUnityWorks(
-    requestValue: StartUnityWorksRequestV1,
+    requestValue: StartUnityWorksRequestV1 | StartUnityWorksRequestV2,
   ): Promise<StartUnityWorksResultV1> {
-    const request = StartUnityWorksRequestV1Schema.parse(requestValue);
+    const request =
+      requestValue.schemaVersion === 2
+        ? StartUnityWorksRequestV2Schema.parse(requestValue)
+        : StartUnityWorksRequestV1Schema.parse(requestValue);
     const loaded = await loadUnityBatchConfig(request.batchConfigPath);
-    if (loaded.schemaVersion !== 3) {
+    if (loaded.schemaVersion !== 3 && loaded.schemaVersion !== 4) {
       throw new HoneyBeeCoreError(
         "validation.invalid-workflow",
         "Desktop execution requires a v0.6 batch configuration.",
       );
     }
-    const baseConfig = UnityBatchConfigV3Schema.parse(loaded);
+    const baseConfig =
+      loaded.schemaVersion === 4
+        ? UnityBatchConfigV4Schema.parse(loaded)
+        : UnityBatchConfigV3Schema.parse(loaded);
     const [selectedProject, configuredProject] = await Promise.all([
       physicalPath(request.projectPath),
       physicalPath(baseConfig.transaction.sourceProjectPath),
@@ -755,9 +770,11 @@ export class HoneyBeeRuntimeFacade {
         const work = request.works[0];
         if (work === undefined) throw new Error("A Work is required.");
         if (request.works.length === 1) {
+          const agent = "agent" in work ? work.agent : baseConfig.transaction.agent;
           const singleConfig = UnityWorkConfigV2Schema.parse({
             ...baseConfig.transaction,
             schemaVersion: 2,
+            agent,
             ...(baseConfig.transaction.testplay === undefined
               ? {}
               : {
@@ -785,10 +802,14 @@ export class HoneyBeeRuntimeFacade {
           await services.transaction.run(runId, work.task, singleConfig, services.execution);
           return;
         }
-        const config = UnityBatchConfigV3Schema.parse({
+        const config = UnityBatchConfigV4Schema.parse({
           ...baseConfig,
+          schemaVersion: 4,
           maxParallelWorks: request.maxParallelWorks,
-          works: request.works,
+          works: request.works.map((entry) => ({
+            ...entry,
+            agent: "agent" in entry ? entry.agent : baseConfig.transaction.agent,
+          })),
         });
         await createUnityEditorBatchWorkflow(this.#root, config, journal, controls).run(
           runId,
@@ -1064,7 +1085,7 @@ export class HoneyBeeRuntimeFacade {
 
   public async inspectEditorPoolForConfig(configPath: string): Promise<EditorPoolSnapshotV1> {
     const loaded = await loadUnityBatchConfig(configPath);
-    if (loaded.schemaVersion !== 3) {
+    if (loaded.schemaVersion !== 3 && loaded.schemaVersion !== 4) {
       throw new HoneyBeeCoreError(
         "validation.invalid-workflow",
         "Editor pool inspection requires a v0.6 batch configuration.",

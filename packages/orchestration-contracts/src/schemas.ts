@@ -45,6 +45,16 @@ export const AgentCommandSchema = z
   .strict();
 export type AgentCommand = z.infer<typeof AgentCommandSchema>;
 
+export const UnityAgentConfigSchema = z
+  .object({
+    command: AgentCommandSchema,
+    harness: z.literal("stdio-framed-v2"),
+    timeoutMs: z.number().int().positive().optional(),
+    maxOutputBytes: z.number().int().positive().optional(),
+  })
+  .strict();
+export type UnityAgentConfig = z.infer<typeof UnityAgentConfigSchema>;
+
 export const WorkflowStepSchema = z
   .object({ id: StepIdSchema, agent: AgentCommandSchema })
   .strict();
@@ -800,14 +810,7 @@ export const UnityWorkConfigV1Schema = z
     schemaVersion: z.literal(1),
     sourceProjectPath: z.string().min(1),
     workspaceStorage: UnityWorkspaceStorageV1Schema,
-    agent: z
-      .object({
-        command: AgentCommandSchema,
-        harness: z.literal("stdio-framed-v2"),
-        timeoutMs: z.number().int().positive().optional(),
-        maxOutputBytes: z.number().int().positive().optional(),
-      })
-      .strict(),
+    agent: UnityAgentConfigSchema,
     testplay: z
       .object({
         command: AgentCommandSchema,
@@ -881,14 +884,7 @@ const UnityWorkConfigV2BaseSchema = z
     schemaVersion: z.literal(2),
     sourceProjectPath: z.string().min(1),
     workspaceStorage: z.union([UnityWorkspaceStorageV1Schema, UnityWorkspaceStorageV2Schema]),
-    agent: z
-      .object({
-        command: AgentCommandSchema,
-        harness: z.literal("stdio-framed-v2"),
-        timeoutMs: z.number().int().positive().optional(),
-        maxOutputBytes: z.number().int().positive().optional(),
-      })
-      .strict(),
+    agent: UnityAgentConfigSchema,
     testplay: z
       .object({
         command: AgentCommandSchema,
@@ -1140,10 +1136,99 @@ export const UnityBatchConfigV3Schema = z
     }
   });
 export type UnityBatchConfigV3 = z.infer<typeof UnityBatchConfigV3Schema>;
+
+const UnityBatchWorksV4Schema = z
+  .array(
+    z
+      .object({
+        id: StepIdSchema,
+        task: z.string().trim().min(1),
+        priority: UnityWorkPrioritySchema.default("validation"),
+        capabilities: UnityCapabilityListSchema,
+        agent: UnityAgentConfigSchema,
+      })
+      .strict(),
+  )
+  .min(2);
+
+export const UnityBatchConfigV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    mode: z.literal("unity-batch"),
+    resourceScope: z.literal("global-editor-pool-v2"),
+    maxParallelWorks: z.number().int().positive(),
+    transaction: UnityBatchTransactionV3Schema,
+    editorPool: UnityEditorPoolConfigSchema,
+    bridgeProtocolVersion: z.literal(3).optional(),
+    works: UnityBatchWorksV4Schema,
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.maxParallelWorks > config.works.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+    const works = new Set<string>();
+    for (const [index, work] of config.works.entries()) {
+      if (works.has(work.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "id"],
+          message: `Duplicate Work id: ${work.id}`,
+        });
+      }
+      works.add(work.id);
+    }
+    if ((config.transaction.workspaceStorage.command.args?.length ?? 0) > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "args"],
+        message: "Workspace storage must be one pinned executable without arguments.",
+      });
+    }
+    if (config.transaction.workspaceStorage.command.env !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "env"],
+        message: "Workspace storage cannot inject an unpinned execution environment.",
+      });
+    }
+    const requiresValidation = config.works.some((work) => work.capabilities.length > 0);
+    if (requiresValidation && config.transaction.testplay === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay"],
+        message: "TestPlay is required when compile or warm-test capabilities are selected.",
+      });
+    }
+    if (requiresValidation && config.bridgeProtocolVersion !== 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["bridgeProtocolVersion"],
+        message: "TestPlay capabilities require Bridge protocol 3.",
+      });
+    }
+    if (
+      config.transaction.testplay !== undefined &&
+      config.transaction.testplay.platform !== "edit_mode"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay", "platform"],
+        message: "Unity v0.6 batches require edit-mode TestPlay.",
+      });
+    }
+  });
+export type UnityBatchConfigV4 = z.infer<typeof UnityBatchConfigV4Schema>;
+
 export const UnityBatchConfigSchema = z.discriminatedUnion("schemaVersion", [
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
 ]);
 export type UnityBatchConfig = z.infer<typeof UnityBatchConfigSchema>;
 

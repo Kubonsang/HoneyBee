@@ -40,9 +40,11 @@ describe("DesktopSettingsStore", () => {
     await store.upsertProfile(older);
     await store.upsertProfile(newer);
     expect(await store.listProfiles()).toEqual([newer, older]);
-    expect(JSON.parse(await readFile(path.join(root, "settings-v2.json"), "utf8"))).toEqual({
-      schemaVersion: 2,
+    expect(JSON.parse(await readFile(path.join(root, "settings-v3.json"), "utf8"))).toEqual({
+      schemaVersion: 3,
       profiles: [newer, older],
+      agents: [],
+      preferredAgentIds: {},
     });
 
     await store.removeProfile(newer.profileId);
@@ -140,5 +142,19 @@ describe("DesktopSettingsStore", () => {
     await store.upsertProfile(first);
     await store.upsertProfile(second);
     expect(await store.listProfiles()).toEqual([second]);
+
+    const legacyRoot = await temporaryRoot();
+    await writeFile(
+      path.join(legacyRoot, "settings-v2.json"),
+      JSON.stringify({ schemaVersion: 2, profiles: [second] }),
+      "utf8",
+    );
+    const migrated = await new DesktopSettingsStore(legacyRoot).snapshot();
+    expect(migrated.agents).toHaveLength(1);
+    expect(migrated.agents[0]).toMatchObject({
+      provider: "opencode",
+      command: { command: "opencode" },
+    });
+    expect(migrated.preferredAgentIds[second.profileId]).toBe(migrated.agents[0]?.agentId);
   });
 });

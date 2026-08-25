@@ -60,6 +60,10 @@ if (!validUrl || outputValue === undefined) {
                   item.textContent?.trim().includes(label),
                 );
               const title = () => document.querySelector(".page-heading h1")?.textContent?.trim();
+              if (title() === "Projects") {
+                button("Command Center")?.click();
+                await wait();
+              }
               if (title() !== "Command Center") throw new Error("Command Center did not render.");
 
               button("New Work")?.click();
@@ -69,6 +73,13 @@ if (!validUrl || outputValue === undefined) {
               button("Run History")?.click();
               await wait();
               if (title() !== "Run History") throw new Error("Run History navigation failed.");
+
+              button("Agents")?.click();
+              await wait();
+              if (title() !== "Agents") throw new Error("Agent Manager navigation failed.");
+              if (!document.querySelector(".agent-card")) {
+                throw new Error("Agent Manager did not render a connected Agent.");
+              }
 
               button("Command Center")?.click();
               await wait();
@@ -88,15 +99,20 @@ if (!validUrl || outputValue === undefined) {
               const compile = [...document.querySelectorAll(".capability-chip")].find((item) =>
                 item.textContent?.includes("Compile"),
               )?.querySelector("input");
-              if (!(compile instanceof HTMLInputElement) || !compile.checked) {
+              if (!(compile instanceof HTMLInputElement)) {
                 throw new Error("Compile capability control is missing.");
+              }
+              const compileInitiallyChecked = compile.checked;
+              compile.click();
+              await wait();
+              if (compile.checked === compileInitiallyChecked) {
+                throw new Error("Compile capability did not toggle.");
               }
               compile.click();
               await wait();
-              if (compile.checked) throw new Error("Compile capability did not toggle.");
-              compile.click();
-              await wait();
-              if (!compile.checked) throw new Error("Compile capability did not restore.");
+              if (compile.checked !== compileInitiallyChecked) {
+                throw new Error("Compile capability did not restore.");
+              }
 
               return { navigation: true, taskInput: true, capabilityToggle: true };
             })()

@@ -9,26 +9,30 @@ import { HoneyBeeRuntimeFacade } from "honeybee-cli/runtime";
 
 import {
   DesktopArtifactRequestV1Schema,
-  DesktopBootstrapV1Schema,
+  DesktopAgentIdRequestV1Schema,
+  DesktopAgentUpsertRequestV1Schema,
+  DesktopBootstrapV2Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
-  DesktopProjectAddRequestV1Schema,
+  DesktopProjectAddRequestV2Schema,
+  DesktopProjectAgentPreferenceRequestV1Schema,
   DesktopProjectDiscoveryV1Schema,
   DesktopProjectProfileV1Schema,
   DesktopProjectProfileSchema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
-  DesktopStartRequestV1Schema,
+  DesktopStartRequestV2Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
   type ProjectComponentLockV1,
 } from "../shared/ipc.js";
 import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
+import { DesktopAgentManager } from "./agent-manager.js";
 import { DesktopSettingsStore } from "./settings.js";
 import {
   DesktopSetupCoordinator,
@@ -67,9 +71,15 @@ const activeWorkspaceStorageHostPath = path.join(
   "unity-workspace-storage-host.exe",
 );
 const settings = new DesktopSettingsStore(userData);
-const setup = new DesktopSetupCoordinator(path.join(userData, "setups"), (profile) =>
-  settings.upsertProfile(profile),
+const setup = new DesktopSetupCoordinator(
+  path.join(userData, "setups"),
+  async (profile, preferredAgentId) => {
+    await settings.upsertProfile(profile);
+    if (preferredAgentId !== undefined)
+      await settings.setPreferredAgent(profile.profileId, preferredAgentId);
+  },
 );
+const agentManager = new DesktopAgentManager(settings);
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
 });
@@ -243,12 +253,40 @@ const provisionWorkspaceStorage = async (): Promise<{
   return storageProvisioning;
 };
 
-const bootstrap = async () =>
-  DesktopBootstrapV1Schema.parse({
-    schemaVersion: 1,
+const agentFor = async (agentId: string) => {
+  const agent = await settings.agent(agentId);
+  if (agent === undefined || !agent.enabled)
+    throw new Error("Agent profile was not found or is disabled.");
+  return agent;
+};
+
+const requireReadyAgent = async (agentId: string) => {
+  const agent = await agentFor(agentId);
+  const status = await agentManager.probe(agent);
+  if (status.status !== "ready") throw new Error(status.summary);
+  return agent;
+};
+
+const bootstrap = async () => {
+  await agentManager.ensureDetected();
+  const snapshot = await settings.snapshot();
+  const agentStatuses = await Promise.all(
+    snapshot.agents.map((agent) => agentManager.probe(agent)),
+  );
+  return DesktopBootstrapV2Schema.parse({
+    schemaVersion: 2,
     runtime: runtime.info(),
-    profiles: await settings.listProfiles(),
+    profiles: [...snapshot.profiles].sort((left, right) =>
+      right.lastOpenedAt.localeCompare(left.lastOpenedAt),
+    ),
+    agents: snapshot.agents,
+    agentStatuses,
+    preferredAgentIds: snapshot.preferredAgentIds,
+    ...(snapshot.lastUsedAgentId === undefined
+      ? {}
+      : { lastUsedAgentId: snapshot.lastUsedAgentId }),
   });
+};
 
 const safeHandler =
   <Arguments extends readonly unknown[], Result>(
@@ -373,7 +411,8 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.projectAdd,
     safeHandler(async (requestValue: unknown) => {
-      const request = DesktopProjectAddRequestV1Schema.parse(requestValue);
+      const request = DesktopProjectAddRequestV2Schema.parse(requestValue);
+      const agent = await requireReadyAgent(request.preferredAgentId);
       const storage = await provisionWorkspaceStorage();
       const testplay =
         request.testplayVersion === undefined
@@ -393,7 +432,8 @@ const registerIpc = (): void => {
                 testplayPath: componentFile(testplay, "cli").path,
                 bridgeOverlayPath: componentFile(testplay, "bridge-overlay").path,
               }),
-          agent: request.agent,
+          agent: agent.command,
+          preferredAgentId: agent.agentId,
           editorCapacity: 2,
           componentLocks: {
             workspaceStorage: storage.lock,
@@ -534,12 +574,42 @@ const registerIpc = (): void => {
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopDoctorRequestV1Schema.parse(requestValue);
       const profile = await profileFor(request.profileId);
-      const report = await runtime.doctor({
+      const runtimeReport = await runtime.doctor({
         schemaVersion: 1,
         projectPath: profile.projectPath,
         batchConfigPath: profile.batchConfigPath,
       });
-      if (profile.schemaVersion !== 2 && profile.schemaVersion !== 3) return report;
+      const settingsSnapshot = await settings.snapshot();
+      const preferredAgentId =
+        settingsSnapshot.preferredAgentIds[profile.profileId] ?? settingsSnapshot.lastUsedAgentId;
+      const agentStatus =
+        preferredAgentId === undefined
+          ? undefined
+          : await agentManager.probe(await agentFor(preferredAgentId));
+      const report = {
+        ...runtimeReport,
+        checks: [
+          ...runtimeReport.checks.filter((check) => !check.id.startsWith("agent.")),
+          {
+            id: "agent.library",
+            label: "Preferred Agent",
+            status:
+              agentStatus?.status === "ready"
+                ? ("pass" as const)
+                : agentStatus === undefined
+                  ? ("fail" as const)
+                  : ("fail" as const),
+            code: agentStatus?.status ?? "agent.not-selected",
+            summary: agentStatus?.summary ?? "Choose a connected Agent for this project.",
+            ...(agentStatus?.version === undefined ? {} : { version: agentStatus.version }),
+          },
+        ],
+      };
+      const normalizedReport = {
+        ...report,
+        ok: !report.checks.some((check) => check.status === "fail"),
+      };
+      if (profile.schemaVersion !== 2 && profile.schemaVersion !== 3) return normalizedReport;
       try {
         await validateProfile(profile);
         const componentSummary =
@@ -551,9 +621,9 @@ const registerIpc = (): void => {
                 : "; TestPlay " + profile.environment.testplay.version)
             : "Legacy managed paths remain pinned.";
         return {
-          ...report,
+          ...normalizedReport,
           checks: [
-            ...report.checks,
+            ...normalizedReport.checks,
             {
               id: "managed.compatibility",
               label: "Managed environment",
@@ -579,10 +649,10 @@ const registerIpc = (): void => {
         };
       } catch {
         return {
-          ...report,
+          ...normalizedReport,
           ok: false,
           checks: [
-            ...report.checks,
+            ...normalizedReport.checks,
             {
               id: "managed.compatibility",
               label: "Managed environment",
@@ -603,15 +673,69 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.startWorks,
     safeHandler(async (requestValue: unknown) => {
-      const request = DesktopStartRequestV1Schema.parse(requestValue);
+      const request = DesktopStartRequestV2Schema.parse(requestValue);
       const profile = await validateProfile(await profileFor(request.profileId));
+      const resolvedAgents = new Map<string, Awaited<ReturnType<typeof requireReadyAgent>>>();
+      for (const agentId of new Set([
+        request.defaultAgentId,
+        ...request.works.flatMap((work) => (work.agentId === undefined ? [] : [work.agentId])),
+      ])) {
+        resolvedAgents.set(agentId, await requireReadyAgent(agentId));
+      }
+      await settings.setPreferredAgent(profile.profileId, request.defaultAgentId);
+      await settings.markAgentUsed(request.defaultAgentId);
       return runtime.startUnityWorks({
-        schemaVersion: 1,
+        schemaVersion: 2,
         projectPath: profile.projectPath,
         batchConfigPath: profile.batchConfigPath,
         maxParallelWorks: request.maxParallelWorks,
-        works: request.works,
+        works: request.works.map(({ agentId, ...work }) => {
+          const selectedId = agentId ?? request.defaultAgentId;
+          const agent = resolvedAgents.get(selectedId);
+          if (agent === undefined) throw new Error("Agent profile resolution failed.");
+          return {
+            ...work,
+            agent: { command: agent.command, harness: "stdio-framed-v2" as const },
+          };
+        }),
       });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentsUpsert,
+    safeHandler(async (requestValue: unknown) => {
+      await settings.upsertAgent(DesktopAgentUpsertRequestV1Schema.parse(requestValue));
+      return bootstrap();
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentsRemove,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopAgentIdRequestV1Schema.parse(requestValue);
+      await settings.removeAgent(request.agentId);
+      return bootstrap();
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentsProbe,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopAgentIdRequestV1Schema.parse(requestValue);
+      return agentManager.probe(await agentFor(request.agentId));
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentsConnect,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopAgentIdRequestV1Schema.parse(requestValue);
+      return agentManager.connect(await agentFor(request.agentId));
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectAgentPreference,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProjectAgentPreferenceRequestV1Schema.parse(requestValue);
+      await settings.setPreferredAgent(request.profileId, request.agentId);
+      return bootstrap();
     }),
   );
   ipcMain.handle(

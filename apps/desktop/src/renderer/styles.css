@@ -1403,3 +1403,119 @@ select:focus {
     grid-template-columns: 1fr;
   }
 }
+.agent-manager {
+  display: grid;
+  gap: 18px;
+}
+
+.agent-intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 24px;
+}
+
+.agent-intro h2,
+.agent-form h2,
+.agent-card h3 {
+  margin: 4px 0 8px;
+}
+
+.agent-intro p,
+.agent-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.agent-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 340px;
+  gap: 18px;
+  align-items: start;
+}
+
+.agent-list {
+  display: grid;
+  gap: 12px;
+}
+
+.agent-card {
+  padding: 18px;
+}
+
+.agent-card-head {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.agent-card code {
+  display: block;
+  overflow: hidden;
+  margin-bottom: 10px;
+  color: var(--text-secondary);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.agent-state {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 4px 8px;
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.agent-state.ready {
+  border-color: rgba(76, 221, 111, 0.35);
+  color: var(--success);
+}
+
+.agent-state.authentication-required,
+.agent-state.probe-failed {
+  border-color: rgba(255, 190, 24, 0.35);
+  color: var(--accent);
+}
+
+.agent-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.agent-form {
+  display: grid;
+  gap: 14px;
+  padding: 20px;
+  position: sticky;
+  top: 12px;
+}
+
+.agent-form label {
+  display: grid;
+  gap: 7px;
+}
+
+.agent-form label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.danger {
+  color: var(--danger) !important;
+}
+
+@media (max-width: 1100px) {
+  .agent-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .agent-form {
+    position: static;
+  }
+}

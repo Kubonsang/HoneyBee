@@ -2,6 +2,8 @@ import { contextBridge, ipcRenderer } from "electron";
 
 import {
   DesktopArtifactRequestV1Schema,
+  DesktopAgentIdRequestV1Schema,
+  DesktopAgentUpsertRequestV1Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
@@ -9,9 +11,10 @@ import {
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
-  DesktopProjectAddRequestV1Schema,
+  DesktopProjectAddRequestV2Schema,
+  DesktopProjectAgentPreferenceRequestV1Schema,
   DesktopRunRequestV1Schema,
-  DesktopStartRequestV1Schema,
+  DesktopStartRequestV2Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
@@ -45,7 +48,7 @@ const api: HoneyBeeDesktopApi = {
     DesktopIpcResponseSchemas.projectAdd.parse(
       await ipcRenderer.invoke(
         DesktopIpcChannels.projectAdd,
-        DesktopProjectAddRequestV1Schema.parse(request),
+        DesktopProjectAddRequestV2Schema.parse(request),
       ),
     ),
   setupStatus: async (request) =>
@@ -109,7 +112,7 @@ const api: HoneyBeeDesktopApi = {
     DesktopIpcResponseSchemas.startWorks.parse(
       await ipcRenderer.invoke(
         DesktopIpcChannels.startWorks,
-        DesktopStartRequestV1Schema.parse(request),
+        DesktopStartRequestV2Schema.parse(request),
       ),
     ),
   runtimeSnapshot: async (request) =>
@@ -159,6 +162,41 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.patchControl,
         DesktopPatchControlRequestV1Schema.parse(request),
+      ),
+    ),
+  upsertAgent: async (request) =>
+    DesktopIpcResponseSchemas.agentsUpsert.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.agentsUpsert,
+        DesktopAgentUpsertRequestV1Schema.parse(request),
+      ),
+    ),
+  removeAgent: async (request) =>
+    DesktopIpcResponseSchemas.agentsRemove.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.agentsRemove,
+        DesktopAgentIdRequestV1Schema.parse(request),
+      ),
+    ),
+  probeAgent: async (request) =>
+    DesktopIpcResponseSchemas.agentsProbe.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.agentsProbe,
+        DesktopAgentIdRequestV1Schema.parse(request),
+      ),
+    ),
+  connectAgent: async (request) =>
+    DesktopIpcResponseSchemas.agentsConnect.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.agentsConnect,
+        DesktopAgentIdRequestV1Schema.parse(request),
+      ),
+    ),
+  setProjectAgentPreference: async (request) =>
+    DesktopIpcResponseSchemas.projectAgentPreference.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.projectAgentPreference,
+        DesktopProjectAgentPreferenceRequestV1Schema.parse(request),
       ),
     ),
 };

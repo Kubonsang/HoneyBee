@@ -12,8 +12,9 @@ import {
 } from "@phosphor-icons/react";
 
 import {
-  DesktopProjectAddRequestV1Schema,
+  DesktopProjectAddRequestV2Schema,
   type ComponentManagerSnapshotV1,
+  type DesktopAgentProfileV1,
   type DesktopProjectDiscoveryV1,
   type DesktopProjectProfile,
   type DesktopSetupStatusV1,
@@ -23,12 +24,22 @@ interface SetupCenterProps {
   readonly onComplete: (profile: DesktopProjectProfile) => void;
   readonly onError: (message: string) => void;
   readonly initialProfile?: DesktopProjectProfile;
+  readonly agents: readonly DesktopAgentProfileV1[];
+  readonly preferredAgentId?: string;
+  readonly onManageAgents: () => void;
 }
 
 const readableError = (error: unknown): string =>
   error instanceof Error ? error.message : "Project setup failed.";
 
-export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenterProps) {
+export function SetupCenter({
+  onComplete,
+  onError,
+  initialProfile,
+  agents,
+  preferredAgentId,
+  onManageAgents,
+}: SetupCenterProps) {
   const managed =
     initialProfile?.schemaVersion === 2 || initialProfile?.schemaVersion === 3
       ? initialProfile.environment
@@ -40,8 +51,9 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
   const [localPhase, setLocalPhase] = useState<string>();
   const [projectPath, setProjectPath] = useState(initialProfile?.projectPath ?? "");
   const [unityPath, setUnityPath] = useState(managed?.unity.path ?? "");
-  const [agentPath, setAgentPath] = useState(managed?.agent.command ?? "");
-  const [agentArgs, setAgentArgs] = useState(managed?.agent.args?.join(" ") ?? "");
+  const [agentId, setAgentId] = useState(
+    preferredAgentId ?? agents.find((agent) => agent.enabled)?.agentId ?? "",
+  );
   const [testplayVersion, setTestplayVersion] = useState(
     initialProfile?.schemaVersion === 3 ? (initialProfile.environment.testplay?.version ?? "") : "",
   );
@@ -89,7 +101,6 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
       setComponents(componentState);
       setProjectPath(next.projectPath);
       setUnityPath(next.unity[0]?.path ?? "");
-      setAgentPath(next.agents[0]?.path ?? "");
       setTestplayVersion("");
     } catch (error) {
       onError(readableError(error));
@@ -100,7 +111,7 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
   };
 
   const choose = async (
-    kind: "project" | "unity" | "agent",
+    kind: "project" | "unity",
     update: (value: string) => void,
   ): Promise<void> => {
     try {
@@ -115,17 +126,14 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
 
   const valid = useMemo(
     () =>
-      DesktopProjectAddRequestV1Schema.safeParse({
-        schemaVersion: 1,
+      DesktopProjectAddRequestV2Schema.safeParse({
+        schemaVersion: 2,
         projectPath,
         unityPath,
-        agent: {
-          command: agentPath,
-          ...(agentArgs.trim().length === 0 ? {} : { args: agentArgs.trim().split(/\s+/u) }),
-        },
+        preferredAgentId: agentId,
         ...(testplayVersion.length === 0 ? {} : { testplayVersion }),
       }).success,
-    [agentArgs, agentPath, projectPath, testplayVersion, unityPath],
+    [agentId, projectPath, testplayVersion, unityPath],
   );
 
   const addProject = async (): Promise<void> => {
@@ -134,14 +142,11 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
       "Preparing isolated workspace… Windows may ask once for permission to install the local storage service.",
     );
     try {
-      const request = DesktopProjectAddRequestV1Schema.parse({
-        schemaVersion: 1,
+      const request = DesktopProjectAddRequestV2Schema.parse({
+        schemaVersion: 2,
         projectPath,
         unityPath,
-        agent: {
-          command: agentPath,
-          ...(agentArgs.trim().length === 0 ? {} : { args: agentArgs.trim().split(/\s+/u) }),
-        },
+        preferredAgentId: agentId,
         ...(testplayVersion.length === 0 ? {} : { testplayVersion }),
       });
       setStatus(await window.honeybee.addProject(request));
@@ -204,8 +209,8 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
               : `Update ${initialProfile.label}'s environment.`}
           </h2>
           <p>
-            Select the Unity and Agent executables once. Isolated storage, reusable Library cache,
-            and cleanup policy are installed and verified automatically.
+            Select Unity once. Agent connections are managed globally and this project only keeps a
+            changeable default preference.
           </p>
         </div>
         <div className="setup-hero-actions">
@@ -250,20 +255,30 @@ export function SetupCenter({ onComplete, onError, initialProfile }: SetupCenter
             onChange={setUnityPath}
             onBrowse={() => void choose("unity", setUnityPath)}
           />
-          <div className="setup-pair">
-            <SetupField
-              label="Agent executable"
-              value={agentPath}
-              onChange={setAgentPath}
-              onBrowse={() => void choose("agent", setAgentPath)}
-            />
-            <SetupField
-              label="Agent arguments"
-              value={agentArgs}
-              onChange={setAgentArgs}
-              placeholder="optional"
-            />
-          </div>
+          <label className="setup-field">
+            <span>Preferred Agent</span>
+            <div>
+              <select value={agentId} onChange={(event) => setAgentId(event.target.value)}>
+                <option value="">Choose a connected Agent</option>
+                {agents
+                  .filter((agent) => agent.enabled)
+                  .map((agent) => (
+                    <option key={agent.agentId} value={agent.agentId}>
+                      {agent.displayName} · {agent.provider}
+                    </option>
+                  ))}
+              </select>
+              <button type="button" onClick={onManageAgents} aria-label="Manage Agents">
+                <Wrench size={16} />
+              </button>
+            </div>
+          </label>
+          {agents.length === 0 && (
+            <div className="setup-addon-note">
+              Connect at least one Agent first. Agent accounts and commands are shared across
+              projects, never owned by one project.
+            </div>
+          )}
 
           <label className="setup-field">
             <span>TestPlay validation add-on (optional)</span>

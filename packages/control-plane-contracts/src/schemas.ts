@@ -7,6 +7,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityCapabilitySchema,
+  UnityAgentConfigSchema,
   UnityEditorObservationV1Schema,
   UnityEditorSlotIdSchema,
   UnityWorkPrioritySchema,
@@ -267,6 +268,41 @@ export const StartUnityWorksRequestV1Schema = z
     }
   });
 export type StartUnityWorksRequestV1 = z.infer<typeof StartUnityWorksRequestV1Schema>;
+
+export const StartUnityWorkV2Schema = StartUnityWorkV1Schema.extend({
+  agent: UnityAgentConfigSchema,
+}).strict();
+
+export const StartUnityWorksRequestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    batchConfigPath: z.string().min(1),
+    projectPath: z.string().min(1),
+    maxParallelWorks: z.number().int().positive().max(32),
+    works: z.array(StartUnityWorkV2Schema).min(1).max(32),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (request.maxParallelWorks > request.works.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+    const ids = new Set<string>();
+    for (const [index, work] of request.works.entries()) {
+      if (ids.has(work.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "id"],
+          message: `Duplicate Work id: ${work.id}`,
+        });
+      }
+      ids.add(work.id);
+    }
+  });
+export type StartUnityWorksRequestV2 = z.infer<typeof StartUnityWorksRequestV2Schema>;
 
 export const StartUnityWorksResultV1Schema = z
   .object({

@@ -11,6 +11,7 @@ import {
   Plus,
   Play,
   Pulse,
+  Robot,
   SquaresFour,
   Stethoscope,
   WarningCircle,
@@ -28,16 +29,17 @@ import type {
 } from "@honeybee/control-plane-contracts";
 
 import {
-  DesktopStartRequestV1Schema,
-  type DesktopBootstrapV1,
+  DesktopStartRequestV2Schema,
+  type DesktopBootstrapV2,
   type DesktopProjectProfile,
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { CommandCenter } from "./CommandCenter.js";
+import { AgentManagerView } from "./AgentManagerView.js";
 import { RunDetailView } from "./RunDetailView.js";
 import { SetupCenter } from "./SetupCenter.js";
 
-type DesktopView = "projects" | "command" | "work" | "history" | "setup";
+type DesktopView = "projects" | "command" | "work" | "history" | "setup" | "agents";
 
 interface WorkDraft {
   readonly key: number;
@@ -47,6 +49,7 @@ interface WorkDraft {
   readonly compile: boolean;
   readonly warmTest: boolean;
   readonly filter: string;
+  readonly agentId: string | undefined;
 }
 
 const initialWork = (key = 1): WorkDraft => ({
@@ -57,6 +60,7 @@ const initialWork = (key = 1): WorkDraft => ({
   compile: false,
   warmTest: false,
   filter: "",
+  agentId: undefined,
 });
 
 const readableError = (error: unknown): string =>
@@ -72,7 +76,7 @@ const statusMark = (status: "pass" | "warning" | "fail") =>
   );
 
 export function App() {
-  const [bootstrap, setBootstrap] = useState<DesktopBootstrapV1>();
+  const [bootstrap, setBootstrap] = useState<DesktopBootstrapV2>();
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [editingProfileId, setEditingProfileId] = useState<string>();
   const [view, setView] = useState<DesktopView>("projects");
@@ -87,6 +91,7 @@ export function App() {
   const [patch, setPatch] = useState<VerifiedPatchViewV1>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [defaultAgentId, setDefaultAgentId] = useState<string>();
 
   useEffect(() => {
     void window.honeybee
@@ -94,6 +99,11 @@ export function App() {
       .then((value) => {
         setBootstrap(value);
         setSelectedProfileId(value.profiles[0]?.profileId);
+        setDefaultAgentId(
+          value.profiles[0] === undefined
+            ? value.lastUsedAgentId
+            : (value.preferredAgentIds[value.profiles[0].profileId] ?? value.lastUsedAgentId),
+        );
         setView("projects");
       })
       .catch((reason: unknown) => setError(readableError(reason)));
@@ -157,27 +167,32 @@ export function App() {
     () => bootstrap?.profiles.find((profile) => profile.profileId === selectedProfileId),
     [bootstrap, selectedProfileId],
   );
-  const agentProfiles = useMemo(
-    () =>
-      selectedProfile === undefined
-        ? []
-        : (bootstrap?.profiles.filter(
-            (profile) => profile.projectPath === selectedProfile.projectPath,
-          ) ?? []),
-    [bootstrap, selectedProfile],
+  const enabledAgents = useMemo(
+    () => bootstrap?.agents.filter((agent) => agent.enabled) ?? [],
+    [bootstrap],
   );
   const testplayAvailable =
     selectedProfile === undefined ||
     selectedProfile.schemaVersion === 1 ||
     selectedProfile.environment.testplay !== undefined;
-  const validWorks = works.every(
-    (work) =>
-      work.task.trim().length > 0 && (testplayAvailable || (!work.compile && !work.warmTest)),
-  );
+  const validWorks =
+    defaultAgentId !== undefined &&
+    works.every(
+      (work) =>
+        work.task.trim().length > 0 && (testplayAvailable || (!work.compile && !work.warmTest)),
+    );
   const primaryWork = works[0] ?? initialWork();
 
-  const activateProfile = (profileId: string | undefined): void => {
+  const activateProfile = (
+    profileId: string | undefined,
+    source: DesktopBootstrapV2 | undefined = bootstrap,
+  ): void => {
     setSelectedProfileId(profileId);
+    setDefaultAgentId(
+      profileId === undefined
+        ? source?.lastUsedAgentId
+        : (source?.preferredAgentIds[profileId] ?? source?.lastUsedAgentId),
+    );
     setDoctor(undefined);
     setSnapshot(undefined);
     setSelectedRunId(undefined);
@@ -195,7 +210,7 @@ export function App() {
       });
       setBootstrap(value);
       if (selectedProfileId === profile.profileId) {
-        activateProfile(value.profiles[0]?.profileId);
+        activateProfile(value.profiles[0]?.profileId, value);
       }
     } catch (reason) {
       setError(readableError(reason));
@@ -206,13 +221,27 @@ export function App() {
     try {
       const value = await window.honeybee.bootstrap();
       setBootstrap(value);
-      activateProfile(profile.profileId);
+      activateProfile(profile.profileId, value);
       setEditingProfileId(undefined);
       setView("command");
       setNotice(`${profile.label} is ready. Run Doctor before the first Work.`);
     } catch (reason) {
       setError(readableError(reason));
     }
+  };
+
+  const refreshBootstrap = async (): Promise<void> => {
+    const value = await window.honeybee.bootstrap();
+    setBootstrap(value);
+    const profileId = value.profiles.some((profile) => profile.profileId === selectedProfileId)
+      ? selectedProfileId
+      : value.profiles[0]?.profileId;
+    setSelectedProfileId(profileId);
+    setDefaultAgentId(
+      profileId === undefined
+        ? value.lastUsedAgentId
+        : (value.preferredAgentIds[profileId] ?? value.lastUsedAgentId),
+    );
   };
 
   const runDoctor = async (): Promise<void> => {
@@ -245,14 +274,17 @@ export function App() {
     setError(undefined);
     setNotice(undefined);
     try {
-      const request = DesktopStartRequestV1Schema.parse({
-        schemaVersion: 1,
+      if (defaultAgentId === undefined) throw new Error("Choose a connected Agent first.");
+      const request = DesktopStartRequestV2Schema.parse({
+        schemaVersion: 2,
         profileId: selectedProfile.profileId,
+        defaultAgentId,
         maxParallelWorks: works.length,
         works: works.map((work) => ({
           id: work.id,
           task: work.task.trim(),
           priority: work.priority,
+          ...(work.agentId === undefined ? {} : { agentId: work.agentId }),
           capabilities: [
             ...(work.compile ? [{ id: "compile" as const, kind: "compile" as const }] : []),
             ...(work.warmTest
@@ -413,6 +445,9 @@ export function App() {
           >
             <ClockCounterClockwise size={20} weight="duotone" /> Run History
           </button>
+          <button className={view === "agents" ? "selected" : ""} onClick={() => setView("agents")}>
+            <Robot size={20} weight="duotone" /> Agents
+          </button>
         </nav>
         <div className="sidebar-heading">
           <span>Recent projects</span>
@@ -530,9 +565,11 @@ export function App() {
                   ? "Command Center"
                   : view === "history"
                     ? "Run History"
-                    : view === "setup"
-                      ? "Setup Center"
-                      : (selectedProfile?.label ?? "Choose a Unity project")}
+                    : view === "agents"
+                      ? "Agents"
+                      : view === "setup"
+                        ? "Setup Center"
+                        : (selectedProfile?.label ?? "Choose a Unity project")}
             </h1>
             <p>
               {view === "projects"
@@ -541,9 +578,11 @@ export function App() {
                   ? "Orchestrate AI agents. Isolate workspaces. Deliver verified changes."
                   : view === "history"
                     ? "Inspect durable outcomes, Evidence, and verified patches."
-                    : view === "setup"
-                      ? "Create and recover a strict local managed Unity environment."
-                      : "Describe focused changes and launch a bounded parallel batch."}
+                    : view === "agents"
+                      ? "Connect and manage AI execution profiles independently of Unity projects."
+                      : view === "setup"
+                        ? "Create and recover a strict local managed Unity environment."
+                        : "Describe focused changes and launch a bounded parallel batch."}
             </p>
           </div>
         </div>
@@ -634,8 +673,25 @@ export function App() {
               );
               return initialProfile === undefined ? {} : { initialProfile };
             })()}
+            agents={bootstrap?.agents ?? []}
+            {...(() => {
+              const preferredAgentId =
+                editingProfileId === undefined
+                  ? bootstrap?.lastUsedAgentId
+                  : bootstrap?.preferredAgentIds[editingProfileId];
+              return preferredAgentId === undefined ? {} : { preferredAgentId };
+            })()}
+            onManageAgents={() => setView("agents")}
             onComplete={(profile) => void completeSetup(profile)}
             onError={(message) => setError(message)}
+          />
+        ) : view === "agents" ? (
+          <AgentManagerView
+            agents={bootstrap?.agents ?? []}
+            statuses={bootstrap?.agentStatuses ?? []}
+            onChange={refreshBootstrap}
+            onError={(message) => setError(message)}
+            onNotice={(message) => setNotice(message)}
           />
         ) : view === "work" ? (
           <div className="content-grid">
@@ -666,16 +722,15 @@ export function App() {
                 <>
                   <div className="binding-row">
                     <label>
-                      <small>Agent configuration</small>
+                      <small>Batch default Agent</small>
                       <select
-                        value={selectedProfile.profileId}
-                        onChange={(event) => {
-                          activateProfile(event.target.value);
-                        }}
+                        value={defaultAgentId ?? ""}
+                        onChange={(event) => setDefaultAgentId(event.target.value || undefined)}
                       >
-                        {agentProfiles.map((profile) => (
-                          <option key={profile.profileId} value={profile.profileId}>
-                            {profile.configLabel}
+                        <option value="">Choose Agent</option>
+                        {enabledAgents.map((agent) => (
+                          <option key={agent.agentId} value={agent.agentId}>
+                            {agent.displayName} · {agent.provider}
                           </option>
                         ))}
                       </select>
@@ -715,6 +770,24 @@ export function App() {
                           />
                         </label>
                         <div className="work-options">
+                          <label>
+                            <span>Agent</span>
+                            <select
+                              value={work.agentId ?? ""}
+                              onChange={(event) =>
+                                updateWork(work.key, {
+                                  agentId: event.target.value || undefined,
+                                })
+                              }
+                            >
+                              <option value="">Use batch default</option>
+                              {enabledAgents.map((agent) => (
+                                <option key={agent.agentId} value={agent.agentId}>
+                                  {agent.displayName}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
                           <label>
                             <span>Priority</span>
                             <select
@@ -877,6 +950,20 @@ export function App() {
                       rows={2}
                     />
                     <div className="quick-composer-actions">
+                      <label className="compact-select">
+                        <span>Agent</span>
+                        <select
+                          value={defaultAgentId ?? ""}
+                          onChange={(event) => setDefaultAgentId(event.target.value || undefined)}
+                        >
+                          <option value="">Choose Agent</option>
+                          {enabledAgents.map((agent) => (
+                            <option key={agent.agentId} value={agent.agentId}>
+                              {agent.displayName}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                       <label className="compact-select">
                         <span>Priority</span>
                         <select

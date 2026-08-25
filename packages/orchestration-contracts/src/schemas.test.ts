@@ -18,6 +18,7 @@ import {
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
   UnityEditorObservationV1Schema,
   UnityWorkConfigV2Schema,
   UnityGlobalResourceEventV1Schema,
@@ -600,6 +601,24 @@ describe("orchestration contracts", () => {
       ],
     } as const;
     expect(UnityBatchConfigV3Schema.safeParse(config).success).toBe(true);
+    const perWorkAgents = {
+      ...config,
+      schemaVersion: 4,
+      works: config.works.map((work, index) => ({
+        ...work,
+        agent: {
+          command: { command: index === 0 ? "codex" : "opencode" },
+          harness: "stdio-framed-v2",
+        },
+      })),
+    } as const;
+    expect(UnityBatchConfigV4Schema.safeParse(perWorkAgents).success).toBe(true);
+    expect(
+      UnityBatchConfigV4Schema.safeParse({
+        ...perWorkAgents,
+        works: perWorkAgents.works.map(({ agent: _agent, ...work }) => work),
+      }).success,
+    ).toBe(false);
     expect(UnityBatchConfigV3Schema.safeParse({ ...config, typo: true }).success).toBe(false);
     expect(
       UnityBatchConfigV3Schema.safeParse({

@@ -95,7 +95,7 @@ Git Worktree integration, distributed scheduling, Semantic IR, and Recipe system
 
 ## Unity Editor pool v0.6
 
-v0.6 adds strict single-Work config schema 2 and batch config schema 3. A Work declares its priority and ordered capabilities; it never selects an Editor or slot:
+v0.6 adds strict single-Work config schema 2 and batch config schema 3. Desktop Agent Manager runs materialize compatible batch config schema 4, which adds one immutable Agent snapshot to every Work while retaining the same Editor-pool semantics. A Work declares its priority and ordered capabilities; it never selects an Editor or slot:
 
     corepack pnpm honeybee unity run --config unity-work.v2.json --task "Implement, compile, and warm-test the change" --json
     corepack pnpm honeybee unity batch run --config unity-batch.v3.json --json
@@ -126,8 +126,13 @@ packaged executable with an isolated temporary user-data directory. The smoke re
 `app.ready`, the sandboxed preload API, the renderer Projects home, and runtime bootstrap IPC to
 all succeed. It force-closes only its own process tree and removes its temporary profile.
 
+Open **Agents** first to connect Codex, Claude Code, OpenCode, or a custom `stdio-framed-v2` CLI.
+HoneyBee stores global execution profiles, not provider credentials: official CLI login remains
+provider-owned, while HoneyBee records only bounded readiness and version results. Existing managed
+profiles are migrated by extracting and deduplicating their embedded Agent command.
+
 Open Projects and choose **Add project**. The one-time Environment Profile step discovers local
-Unity and OpenCode; HoneyBee then installs or reuses the immutable `unity-workspace-storage` version
+Unity and asks only for a changeable preferred Agent from the global library; HoneyBee then installs or reuses the immutable `unity-workspace-storage` version
 and its private workspace root without asking for storage settings. The legacy
 `TestPlayStorageBroker` service is never adopted, replaced, or stopped. TestPlay and its Bridge are one optional
 Component Manager unit for compile/warm-test; only releases in HoneyBee's fixed compatibility
@@ -139,7 +144,7 @@ The parent compatibility key is canonical and intentionally excludes `Assets`. I
 
 For schema-2 parent creation, storage returns a `stagingPath` that is the provider-owned `Library` mount. Setup derives `projectRoot = dirname(stagingPath)`, prepares only `Assets`, `Packages`, and `ProjectSettings` beneath that root, and never creates, overwrites, or removes `Library`. The pinned Unity process runs behind the same deferred containment boundary as Unity Runs. Commit occurs only after source, Bridge, Library identity, and non-empty Library checks; failure/cancel replays an ambiguous begin request when necessary, aborts it, and removes only the proven HoneyBee-owned project shell.
 
-Doctor validates Unity project structure/version, physical path isolation, Agent command availability, the bundled storage pin/service, and managed compatibility inputs without running an Agent. If TestPlay is configured, Doctor also validates its side-effect-free version and protocol 3 compile/warm-test command surface; otherwise it reports the capability backend as optional and unavailable. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. Agent choice remains the managed profile; compile/warm-test controls stay disabled until the optional TestPlay pair is configured.
+Doctor validates Unity project structure/version, physical path isolation, the preferred global Agent readiness, the bundled storage pin/service, and managed compatibility inputs without running an Agent task. If TestPlay is configured, Doctor also validates its side-effect-free version and protocol 3 compile/warm-test command surface; otherwise it reports the capability backend as optional and unavailable. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. A batch has one default Agent and each Work may override it; main validates every selected profile before workspace acquisition and persists the exact commands in the Run config Artifact. Compile/warm-test controls stay disabled until the optional TestPlay pair is configured.
 
 The Command Center shows live Work phases, the priority/FIFO Editor queue, Editor ownership, Run History, typed Journal activity, and bounded Evidence previews. Cleanup-pending Runs expose only runtime-authorized Resume/Cancel actions. A completed child Run exposes its local verified patch as file-by-file before/after views.
 

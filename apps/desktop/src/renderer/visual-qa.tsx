@@ -7,6 +7,7 @@ import "./styles.css";
 import "./dashboard.css";
 
 const projectId = "11111111-1111-4111-8111-111111111111";
+const agentId = "12121212-1212-4212-8212-121212121212";
 const runA = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const runB = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 const runC = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
@@ -168,7 +169,7 @@ const unsupported = async () => {
 
 const api: HoneyBeeDesktopApi = {
   bootstrap: async () => ({
-    schemaVersion: 1,
+    schemaVersion: 2,
     runtime: {
       schemaVersion: 1,
       apiVersion: 1,
@@ -186,6 +187,31 @@ const api: HoneyBeeDesktopApi = {
         lastOpenedAt: timestamp(4),
       },
     ],
+    agents: [
+      {
+        schemaVersion: 1,
+        agentId,
+        displayName: "OpenCode",
+        provider: "opencode",
+        command: { command: "opencode", args: ["run", "--pure"] },
+        adapter: "stdio-framed-v2",
+        enabled: true,
+        createdAt: timestamp(4),
+        updatedAt: timestamp(4),
+      },
+    ],
+    agentStatuses: [
+      {
+        schemaVersion: 1,
+        agentId,
+        status: "ready",
+        checkedAt: timestamp(0),
+        version: "OpenCode 1.0.0",
+        summary: "The Agent CLI and provider authentication are ready.",
+      },
+    ],
+    preferredAgentIds: { [projectId]: agentId },
+    lastUsedAgentId: agentId,
   }),
   chooseProfile: async () => null,
   chooseSetupPath: async () => null,
@@ -214,6 +240,11 @@ const api: HoneyBeeDesktopApi = {
   cancelRun: unsupported,
   getPatch: unsupported,
   controlPatch: unsupported,
+  upsertAgent: unsupported,
+  removeAgent: unsupported,
+  probeAgent: unsupported,
+  connectAgent: unsupported,
+  setProjectAgentPreference: unsupported,
 };
 
 Object.defineProperty(window, "honeybee", { configurable: false, value: api });

@@ -129,6 +129,7 @@ const sha256 = (bytes: Uint8Array | string): string =>
 export const ResolvedDesktopSetupDraftV1Schema = z
   .object({
     ...DesktopSetupDraftV1Schema.shape,
+    preferredAgentId: z.string().uuid().optional(),
     componentLocks: z
       .object({
         workspaceStorage: ProjectComponentLockV1Schema,
@@ -779,7 +780,10 @@ export class DesktopSetupCoordinator {
 
   public constructor(
     private readonly root: string,
-    private readonly onProfile: (profile: DesktopProjectProfile) => Promise<void>,
+    private readonly onProfile: (
+      profile: DesktopProjectProfile,
+      preferredAgentId?: string,
+    ) => Promise<void>,
     private readonly processContainment: Pick<
       RuntimeProcessContainment,
       "captureIdentity" | "drain" | "run"
@@ -1486,7 +1490,10 @@ export class DesktopSetupCoordinator {
       const profile = DesktopProjectProfileSchema.parse(
         JSON.parse(await readFile(profilePath, "utf8")),
       );
-      await this.onProfile(profile);
+      await this.onProfile(
+        profile,
+        "preferredAgentId" in draft ? draft.preferredAgentId : undefined,
+      );
       if ((await journal.events()).at(-1)?.type !== "setup.completed") {
         await journal.append("setup.completed", { profileId: profile.profileId });
       }
@@ -1590,7 +1597,7 @@ export class DesktopSetupCoordinator {
             environment,
           });
     await publishExclusiveFile(profilePath, JSON.stringify(profile));
-    await this.onProfile(profile);
+    await this.onProfile(profile, "preferredAgentId" in draft ? draft.preferredAgentId : undefined);
     await journal.append("profile.stored", { profileId: profile.profileId });
     await journal.append("setup.completed", { profileId: profile.profileId });
   }

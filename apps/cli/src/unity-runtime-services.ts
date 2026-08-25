@@ -6,6 +6,7 @@ import {
   StepIdSchema,
   type FileRunControl,
   type UnityBatchConfigV3,
+  type UnityBatchConfigV4,
   type UnityWorkspaceStorageV1,
   type UnityWorkspaceStorageV2,
   type UnityWorkConfigV2,
@@ -106,7 +107,7 @@ export const createUnityEditorTransactionServices = (
 
 export const createUnityEditorBatchWorkflow = (
   root: string,
-  config: UnityBatchConfigV3,
+  config: UnityBatchConfigV3 | UnityBatchConfigV4,
   journal: VersionedOrchestrationJournal,
   controls: FileRunControl,
 ): UnityEditorBatchWorkflow => {

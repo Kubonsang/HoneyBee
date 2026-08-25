@@ -4,10 +4,12 @@ import {
   DesktopArtifactRequestV1Schema,
   DesktopPatchControlRequestV1Schema,
   DesktopProjectAddRequestV1Schema,
+  DesktopProjectAddRequestV2Schema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopStartRequestV1Schema,
+  DesktopStartRequestV2Schema,
   HoneyBeeCompatibilityManifestV1Schema,
 } from "./ipc.js";
 
@@ -78,6 +80,29 @@ describe("Desktop IPC contracts", () => {
     ).toBe(false);
   });
 
+  it("requires a global default Agent and permits a per-Work override", () => {
+    const defaultAgentId = "00000000-0000-4000-8000-000000000010";
+    const overrideAgentId = "00000000-0000-4000-8000-000000000011";
+    expect(
+      DesktopStartRequestV2Schema.safeParse({
+        schemaVersion: 2,
+        profileId: "00000000-0000-4000-8000-000000000001",
+        defaultAgentId,
+        maxParallelWorks: 2,
+        works: [
+          { id: "work-a", task: "A", priority: "interactive", capabilities: [] },
+          {
+            id: "work-b",
+            task: "B",
+            priority: "background",
+            capabilities: [],
+            agentId: overrideAgentId,
+          },
+        ],
+      }).success,
+    ).toBe(true);
+  });
+
   it("keeps runtime snapshots strict at nested resource boundaries", () => {
     const snapshot = {
       schemaVersion: 1,
@@ -128,6 +153,14 @@ describe("Desktop IPC contracts", () => {
         workspaceStorageVersion: "1.0.0",
       }).success,
     ).toBe(false);
+    expect(
+      DesktopProjectAddRequestV2Schema.safeParse({
+        schemaVersion: 2,
+        projectPath: request.projectPath,
+        unityPath: request.unityPath,
+        preferredAgentId: "00000000-0000-4000-8000-000000000010",
+      }).success,
+    ).toBe(true);
     expect(
       DesktopProjectAddRequestV1Schema.safeParse({
         ...request,

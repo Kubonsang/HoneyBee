@@ -9,6 +9,7 @@ import {
   OrchestrationEventV5Schema,
   RunIdSchema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
   UnityWorkConfigV2Schema,
   type ArtifactRef,
   type ArtifactStore,
@@ -20,6 +21,7 @@ import {
   type RunRepository,
   type StepId,
   type UnityBatchConfigV3,
+  type UnityBatchConfigV4,
   type UnityWorkConfigV2,
   type VersionedOrchestrationJournal,
 } from "@honeybee/core";
@@ -32,8 +34,19 @@ import type { UnityWorkRunResult } from "./unity-transaction.js";
 
 const CONTROL_POLL_INTERVAL_MS = 100;
 
+type UnityEditorBatchConfig = UnityBatchConfigV3 | UnityBatchConfigV4;
+type UnityEditorBatchWork = UnityEditorBatchConfig["works"][number];
+
+const parseBatchConfig = (value: unknown): UnityEditorBatchConfig =>
+  typeof value === "object" &&
+  value !== null &&
+  "schemaVersion" in value &&
+  value.schemaVersion === 4
+    ? UnityBatchConfigV4Schema.parse(value)
+    : UnityBatchConfigV3Schema.parse(value);
+
 interface Registration {
-  readonly work: UnityBatchConfigV3["works"][number];
+  readonly work: UnityEditorBatchWork;
   readonly childRunId: RunId;
 }
 
@@ -125,12 +138,13 @@ const summary = (works: readonly UnityBatchWorkResult[]) => ({
 });
 
 const runtimeConfig = (
-  config: UnityBatchConfigV3,
-  work: UnityBatchConfigV3["works"][number],
+  config: UnityEditorBatchConfig,
+  work: UnityEditorBatchWork,
 ): UnityWorkConfigV2 =>
   UnityWorkConfigV2Schema.parse({
     ...config.transaction,
     schemaVersion: 2,
+    agent: "agent" in work ? work.agent : config.transaction.agent,
     ...(config.transaction.testplay === undefined
       ? {}
       : { testplay: { ...config.transaction.testplay, bridgeProtocolVersion: 3 } }),
@@ -209,10 +223,10 @@ export class UnityEditorBatchWorkflow {
 
   public async run(
     runIdValue: RunId,
-    configValue: UnityBatchConfigV3,
+    configValue: UnityEditorBatchConfig,
   ): Promise<UnityBatchRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
-    const config = UnityBatchConfigV3Schema.parse(configValue);
+    const config = parseBatchConfig(configValue);
     if (config.works.some((work) => work.capabilities.length > 0)) {
       await this.pool.declare({
         poolId: config.editorPool.id,
@@ -259,7 +273,7 @@ export class UnityEditorBatchWorkflow {
       throw new HoneyBeeCoreError("run.not-resumable", "Run is not a Unity v0.6 batch.");
     }
     if (replay.status === "terminal") return inspectUnityEditorBatchEvents(runId, events);
-    const config = UnityBatchConfigV3Schema.parse(
+    const config = parseBatchConfig(
       JSON.parse(await this.artifacts.get({ runId, artifact: start.payload.config })) as unknown,
     );
     if (
@@ -319,7 +333,7 @@ export class UnityEditorBatchWorkflow {
 
   async #execute(
     parentRunId: RunId,
-    config: UnityBatchConfigV3,
+    config: UnityEditorBatchConfig,
     registrations: readonly Registration[],
     writer: BatchV5Writer,
     existing: readonly OrchestrationEventV5[],
@@ -475,7 +489,7 @@ export class UnityEditorBatchWorkflow {
 
   async #executeChild(
     parentRunId: RunId,
-    config: UnityBatchConfigV3,
+    config: UnityEditorBatchConfig,
     registration: Registration,
     cancelling: boolean,
   ): Promise<UnityWorkRunResult> {
@@ -588,7 +602,7 @@ export class UnityEditorBatchWorkflow {
     }
   }
 
-  #putConfig(runId: RunId, config: UnityBatchConfigV3): Promise<ArtifactRef> {
+  #putConfig(runId: RunId, config: UnityEditorBatchConfig): Promise<ArtifactRef> {
     return this.artifacts.put({
       runId,
       artifactId: ArtifactIdSchema.parse(this.#randomId()),

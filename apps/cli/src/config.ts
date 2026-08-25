@@ -306,14 +306,29 @@ export const loadUnityBatchConfig = async (configPath: string): Promise<UnityBat
   const original = UnityBatchConfigSchema.safeParse(parsed);
   if (!original.success) {
     throw new Error(
-      "Invalid Unity batch schemaVersion 1, 2, or 3 config: " + original.error.message,
+      "Invalid Unity batch schemaVersion 1, 2, 3, or 4 config: " + original.error.message,
     );
   }
   const directory = path.dirname(absolutePath);
-  if (original.data.schemaVersion === 3) {
+  if (original.data.schemaVersion === 3 || original.data.schemaVersion === 4) {
     return UnityBatchConfigSchema.parse({
       ...original.data,
       transaction: await normalizeUnityWorkConfig(original.data.transaction, directory, true),
+      ...(original.data.schemaVersion === 4
+        ? {
+            works: original.data.works.map((work, index) => ({
+              ...work,
+              agent: {
+                ...work.agent,
+                command: readAgentCommand(
+                  work.agent.command,
+                  `works[${index}].agent.command`,
+                  directory,
+                ),
+              },
+            })),
+          }
+        : {}),
     });
   }
   return UnityBatchConfigSchema.parse({

@@ -371,7 +371,7 @@ const unityTransactionFor = (
 
 const unityBatchFor = (
   root: string,
-  config: Exclude<ReturnType<typeof UnityBatchConfigSchema.parse>, { schemaVersion: 3 }>,
+  config: Exclude<ReturnType<typeof UnityBatchConfigSchema.parse>, { schemaVersion: 3 | 4 }>,
   journal: VersionedOrchestrationJournal,
   controls: FileRunControl,
 ): UnityBatchWorkflow => {
@@ -513,7 +513,7 @@ const executeUnityBatch = async (
   const journalPath = path.join(root, runId, "events.jsonl");
   try {
     const result =
-      config.schemaVersion === 3
+      config.schemaVersion === 3 || config.schemaVersion === 4
         ? await createUnityEditorBatchWorkflow(root, config, journal, controls).run(runId, config)
         : await unityBatchFor(root, config, journal, controls).run(runId, config);
     finishUnityBatchExecution(result, journalPath, args.json);
@@ -604,7 +604,7 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
       const config = UnityBatchConfigSchema.parse(
         JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
       );
-      if (config.schemaVersion === 3)
+      if (config.schemaVersion === 3 || config.schemaVersion === 4)
         throw new HoneyBeeCoreError(
           "run.indeterminate",
           "A v0.5 Journal references a v0.6 config.",

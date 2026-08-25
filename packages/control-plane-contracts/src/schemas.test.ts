@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { RuntimeInfoV1Schema, StartUnityWorksRequestV1Schema } from "./schemas.js";
+import {
+  RuntimeInfoV1Schema,
+  StartUnityWorksRequestV1Schema,
+  StartUnityWorksRequestV2Schema,
+} from "./schemas.js";
 
 describe("control-plane contracts", () => {
   it("rejects unknown fields at the public boundary", () => {
@@ -54,6 +58,27 @@ describe("control-plane contracts", () => {
             capabilities: [],
           },
         ],
+      }).success,
+    ).toBe(true);
+  });
+
+  it("accepts immutable Agent snapshots for each Work", () => {
+    expect(
+      StartUnityWorksRequestV2Schema.safeParse({
+        schemaVersion: 2,
+        batchConfigPath: "C:/config.json",
+        projectPath: "C:/project",
+        maxParallelWorks: 2,
+        works: ["a", "b"].map((suffix) => ({
+          id: `work-${suffix}`,
+          task: suffix,
+          priority: "validation",
+          capabilities: [],
+          agent: {
+            command: { command: `agent-${suffix}` },
+            harness: "stdio-framed-v2",
+          },
+        })),
       }).success,
     ).toBe(true);
   });

@@ -201,13 +201,79 @@ export const ComponentManagerSnapshotV1Schema = z
   })
   .strict();
 export type ComponentManagerSnapshotV1 = z.infer<typeof ComponentManagerSnapshotV1Schema>;
-const SetupCommandSchema = z
+export const SetupCommandSchema = z
   .object({
     command: z.string().trim().min(1),
     args: z.array(z.string()).optional(),
     cwd: z.string().min(1).optional(),
   })
   .strict();
+export type SetupCommand = z.infer<typeof SetupCommandSchema>;
+
+export const DesktopAgentProviderV1Schema = z.enum(["codex", "claude", "opencode", "custom"]);
+export type DesktopAgentProviderV1 = z.infer<typeof DesktopAgentProviderV1Schema>;
+
+export const DesktopAgentProfileV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    agentId: z.string().uuid(),
+    displayName: z.string().trim().min(1).max(120),
+    provider: DesktopAgentProviderV1Schema,
+    command: SetupCommandSchema,
+    adapter: z.literal("stdio-framed-v2"),
+    enabled: z.boolean(),
+    createdAt: z.string().datetime(),
+    updatedAt: z.string().datetime(),
+  })
+  .strict();
+export type DesktopAgentProfileV1 = z.infer<typeof DesktopAgentProfileV1Schema>;
+
+export const DesktopAgentStatusV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    agentId: z.string().uuid(),
+    status: z.enum([
+      "ready",
+      "not-installed",
+      "authentication-required",
+      "unsupported-version",
+      "protocol-incompatible",
+      "probe-failed",
+      "disabled",
+    ]),
+    checkedAt: z.string().datetime(),
+    version: z.string().trim().min(1).max(200).optional(),
+    summary: z.string().trim().min(1).max(500),
+  })
+  .strict();
+export type DesktopAgentStatusV1 = z.infer<typeof DesktopAgentStatusV1Schema>;
+
+export const DesktopAgentUpsertRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    agentId: z.string().uuid().optional(),
+    displayName: z.string().trim().min(1).max(120),
+    provider: DesktopAgentProviderV1Schema,
+    command: SetupCommandSchema,
+    enabled: z.boolean().default(true),
+  })
+  .strict();
+export type DesktopAgentUpsertRequestV1 = z.infer<typeof DesktopAgentUpsertRequestV1Schema>;
+
+export const DesktopAgentIdRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), agentId: z.string().uuid() })
+  .strict();
+export type DesktopAgentIdRequestV1 = z.infer<typeof DesktopAgentIdRequestV1Schema>;
+
+export const DesktopAgentConnectResultV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    agentId: z.string().uuid(),
+    launched: z.boolean(),
+    message: z.string().min(1).max(500),
+  })
+  .strict();
+export type DesktopAgentConnectResultV1 = z.infer<typeof DesktopAgentConnectResultV1Schema>;
 
 export const ManagedUnityEnvironmentV1Schema = z
   .object({
@@ -413,6 +479,19 @@ export const DesktopBootstrapV1Schema = z
   .strict();
 export type DesktopBootstrapV1 = z.infer<typeof DesktopBootstrapV1Schema>;
 
+export const DesktopBootstrapV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    runtime: RuntimeInfoV1Schema,
+    profiles: z.array(DesktopProjectProfileSchema),
+    agents: z.array(DesktopAgentProfileV1Schema),
+    agentStatuses: z.array(DesktopAgentStatusV1Schema),
+    preferredAgentIds: z.record(z.string().uuid(), z.string().uuid()),
+    lastUsedAgentId: z.string().uuid().optional(),
+  })
+  .strict();
+export type DesktopBootstrapV2 = z.infer<typeof DesktopBootstrapV2Schema>;
+
 export const SetupCandidateV1Schema = z
   .object({
     path: z.string().min(1),
@@ -461,6 +540,17 @@ export const DesktopProjectAddRequestV1Schema = z
   })
   .strict();
 export type DesktopProjectAddRequestV1 = z.infer<typeof DesktopProjectAddRequestV1Schema>;
+
+export const DesktopProjectAddRequestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    projectPath: z.string().min(1),
+    unityPath: z.string().min(1),
+    preferredAgentId: z.string().uuid(),
+    testplayVersion: SemanticVersionSchema.optional(),
+  })
+  .strict();
+export type DesktopProjectAddRequestV2 = z.infer<typeof DesktopProjectAddRequestV2Schema>;
 
 export const DesktopSetupDraftV1Schema = z
   .object({
@@ -565,6 +655,37 @@ export const DesktopStartRequestV1Schema = z
   });
 export type DesktopStartRequestV1 = z.infer<typeof DesktopStartRequestV1Schema>;
 
+export const DesktopStartRequestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    profileId: z.string().uuid(),
+    defaultAgentId: z.string().uuid(),
+    maxParallelWorks: z.number().int().positive().max(32),
+    works: z
+      .array(StartUnityWorkV1Schema.extend({ agentId: z.string().uuid().optional() }).strict())
+      .min(1)
+      .max(32),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if (request.maxParallelWorks > request.works.length) {
+      context.addIssue({
+        code: "custom",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+  });
+export type DesktopStartRequestV2 = z.infer<typeof DesktopStartRequestV2Schema>;
+
+export const DesktopProjectAgentPreferenceRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    agentId: z.string().uuid(),
+  })
+  .strict();
+
 export const DesktopRuntimeSnapshotV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -644,16 +765,21 @@ export const DesktopIpcChannels = {
   runCancel: "desktop.run.cancel.v1",
   patchView: "desktop.patch.view.v1",
   patchControl: "desktop.patch.control.v1",
+  agentsUpsert: "desktop.agents.upsert.v1",
+  agentsRemove: "desktop.agents.remove.v1",
+  agentsProbe: "desktop.agents.probe.v1",
+  agentsConnect: "desktop.agents.connect.v1",
+  projectAgentPreference: "desktop.project.agent-preference.v1",
 } as const;
 
 export interface HoneyBeeDesktopApi {
-  bootstrap(): Promise<DesktopBootstrapV1>;
+  bootstrap(): Promise<DesktopBootstrapV2>;
   chooseProfile(): Promise<DesktopProjectProfile | null>;
   chooseSetupPath(request: z.infer<typeof DesktopSetupPathRequestV1Schema>): Promise<string | null>;
   discoverProject(
     request: z.infer<typeof DesktopSetupDiscoveryRequestV1Schema>,
   ): Promise<DesktopProjectDiscoveryV1>;
-  addProject(request: DesktopProjectAddRequestV1): Promise<DesktopSetupStatusV1>;
+  addProject(request: DesktopProjectAddRequestV2): Promise<DesktopSetupStatusV1>;
   setupStatus(
     request: z.infer<typeof DesktopSetupIdRequestV1Schema>,
   ): Promise<DesktopSetupStatusV1>;
@@ -669,9 +795,9 @@ export interface HoneyBeeDesktopApi {
   ): Promise<InstalledComponentReceiptV1>;
   importSetup(): Promise<DesktopProjectProfile | null>;
   exportSetup(request: DesktopProfileIdRequestV1): Promise<boolean>;
-  removeProfile(request: DesktopProfileIdRequestV1): Promise<DesktopBootstrapV1>;
+  removeProfile(request: DesktopProfileIdRequestV1): Promise<DesktopBootstrapV2>;
   doctor(request: DesktopDoctorRequestV1): Promise<DoctorReportV1>;
-  startWorks(request: DesktopStartRequestV1): Promise<StartUnityWorksResultV1>;
+  startWorks(request: DesktopStartRequestV2): Promise<StartUnityWorksResultV1>;
   runtimeSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopRuntimeSnapshotV1>;
   runDetail(request: DesktopRunRequestV1): Promise<RunDetailV1>;
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
@@ -679,10 +805,17 @@ export interface HoneyBeeDesktopApi {
   cancelRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
   getPatch(request: DesktopPatchRequestV1): Promise<VerifiedPatchViewV1>;
   controlPatch(request: DesktopPatchControlRequestV1): Promise<PatchControlResultV1>;
+  upsertAgent(request: DesktopAgentUpsertRequestV1): Promise<DesktopBootstrapV2>;
+  removeAgent(request: DesktopAgentIdRequestV1): Promise<DesktopBootstrapV2>;
+  probeAgent(request: DesktopAgentIdRequestV1): Promise<DesktopAgentStatusV1>;
+  connectAgent(request: DesktopAgentIdRequestV1): Promise<DesktopAgentConnectResultV1>;
+  setProjectAgentPreference(
+    request: z.infer<typeof DesktopProjectAgentPreferenceRequestV1Schema>,
+  ): Promise<DesktopBootstrapV2>;
 }
 
 export const DesktopIpcResponseSchemas = {
-  bootstrap: DesktopBootstrapV1Schema,
+  bootstrap: DesktopBootstrapV2Schema,
   chooseProfile: DesktopProjectProfileSchema.nullable(),
   chooseSetupPath: z.string().min(1).nullable(),
   projectDiscover: DesktopProjectDiscoveryV1Schema,
@@ -694,7 +827,7 @@ export const DesktopIpcResponseSchemas = {
   componentInstall: InstalledComponentReceiptV1Schema,
   setupImport: DesktopProjectProfileSchema.nullable(),
   setupExport: z.boolean(),
-  removeProfile: DesktopBootstrapV1Schema,
+  removeProfile: DesktopBootstrapV2Schema,
   doctor: DoctorReportV1Schema,
   startWorks: StartUnityWorksResultV1Schema,
   runtimeSnapshot: DesktopRuntimeSnapshotV1Schema,
@@ -704,6 +837,11 @@ export const DesktopIpcResponseSchemas = {
   runCancel: RunControlResultV1Schema,
   patchView: VerifiedPatchViewV1Schema,
   patchControl: PatchControlResultV1Schema,
+  agentsUpsert: DesktopBootstrapV2Schema,
+  agentsRemove: DesktopBootstrapV2Schema,
+  agentsProbe: DesktopAgentStatusV1Schema,
+  agentsConnect: DesktopAgentConnectResultV1Schema,
+  projectAgentPreference: DesktopBootstrapV2Schema,
 } as const;
 
 export type DesktopRuntimeInfo = RuntimeInfoV1;
