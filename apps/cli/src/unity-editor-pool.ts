@@ -19,6 +19,11 @@ import {
 } from "@honeybee/orchestration-contracts";
 import { FileRunControl, HoneyBeeCoreError } from "@honeybee/core";
 
+import {
+  recoverImmutablePublication,
+  UnsafeImmutablePublicationError,
+} from "./immutable-publication.js";
+
 const POLL_MS = 50;
 const LOCK_POLL_MS = 25;
 const LOCK_TIMEOUT_MS = 15_000;
@@ -573,7 +578,20 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
         );
       }
       const filePath = path.join(directory, name);
-      const entry = await lstat(filePath);
+      let entry;
+      try {
+        entry = await recoverImmutablePublication(filePath, (candidate) =>
+          /^\.[0-9a-f-]{36}\.tmp$/iu.test(candidate),
+        );
+      } catch (error) {
+        if (error instanceof UnsafeImmutablePublicationError) {
+          throw new HoneyBeeCoreError(
+            "run.indeterminate",
+            "Editor pool event has an unrecognized hard link.",
+          );
+        }
+        throw error;
+      }
       if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
         throw new HoneyBeeCoreError(
           "run.indeterminate",

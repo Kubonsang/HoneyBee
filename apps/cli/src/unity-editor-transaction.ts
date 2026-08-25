@@ -365,6 +365,8 @@ export class UnityEditorWorkTransaction {
     let acquireStarted = false;
     let agentOutput: ArtifactRef | undefined;
     let poolLease: UnityEditorPoolLease | undefined;
+    let poolRequestQueued = false;
+    let poolRequestCleanupFailure: FailureMetadata | undefined;
     let containment: EditorContainmentReceiptV1 | undefined;
     let containmentArtifact: ArtifactRef | undefined;
     let launchIntent: EditorLaunchIntentV1 | undefined;
@@ -498,17 +500,35 @@ export class UnityEditorWorkTransaction {
             ...poolRequestPayload(ticket),
             ticket: ticket.ticket,
           });
+          poolRequestQueued = true;
           poolLease = await execution.pool.acquire(request, aborter.signal);
         } catch (error) {
-          if (aborter.signal.aborted) {
-            await execution.pool.cancel(request).catch(() => undefined);
-            await writer.emit("editor.pool-cancelled", poolRequestPayload(request));
-          } else {
-            await execution.pool.cancel(request).catch(() => undefined);
-            await writer.emit("editor.pool-acquire-failed", {
-              ...poolRequestPayload(request),
-              failure: failureMetadata(error),
-            });
+          const acquireFailure = failureMetadata(error);
+          try {
+            const status = await execution.pool.status(request);
+            if (status.state === "active" || status.state === "released") {
+              poolLease = status.lease;
+              await writer.emit("editor.pool-acquired", poolLeasePayload(status.lease));
+            } else {
+              if (status.state === "queued") {
+                await execution.pool.cancel(request);
+              } else if (status.state === "missing" && poolRequestQueued) {
+                throw new HoneyBeeCoreError(
+                  "run.indeterminate",
+                  "The durable Editor pool request is missing.",
+                );
+              }
+              if (aborter.signal.aborted) {
+                await writer.emit("editor.pool-cancelled", poolRequestPayload(request));
+              } else {
+                await writer.emit("editor.pool-acquire-failed", {
+                  ...poolRequestPayload(request),
+                  failure: acquireFailure,
+                });
+              }
+            }
+          } catch (cleanupError) {
+            poolRequestCleanupFailure = failureMetadata(cleanupError);
           }
           throw error;
         }
@@ -744,6 +764,16 @@ export class UnityEditorWorkTransaction {
         sourceBefore,
         ...(agentOutput === undefined ? {} : { agentOutput }),
         failure: processCleanupFailure,
+      };
+    }
+
+    if (poolRequestCleanupFailure !== undefined) {
+      return {
+        runId,
+        status: "cleanup-pending",
+        sourceBefore,
+        ...(agentOutput === undefined ? {} : { agentOutput }),
+        failure: poolRequestCleanupFailure,
       };
     }
 
@@ -1351,8 +1381,16 @@ export class UnityEditorWorkTransaction {
     const poolRequested = lastEvent(events, "editor.pool-requested");
     const poolQueued = lastEvent(events, "editor.pool-queued");
     const poolAcquired = lastEvent(events, "editor.pool-acquired");
+    const poolCancelled = lastEvent(events, "editor.pool-cancelled");
+    const poolAcquireFailed = lastEvent(events, "editor.pool-acquire-failed");
+    const poolReleased = lastEvent(events, "editor.pool-released");
     let poolLease = this.#poolLeaseFrom(events);
-    if (poolRequested !== undefined && lastEvent(events, "editor.pool-released") === undefined) {
+    if (
+      poolRequested !== undefined &&
+      poolReleased === undefined &&
+      poolCancelled === undefined &&
+      poolAcquireFailed === undefined
+    ) {
       const locator: UnityEditorPoolLocator = {
         poolId: poolRequested.payload.poolId,
         requestId: poolRequested.payload.requestId,
@@ -1410,7 +1448,10 @@ export class UnityEditorWorkTransaction {
           await this.artifacts.get({ runId, artifact: intentEvent.payload.intent }),
         ) as unknown,
       );
-      if (containmentEvent === undefined) {
+      if (
+        containmentEvent === undefined &&
+        lastEvent(events, "editor.launch-abandoned") === undefined
+      ) {
         containment = await this.launcher.recoverPublishedReceipt(intent);
         if (containment !== undefined) {
           containmentArtifact = await this.#storeJson(
@@ -1428,7 +1469,7 @@ export class UnityEditorWorkTransaction {
         } else {
           await writer.emit("editor.launch-abandoned", { launchId: intent.launchId });
         }
-      } else {
+      } else if (containmentEvent !== undefined) {
         containment = EditorContainmentReceiptV1Schema.parse(
           JSON.parse(
             await this.artifacts.get({ runId, artifact: containmentEvent.payload.receipt }),

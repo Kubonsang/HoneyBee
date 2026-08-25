@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, link, lstat, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -127,6 +127,44 @@ describe("FileOsUnityEditorRegistry", () => {
         (editor) => editor.processIdentity === "win32:original" && editor.state === "stale",
       ),
     ).toBe(true);
+  });
+
+  it("recovers an owned record left hard-linked to its private publish temporary", async () => {
+    const root = await temporaryRoot();
+    const editorId = EventIdSchema.parse(randomUUID());
+    const registry = new FileOsUnityEditorRegistry(
+      root,
+      async () => [],
+      processes(new Map([[301, "win32:301"]])),
+      () => new Date(0),
+    );
+    await registry.recordOwned(
+      UnityEditorObservationV1Schema.parse({
+        schemaVersion: 1,
+        editorId,
+        pid: 301,
+        processIdentity: "win32:301",
+        projectPath: path.join(root, "workspace"),
+        workspaceId: "hb-work",
+        ownership: "honeybee",
+        ownerRunId: RunIdSchema.parse(randomUUID()),
+        ownerWorkId: StepIdSchema.parse("work-a"),
+        slotId: "editor-1",
+        launchId: EventIdSchema.parse(randomUUID()),
+        state: "alive",
+        pathObservation: "confirmed",
+        observedAt: new Date(0).toISOString(),
+      }),
+    );
+    const directory = path.join(root, ".unity-editors", "v1", "owned");
+    const finalPath = path.join(directory, `${editorId}.json`);
+    const temporaryPath = path.join(directory, `.${randomUUID()}.tmp`);
+    await link(finalPath, temporaryPath);
+    expect((await lstat(finalPath)).nlink).toBe(2);
+
+    expect(await registry.list()).toHaveLength(1);
+    expect((await lstat(finalPath)).nlink).toBe(1);
+    await expect(access(temporaryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("records an immutable exit tombstone idempotently", async () => {

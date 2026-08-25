@@ -116,6 +116,10 @@ describe("UnityEditorBatchWorkflow", () => {
     const controls = new FileRunControl(root);
     let active = 0;
     let maximum = 0;
+    let releaseBarrier: () => void = () => undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
     const observed: Array<
       Readonly<{ config: UnityWorkConfigV2; execution: UnityWorkV5Execution }>
     > = [];
@@ -124,7 +128,8 @@ describe("UnityEditorBatchWorkflow", () => {
         active += 1;
         maximum = Math.max(maximum, active);
         observed.push({ config: childConfig, execution });
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (active === 2) releaseBarrier();
+        await bothStarted;
         active -= 1;
         return {
           runId: childRunId,

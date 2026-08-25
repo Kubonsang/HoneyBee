@@ -10,6 +10,10 @@ import {
   type UnityEditorObservationV1,
 } from "@honeybee/orchestration-contracts";
 import { HoneyBeeCoreError } from "@honeybee/core";
+import {
+  recoverImmutablePublication,
+  UnsafeImmutablePublicationError,
+} from "./immutable-publication.js";
 
 import { SystemUnityProcessControl, type UnityProcessControl } from "./process-control.js";
 
@@ -19,6 +23,22 @@ const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
     ? error.code
     : undefined;
+
+const recoverRegistryPublication = async (filePath: string) => {
+  try {
+    return await recoverImmutablePublication(filePath, (candidate) =>
+      /^\..+\.tmp$/u.test(candidate),
+    );
+  } catch (error) {
+    if (error instanceof UnsafeImmutablePublicationError) {
+      throw new HoneyBeeCoreError(
+        "run.indeterminate",
+        "Editor Registry record has an unrecognized hard link.",
+      );
+    }
+    throw error;
+  }
+};
 
 export interface OsUnityEditorProcess {
   readonly pid: number;
@@ -169,6 +189,7 @@ const publishImmutable = async (
     await link(temporaryPath, finalPath);
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
+    await recoverRegistryPublication(finalPath);
     if (validateExisting !== undefined) {
       await validateExisting(finalPath);
       return;
@@ -183,7 +204,7 @@ const publishImmutable = async (
 };
 
 const validateExitRecord = async (filePath: string, editorId: string): Promise<void> => {
-  const metadata = await lstat(filePath);
+  const metadata = await recoverRegistryPublication(filePath);
   let parsed: unknown;
   try {
     parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
@@ -333,7 +354,7 @@ export class FileOsUnityEditorRegistry implements UnityEditorRegistry {
         );
       }
       const filePath = path.join(directory, entry.name);
-      const metadata = await lstat(filePath);
+      const metadata = await recoverRegistryPublication(filePath);
       if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
         throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry record is not private.");
       }

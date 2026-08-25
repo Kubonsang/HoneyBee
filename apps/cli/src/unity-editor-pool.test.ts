@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
+import { access, link, lstat, mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -36,6 +36,22 @@ describe("FileUnityEditorPoolCoordinator", () => {
     await expect(pool.inspect(ResourceIdSchema.parse("unity-editors"))).rejects.toMatchObject({
       code: "validation.invalid-workflow",
     });
+  });
+
+  it("recovers a final event left hard-linked to its private publish temporary", async () => {
+    const root = await temporaryRoot();
+    const poolId = ResourceIdSchema.parse("unity-editors");
+    const pool = new FileUnityEditorPoolCoordinator(root);
+    await pool.declare({ poolId, capacity: 1 });
+    const directory = path.join(root, ".unity-editor-pools", "v2", poolId, "events");
+    const finalPath = path.join(directory, "00000000000000000001.json");
+    const temporaryPath = path.join(directory, `.${randomUUID()}.tmp`);
+    await link(finalPath, temporaryPath);
+    expect((await lstat(finalPath)).nlink).toBe(2);
+
+    expect((await pool.inspect(poolId)).capacity).toBe(1);
+    expect((await lstat(finalPath)).nlink).toBe(1);
+    await expect(access(temporaryPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("assigns free slots atomically and permits different Editors concurrently", async () => {

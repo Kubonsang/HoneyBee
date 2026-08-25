@@ -14,6 +14,10 @@ import {
 import { HoneyBeeCoreError } from "@honeybee/core";
 
 import { SystemUnityProcessControl, type UnityProcessControl } from "./process-control.js";
+import {
+  recoverImmutablePublication,
+  UnsafeImmutablePublicationError,
+} from "./immutable-publication.js";
 
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
@@ -261,7 +265,23 @@ const readReceipt = async (
       "Containment receipt escaped its directory.",
     );
   }
-  const initial = await lstat(intent.containmentReceiptPath);
+  let initial;
+  try {
+    const receiptName = path.basename(intent.containmentReceiptPath);
+    const temporaryPrefix = `${receiptName}.`;
+    initial = await recoverImmutablePublication(intent.containmentReceiptPath, (candidate) => {
+      if (!candidate.startsWith(temporaryPrefix)) return false;
+      return /^[0-9a-f-]{36}\.tmp$/iu.test(candidate.slice(temporaryPrefix.length));
+    });
+  } catch (error) {
+    if (error instanceof UnsafeImmutablePublicationError) {
+      throw new HoneyBeeCoreError(
+        "editor.receipt-invalid",
+        "Containment receipt has an unrecognized hard link.",
+      );
+    }
+    throw error;
+  }
   if (
     !initial.isFile() ||
     initial.isSymbolicLink() ||

@@ -13,6 +13,7 @@ import {
   FileRunControl,
   FileRunRepository,
   OrchestrationEventV3Schema,
+  OrchestrationEventV5Schema,
   RunIdSchema,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -199,6 +200,105 @@ describe("HoneyBee CLI sequential orchestration", () => {
     const deleted = await runCli(["run", "delete", output.runId, "--yes", "--json"], cwd);
     expect(deleted.exitCode).toBe(0);
     await expect(readFile(output.journalPath, "utf8")).rejects.toBeDefined();
+  }, 20_000);
+
+  it("retries deletion after a started v0.6 batch child was already removed", async () => {
+    const cwd = await temporaryDirectory();
+    const root = path.join(cwd, ".honeybee", "runs");
+    const parentRunId = RunIdSchema.parse(randomUUID());
+    const missingStartedChild = RunIdSchema.parse(randomUUID());
+    const neverStartedChild = RunIdSchema.parse(randomUUID());
+    const repository = new FileRunRepository(root);
+    await repository.create(parentRunId);
+    const artifacts = new FileArtifactStore(root);
+    const config = await artifacts.put({
+      runId: parentRunId,
+      artifactId: ArtifactIdSchema.parse(randomUUID()),
+      kind: "workflow-config",
+      mediaType: "application/json",
+      content: "{}",
+    });
+    const journal = new FileOrchestrationJournal(root);
+    const payloads = [
+      {
+        type: "workflow.started" as const,
+        payload: {
+          mode: "unity-batch-v2" as const,
+          config,
+          workCount: 2,
+          maxParallelWorks: 2,
+          poolId: "unity-editors",
+          poolCapacity: 1,
+        },
+      },
+      { type: "artifact.stored" as const, payload: { artifact: config } },
+      {
+        type: "work.registered" as const,
+        payload: {
+          workId: "work-a",
+          childRunId: missingStartedChild,
+          priority: "validation" as const,
+          capabilityCount: 1,
+        },
+      },
+      {
+        type: "work.registered" as const,
+        payload: {
+          workId: "work-b",
+          childRunId: neverStartedChild,
+          priority: "background" as const,
+          capabilityCount: 0,
+        },
+      },
+      {
+        type: "work.finished" as const,
+        payload: {
+          workId: "work-a",
+          childRunId: missingStartedChild,
+          status: "failed" as const,
+          failure: { errorCode: "workflow.step-failed" },
+        },
+      },
+      {
+        type: "work.finished" as const,
+        payload: {
+          workId: "work-b",
+          childRunId: neverStartedChild,
+          status: "cancelled" as const,
+          started: false,
+        },
+      },
+      {
+        type: "workflow.failed" as const,
+        payload: {
+          failure: { errorCode: "workflow.step-failed" },
+          summary: { total: 2, completed: 0, failed: 1, cancelled: 1 },
+        },
+      },
+    ];
+    for (const [index, value] of payloads.entries()) {
+      await journal.append(
+        parentRunId,
+        OrchestrationEventV5Schema.parse({
+          schemaVersion: 5,
+          eventId: EventIdSchema.parse(randomUUID()),
+          runId: parentRunId,
+          sequence: index + 1,
+          timestamp: new Date(index).toISOString(),
+          ...value,
+        }),
+      );
+    }
+    expect((await journal.replay(parentRunId)).status).toBe("terminal");
+
+    const deletion = await runCli(["run", "delete", parentRunId, "--yes", "--json"], cwd);
+    expect(deletion.exitCode).toBe(0);
+    expect(JSON.parse(deletion.stdout)).toMatchObject({
+      ok: true,
+      runId: parentRunId,
+      deleted: true,
+    });
+    await expect(repository.open(parentRunId)).rejects.toMatchObject({ code: "run.not-found" });
   }, 20_000);
 
   it("refuses to delete an active Unity Run before durable workspace release", async () => {

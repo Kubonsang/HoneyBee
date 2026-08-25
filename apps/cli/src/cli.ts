@@ -1061,7 +1061,12 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
             !finish.payload.started
           )
             continue;
-          await repository.open(childRunId);
+          try {
+            await repository.open(childRunId);
+          } catch (error) {
+            if (error instanceof HoneyBeeCoreError && error.code === "run.not-found") continue;
+            throw error;
+          }
           const childReplay = await journal.replay(childRunId);
           const childStart =
             childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
@@ -1121,7 +1126,12 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
           ) {
             continue;
           }
-          await repository.open(childRunId);
+          try {
+            await repository.open(childRunId);
+          } catch (error) {
+            if (error instanceof HoneyBeeCoreError && error.code === "run.not-found") continue;
+            throw error;
+          }
           const childReplay = await journal.replay(childRunId);
           const childStart =
             childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
