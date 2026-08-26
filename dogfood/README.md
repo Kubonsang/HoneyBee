@@ -74,6 +74,19 @@ Comparison output is written below dogfood/evidence/comparisons/. Only sessions 
 workloadId can be compared. It reports runtime and full-session verified changes/hour plus observed
 Agent concurrency.
 
+## Native Agent PR 0 baseline
+
+The Desktop session observer above measures end-to-end dogfood work. The separate
+`native_benchmark.py` runner measures the prerequisite isolation/activation cost before Native
+Agent Terminal product work begins. It uses the production Runtime Facade and stdio containment,
+runs the checked-in no-change demo Agent, protects Direct CLI measurements with disposable full-root
+copies, and reports median plus maximum rather than a low-sample fake p95.
+
+See [the Native launch baseline protocol](../docs/benchmarks/native-launch/README.md) and
+`native-benchmark.spec.example.json`. Generated Evidence remains under
+`dogfood/evidence/native-launch/` and is ignored; only explicitly approved frozen baselines belong in
+`docs/benchmarks/native-launch/`.
+
 ## Timing definitions
 
 All runtime timings are differences between durable Journal timestamps. Agent process duration uses
