@@ -20,9 +20,6 @@ const assertOwned = (target, parent) => {
 
 assertOwned(staging, appRoot);
 assertOwned(output, appRoot);
-await rm(staging, { recursive: true, force: true });
-await rm(output, { recursive: true, force: true });
-await mkdir(staging, { recursive: true });
 await access(path.join(bundledTools, "unity-workspace-storage.exe"));
 await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
 await access(compatibilityManifest);
@@ -44,6 +41,10 @@ for (const payload of approvedStorage.payloads) {
     throw new Error("Prepared workspace-storage does not match the compatibility manifest.");
   }
 }
+
+await rm(staging, { recursive: true, force: true });
+await rm(output, { recursive: true, force: true });
+await mkdir(staging, { recursive: true });
 
 for (const directory of ["main", "preload", "renderer"]) {
   await cp(path.join(appRoot, "dist", directory), path.join(staging, directory), {

@@ -851,10 +851,9 @@ const createWindow = async (): Promise<void> => {
         "      const api = window.honeybee;",
         "      const ready = document.body.textContent?.includes('Your Unity projects') === true;",
         "      if (api !== undefined && ready) {",
-        "        const bootstrap = await api.bootstrap();",
+        "        const components = await api.components();",
         "        resolve({",
-        "          apiVersion: bootstrap.runtime.apiVersion,",
-        "          schemaVersion: bootstrap.schemaVersion,",
+        "          componentSchemaVersion: components.schemaVersion,",
         "          rendererReady: ready",
         "        });",
         "        return;",
@@ -874,10 +873,8 @@ const createWindow = async (): Promise<void> => {
       const valid =
         typeof result === "object" &&
         result !== null &&
-        "apiVersion" in result &&
-        result.apiVersion === 1 &&
-        "schemaVersion" in result &&
-        result.schemaVersion === 1 &&
+        "componentSchemaVersion" in result &&
+        result.componentSchemaVersion === 1 &&
         "rendererReady" in result &&
         result.rendererReady === true;
       if (!valid) throw new Error("invalid smoke result");

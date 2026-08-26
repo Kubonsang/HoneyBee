@@ -108,7 +108,7 @@ const fixture = async () => {
     },
     path.join(root, "machine", "honeybee-workspace-storage-host.exe"),
   );
-  return { root, manager, host };
+  return { root, bundled, manager, manifest, host };
 };
 
 describe("DesktopComponentManager", () => {
@@ -116,7 +116,7 @@ describe("DesktopComponentManager", () => {
     const manifest = await readCompatibilityManifest(
       path.resolve("apps", "desktop", "resources", "component-compatibility-v1.json"),
     );
-    expect(manifest.workspaceStorage[0]?.version).toBe("0.0.0+e69fb8a0c55c");
+    expect(manifest.workspaceStorage[0]?.version).toBe("0.0.0+e69fb8a0c55c.hb1");
   });
 
   it("installs immutable storage versions and requires an exact active service lock", async () => {
@@ -154,6 +154,35 @@ describe("DesktopComponentManager", () => {
     await expect(manager.assertWorkspaceStorageActive(secondLock)).rejects.toThrow(
       "Switch it explicitly",
     );
+  });
+
+  it("installs a new bundled composite version without rewriting a prior manifest receipt", async () => {
+    const { root, bundled, manager, manifest } = await fixture();
+    const prior = await manager.ensureBundledWorkspaceStorage();
+    const upgradedManifest = {
+      ...manifest,
+      workspaceStorage: [
+        {
+          ...manifest.workspaceStorage[0],
+          version: "1.0.0+hb1",
+        },
+      ],
+    };
+    const upgraded = new DesktopComponentManager(
+      path.join(root, "managed"),
+      bundled,
+      upgradedManifest,
+    );
+
+    await expect(upgraded.ensureBundledWorkspaceStorage()).resolves.toMatchObject({
+      version: "1.0.0+hb1",
+    });
+    await expect(
+      readFile(path.join(path.dirname(prior.files[0]?.path ?? ""), "receipt.json")),
+    ).resolves.toBeInstanceOf(Buffer);
+    await expect(upgraded.snapshot()).resolves.toMatchObject({
+      installed: [{ version: "1.0.0+hb1" }],
+    });
   });
 
   it("installs only approved TestPlay CLI and Bridge bundles after approval", async () => {
