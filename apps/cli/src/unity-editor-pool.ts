@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -20,7 +20,7 @@ import {
 import { FileRunControl, HoneyBeeCoreError } from "@honeybee/core";
 
 import {
-  recoverImmutablePublication,
+  readRecoveredImmutableFile,
   UnsafeImmutablePublicationError,
 } from "./immutable-publication.js";
 
@@ -578,11 +578,13 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
         );
       }
       const filePath = path.join(directory, name);
-      let entry;
+      let bytes: Buffer;
       try {
-        entry = await recoverImmutablePublication(filePath, (candidate) =>
-          /^\.[0-9a-f-]{36}\.tmp$/iu.test(candidate),
-        );
+        ({ bytes } = await readRecoveredImmutableFile(
+          filePath,
+          (candidate) => /^\.[0-9a-f-]{36}\.tmp$/iu.test(candidate),
+          64 * 1024,
+        ));
       } catch (error) {
         if (error instanceof UnsafeImmutablePublicationError) {
           throw new HoneyBeeCoreError(
@@ -592,15 +594,9 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
         }
         throw error;
       }
-      if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-        throw new HoneyBeeCoreError(
-          "run.indeterminate",
-          "Editor pool event is not a private file.",
-        );
-      }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+        parsed = JSON.parse(bytes.toString("utf8")) as unknown;
       } catch {
         throw new HoneyBeeCoreError("run.indeterminate", "Editor pool event is malformed.");
       }

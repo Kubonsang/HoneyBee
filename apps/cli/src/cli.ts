@@ -52,6 +52,7 @@ import { BatchLocalUnityResourceCoordinator } from "./unity-resource-control.js"
 import { FileUnityResourceCoordinator } from "./unity-global-resource-control.js";
 import { inspectUnityEditorBatchEvents } from "./unity-editor-batch.js";
 import { HoneyBeeRuntimeFacade } from "./runtime-api.js";
+import { FileRunDeletionTransaction } from "./run-deletion.js";
 import {
   assertUnityPathsDisjoint,
   createUnityEditorBatchWorkflow,
@@ -985,6 +986,86 @@ const submitControl = async (
   );
 };
 
+interface BatchDeletionRequest {
+  readonly root: string;
+  readonly parentRunId: RunId;
+  readonly parentTerminalEventId: string;
+  readonly childRunIds: readonly RunId[];
+  readonly skippedChildRunIds: ReadonlySet<RunId>;
+  readonly controls: FileRunControl;
+  readonly validateChild: (childRunId: RunId) => Promise<void>;
+}
+
+const deleteBatchChildren = async (request: BatchDeletionRequest): Promise<void> => {
+  const repository = new FileRunRepository(request.root);
+  const deletion = new FileRunDeletionTransaction(request.root);
+  const childLeases: Array<{ release(): Promise<void> }> = [];
+  try {
+    for (const childRunId of request.childRunIds) {
+      childLeases.push(await request.controls.acquire(childRunId));
+    }
+    const resumed = await deletion.load(
+      request.parentRunId,
+      request.parentTerminalEventId,
+      request.childRunIds,
+    );
+    await deletion.assertPrivateEntries(request.parentRunId);
+    for (const childRunId of request.childRunIds) {
+      if (request.skippedChildRunIds.has(childRunId)) continue;
+      try {
+        await repository.open(childRunId);
+      } catch (error) {
+        if (
+          error instanceof HoneyBeeCoreError &&
+          error.code === "run.not-found" &&
+          resumed &&
+          (await deletion.hasMarker(request.parentRunId, childRunId, "started"))
+        ) {
+          continue;
+        }
+        throw new HoneyBeeCoreError(
+          "run.cleanup-pending",
+          "A started batch child is missing without a HoneyBee deletion receipt.",
+        );
+      }
+      await request.validateChild(childRunId);
+    }
+    if (!resumed) {
+      await deletion.create(
+        request.parentRunId,
+        request.parentTerminalEventId,
+        request.childRunIds,
+      );
+    }
+    for (const childRunId of request.childRunIds) {
+      if (request.skippedChildRunIds.has(childRunId)) continue;
+      if (await deletion.hasMarker(request.parentRunId, childRunId, "completed")) continue;
+      const started = await deletion.hasMarker(request.parentRunId, childRunId, "started");
+      let exists = true;
+      try {
+        await repository.open(childRunId);
+      } catch (error) {
+        if (error instanceof HoneyBeeCoreError && error.code === "run.not-found") exists = false;
+        else throw error;
+      }
+      if (!exists && !started) {
+        throw new HoneyBeeCoreError(
+          "run.cleanup-pending",
+          "A batch child disappeared before its deletion was authorized.",
+        );
+      }
+      if (exists) {
+        await new FileUnityPatchControl(request.root).assertDeletionSafe(childRunId);
+        if (!started) await deletion.mark(request.parentRunId, childRunId, "started");
+        await repository.delete(childRunId);
+      }
+      await deletion.mark(request.parentRunId, childRunId, "completed");
+    }
+  } finally {
+    for (const childLease of childLeases.reverse()) await childLease.release();
+  }
+};
+
 const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>): Promise<void> => {
   const runId = RunIdSchema.parse(args.runId);
   if (!args.yes) {
@@ -997,9 +1078,24 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
   const lease = await controls.acquire(runId);
   try {
     const repository = new FileRunRepository(root);
-    await repository.open(runId);
+    const deletion = new FileRunDeletionTransaction(root);
+    try {
+      await repository.open(runId);
+    } catch (error) {
+      if (
+        error instanceof HoneyBeeCoreError &&
+        error.code === "run.not-found" &&
+        (await deletion.canResumeMissingParent(runId))
+      ) {
+        await deletion.mark(runId, runId, "completed");
+        output(args.json ? { ok: true, runId, deleted: true } : `Deleted Run ${runId}.`, args.json);
+        return;
+      }
+      throw error;
+    }
     const replay = await new FileOrchestrationJournal(root).replay(runId);
     const start = replay.status === "indeterminate" ? undefined : replay.events[0];
+    let batchDeletion = false;
     if (
       start?.schemaVersion === 5 &&
       start.type === "workflow.started" &&
@@ -1043,30 +1139,31 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
         )
         .map((event) => event.payload.childRunId)
         .sort();
-      const childLeases: Array<{ release(): Promise<void> }> = [];
-      try {
-        for (const childRunId of childRunIds) childLeases.push(await controls.acquire(childRunId));
-        const journal = new FileOrchestrationJournal(root);
-        for (const childRunId of childRunIds) {
+      const skipped = new Set(
+        childRunIds.filter((childRunId) => {
           const finish = replay.events.find(
             (event) =>
               event.schemaVersion === 5 &&
               event.type === "work.finished" &&
               event.payload.childRunId === childRunId,
           );
-          if (
+          return (
             finish?.schemaVersion === 5 &&
             finish.type === "work.finished" &&
             finish.payload.status === "cancelled" &&
             !finish.payload.started
-          )
-            continue;
-          try {
-            await repository.open(childRunId);
-          } catch (error) {
-            if (error instanceof HoneyBeeCoreError && error.code === "run.not-found") continue;
-            throw error;
-          }
+          );
+        }),
+      );
+      const journal = new FileOrchestrationJournal(root);
+      await deleteBatchChildren({
+        root,
+        parentRunId: runId,
+        parentTerminalEventId: replay.terminal.eventId,
+        childRunIds,
+        skippedChildRunIds: skipped,
+        controls,
+        validateChild: async (childRunId) => {
           const childReplay = await journal.replay(childRunId);
           const childStart =
             childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
@@ -1076,24 +1173,15 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
             childStart.type !== "workflow.started" ||
             childStart.payload.mode !== "unity-work-v3" ||
             childStart.payload.linkage.parentRunId !== runId
-          )
+          ) {
             throw new HoneyBeeCoreError(
               "run.cleanup-pending",
               "A v0.6 batch child has no confirmed terminal cleanup state.",
             );
-        }
-        for (const childRunId of childRunIds) {
-          try {
-            await new FileUnityPatchControl(root).assertDeletionSafe(childRunId);
-            await repository.delete(childRunId);
-          } catch (error) {
-            if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found")
-              throw error;
           }
-        }
-      } finally {
-        for (const childLease of childLeases.reverse()) await childLease.release();
-      }
+        },
+      });
+      batchDeletion = true;
     }
     if (
       replay.status === "terminal" &&
@@ -1105,33 +1193,31 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
         .filter((event) => event.schemaVersion === 4 && event.type === "work.registered")
         .map((event) => event.payload.childRunId)
         .sort();
-      const childLeases: Array<{ release(): Promise<void> }> = [];
-      try {
-        for (const childRunId of childRunIds) {
-          childLeases.push(await controls.acquire(childRunId));
-        }
-        const journal = new FileOrchestrationJournal(root);
-        for (const childRunId of childRunIds) {
+      const skipped = new Set(
+        childRunIds.filter((childRunId) => {
           const finish = replay.events.find(
             (event) =>
               event.schemaVersion === 4 &&
               event.type === "work.finished" &&
               event.payload.childRunId === childRunId,
           );
-          if (
+          return (
             finish?.schemaVersion === 4 &&
             finish.type === "work.finished" &&
             finish.payload.status === "cancelled" &&
             !finish.payload.started
-          ) {
-            continue;
-          }
-          try {
-            await repository.open(childRunId);
-          } catch (error) {
-            if (error instanceof HoneyBeeCoreError && error.code === "run.not-found") continue;
-            throw error;
-          }
+          );
+        }),
+      );
+      const journal = new FileOrchestrationJournal(root);
+      await deleteBatchChildren({
+        root,
+        parentRunId: runId,
+        parentTerminalEventId: replay.terminal.eventId,
+        childRunIds,
+        skippedChildRunIds: skipped,
+        controls,
+        validateChild: async (childRunId) => {
           const childReplay = await journal.replay(childRunId);
           const childStart =
             childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
@@ -1147,22 +1233,14 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
               "A batch child does not have a confirmed terminal cleanup state.",
             );
           }
-        }
-        for (const childRunId of childRunIds) {
-          try {
-            await new FileUnityPatchControl(root).assertDeletionSafe(childRunId);
-            await repository.delete(childRunId);
-          } catch (error) {
-            if (!(error instanceof HoneyBeeCoreError) || error.code !== "run.not-found")
-              throw error;
-          }
-        }
-      } finally {
-        for (const childLease of childLeases.reverse()) await childLease.release();
-      }
+        },
+      });
+      batchDeletion = true;
     }
     await new FileUnityPatchControl(root).assertDeletionSafe(runId);
+    if (batchDeletion) await deletion.mark(runId, runId, "started");
     await repository.delete(runId);
+    if (batchDeletion) await deletion.mark(runId, runId, "completed");
   } finally {
     await lease.release();
   }

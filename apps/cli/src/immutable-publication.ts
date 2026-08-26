@@ -1,5 +1,5 @@
 import type { Stats } from "node:fs";
-import { lstat, readdir, unlink } from "node:fs/promises";
+import { lstat, open, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 const errorCode = (error: unknown): string | undefined =>
@@ -61,4 +61,66 @@ export const recoverImmutablePublication = async (
     );
   }
   return recovered;
+};
+
+export interface RecoveredImmutableFile {
+  readonly bytes: Buffer;
+  readonly metadata: Stats;
+}
+
+export const readRecoveredImmutableFile = async (
+  finalPath: string,
+  isTemporaryName: (name: string) => boolean,
+  maximumBytes: number,
+): Promise<RecoveredImmutableFile> => {
+  if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0) {
+    throw new TypeError("maximumBytes must be a non-negative safe integer.");
+  }
+  const recovered = await recoverImmutablePublication(finalPath, isTemporaryName);
+  if (
+    !recovered.isFile() ||
+    recovered.isSymbolicLink() ||
+    recovered.nlink !== 1 ||
+    recovered.size > maximumBytes
+  ) {
+    throw new UnsafeImmutablePublicationError(
+      "The immutable publication is not a private bounded file.",
+    );
+  }
+  const handle = await open(finalPath, "r");
+  try {
+    const opened = await handle.stat();
+    if (
+      !opened.isFile() ||
+      opened.nlink !== 1 ||
+      opened.dev !== recovered.dev ||
+      opened.ino !== recovered.ino ||
+      opened.size !== recovered.size ||
+      opened.size > maximumBytes
+    ) {
+      throw new UnsafeImmutablePublicationError("The immutable publication changed while opening.");
+    }
+    const bytes = Buffer.alloc(opened.size);
+    let offset = 0;
+    while (offset < bytes.byteLength) {
+      const result = await handle.read(bytes, offset, bytes.byteLength - offset, offset);
+      if (result.bytesRead === 0) {
+        throw new UnsafeImmutablePublicationError("The immutable publication is incomplete.");
+      }
+      offset += result.bytesRead;
+    }
+    const after = await handle.stat();
+    if (
+      !after.isFile() ||
+      after.nlink !== 1 ||
+      after.dev !== opened.dev ||
+      after.ino !== opened.ino ||
+      after.size !== opened.size
+    ) {
+      throw new UnsafeImmutablePublicationError("The immutable publication changed while reading.");
+    }
+    return { bytes, metadata: after };
+  } finally {
+    await handle.close();
+  }
 };

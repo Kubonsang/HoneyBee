@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -11,7 +11,7 @@ import {
 } from "@honeybee/orchestration-contracts";
 import { HoneyBeeCoreError } from "@honeybee/core";
 import {
-  recoverImmutablePublication,
+  readRecoveredImmutableFile,
   UnsafeImmutablePublicationError,
 } from "./immutable-publication.js";
 
@@ -24,10 +24,15 @@ const errorCode = (error: unknown): string | undefined =>
     ? error.code
     : undefined;
 
-const recoverRegistryPublication = async (filePath: string) => {
+const REGISTRY_RECORD_MAX_BYTES = 64 * 1024;
+const REGISTRY_TEMP_NAME = /^\.[0-9a-f-]{36}\.tmp$/iu;
+
+const readRegistryPublication = async (filePath: string) => {
   try {
-    return await recoverImmutablePublication(filePath, (candidate) =>
-      /^\..+\.tmp$/u.test(candidate),
+    return await readRecoveredImmutableFile(
+      filePath,
+      (candidate) => REGISTRY_TEMP_NAME.test(candidate),
+      REGISTRY_RECORD_MAX_BYTES,
     );
   } catch (error) {
     if (error instanceof UnsafeImmutablePublicationError) {
@@ -189,13 +194,12 @@ const publishImmutable = async (
     await link(temporaryPath, finalPath);
   } catch (error) {
     if (errorCode(error) !== "EEXIST") throw error;
-    await recoverRegistryPublication(finalPath);
+    const recovered = await readRegistryPublication(finalPath);
     if (validateExisting !== undefined) {
       await validateExisting(finalPath);
       return;
     }
-    const existing = await readFile(finalPath);
-    if (!existing.equals(bytes)) {
+    if (!recovered.bytes.equals(bytes)) {
       throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry identity was overwritten.");
     }
   } finally {
@@ -204,17 +208,14 @@ const publishImmutable = async (
 };
 
 const validateExitRecord = async (filePath: string, editorId: string): Promise<void> => {
-  const metadata = await recoverRegistryPublication(filePath);
+  const recovered = await readRegistryPublication(filePath);
   let parsed: unknown;
   try {
-    parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+    parsed = JSON.parse(recovered.bytes.toString("utf8")) as unknown;
   } catch {
     throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry exit record is malformed.");
   }
   if (
-    !metadata.isFile() ||
-    metadata.isSymbolicLink() ||
-    metadata.nlink !== 1 ||
     typeof parsed !== "object" ||
     parsed === null ||
     Object.keys(parsed).sort().join("\0") !== "editorId\0exitedAt\0schemaVersion" ||
@@ -347,20 +348,18 @@ export class FileOsUnityEditorRegistry implements UnityEditorRegistry {
     const values: UnityEditorObservationV1[] = [];
     for (const entry of await readdir(directory, { withFileTypes: true })) {
       if (!entry.isFile() || entry.isSymbolicLink() || !/^[0-9a-f-]{36}\.json$/u.test(entry.name)) {
-        if (/^\..+\.tmp$/u.test(entry.name) && entry.isFile() && !entry.isSymbolicLink()) continue;
+        if (REGISTRY_TEMP_NAME.test(entry.name) && entry.isFile() && !entry.isSymbolicLink())
+          continue;
         throw new HoneyBeeCoreError(
           "run.indeterminate",
           "Editor Registry owned directory is corrupt.",
         );
       }
       const filePath = path.join(directory, entry.name);
-      const metadata = await recoverRegistryPublication(filePath);
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.nlink !== 1) {
-        throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry record is not private.");
-      }
+      const recovered = await readRegistryPublication(filePath);
       let parsed: unknown;
       try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+        parsed = JSON.parse(recovered.bytes.toString("utf8")) as unknown;
       } catch {
         throw new HoneyBeeCoreError("run.indeterminate", "Editor Registry record is malformed.");
       }
@@ -380,7 +379,8 @@ export class FileOsUnityEditorRegistry implements UnityEditorRegistry {
     const directory = await ensureDirectory(this.#root, [".unity-editors", "v1", "exited"]);
     const values = new Set<string>();
     for (const entry of await readdir(directory, { withFileTypes: true })) {
-      if (/^\..+\.tmp$/u.test(entry.name) && entry.isFile() && !entry.isSymbolicLink()) continue;
+      if (REGISTRY_TEMP_NAME.test(entry.name) && entry.isFile() && !entry.isSymbolicLink())
+        continue;
       const match = /^([0-9a-f-]{36})\.json$/u.exec(entry.name);
       if (!entry.isFile() || entry.isSymbolicLink() || match?.[1] === undefined) {
         throw new HoneyBeeCoreError(

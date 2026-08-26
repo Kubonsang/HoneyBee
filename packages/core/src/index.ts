@@ -1,4 +1,5 @@
 export * from "./child-process-runner.js";
+export * from "./agent-trust.js";
 export * from "./dag-workflow.js";
 export * from "./errors.js";
 export * from "./file-storage.js";

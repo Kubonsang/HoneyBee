@@ -43,6 +43,7 @@ export function AgentManagerView({
   const [displayName, setDisplayName] = useState(defaults("codex").name);
   const [command, setCommand] = useState(defaults("codex").command);
   const [args, setArgs] = useState(defaults("codex").args);
+  const [payloadPaths, setPayloadPaths] = useState("");
   const [editingId, setEditingId] = useState<string>();
   const [busy, setBusy] = useState<string>();
 
@@ -52,6 +53,7 @@ export function AgentManagerView({
     setDisplayName(next.name);
     setCommand(next.command);
     setArgs(next.args);
+    setPayloadPaths("");
     setEditingId(undefined);
   };
 
@@ -67,6 +69,14 @@ export function AgentManagerView({
           command: command.trim(),
           ...(args.trim().length === 0 ? {} : { args: args.trim().split(/\s+/u) }),
         },
+        ...(payloadPaths.trim().length === 0
+          ? {}
+          : {
+              payloadPaths: payloadPaths
+                .split(/\r?\n/u)
+                .map((value) => value.trim())
+                .filter(Boolean),
+            }),
         enabled: true,
       };
       await window.honeybee.upsertAgent(request);
@@ -175,6 +185,12 @@ export function AgentManagerView({
                       setDisplayName(agent.displayName);
                       setCommand(agent.command.command);
                       setArgs(agent.command.args?.join(" ") ?? "");
+                      setPayloadPaths(
+                        agent.trust?.files
+                          .filter((file) => file.role === "payload")
+                          .map((file) => file.path)
+                          .join("\n") ?? "",
+                      );
                     }}
                   >
                     <Wrench size={15} /> Edit
@@ -223,9 +239,22 @@ export function AgentManagerView({
               placeholder="optional model and runtime flags"
             />
           </label>
+          {provider === "custom" && (
+            <label>
+              <span>Trusted payload files</span>
+              <textarea
+                value={payloadPaths}
+                onChange={(event) => setPayloadPaths(event.target.value)}
+                placeholder={
+                  "One absolute script or payload path per line\nLeave empty for a native executable"
+                }
+                rows={4}
+              />
+            </label>
+          )}
           <p className="hint">
-            Arguments are stored as an execution profile. Secrets and API keys must not be entered
-            here.
+            Saving approves hashes for the executable and resolved launch payloads. HoneyBee blocks
+            execution if they change. Secrets and API keys must not be entered here.
           </p>
           <button
             className="primary wide"

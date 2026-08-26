@@ -19,6 +19,7 @@ import {
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { terminateProcessTree } from "./process-control.js";
+import { FileRunDeletionTransaction } from "./run-deletion.js";
 
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const demoAgentPath = fileURLToPath(new URL("../dist/demo-agent.js", import.meta.url));
@@ -202,7 +203,7 @@ describe("HoneyBee CLI sequential orchestration", () => {
     await expect(readFile(output.journalPath, "utf8")).rejects.toBeDefined();
   }, 20_000);
 
-  it("retries deletion after a started v0.6 batch child was already removed", async () => {
+  it("requires durable provenance before retrying a missing v0.6 batch child deletion", async () => {
     const cwd = await temporaryDirectory();
     const root = path.join(cwd, ".honeybee", "runs");
     const parentRunId = RunIdSchema.parse(randomUUID());
@@ -289,7 +290,23 @@ describe("HoneyBee CLI sequential orchestration", () => {
         }),
       );
     }
-    expect((await journal.replay(parentRunId)).status).toBe("terminal");
+    const parentReplay = await journal.replay(parentRunId);
+    expect(parentReplay.status).toBe("terminal");
+
+    const unproven = await runCli(["run", "delete", parentRunId, "--yes", "--json"], cwd);
+    expect(unproven.exitCode).toBe(1);
+    expect(JSON.parse(unproven.stderr)).toMatchObject({
+      ok: false,
+      code: "run.cleanup-pending",
+    });
+
+    if (parentReplay.status !== "terminal") throw new Error("Expected a terminal parent.");
+    const receipts = new FileRunDeletionTransaction(root);
+    await receipts.create(parentRunId, parentReplay.terminal.eventId, [
+      missingStartedChild,
+      neverStartedChild,
+    ]);
+    await receipts.mark(parentRunId, missingStartedChild, "started");
 
     const deletion = await runCli(["run", "delete", parentRunId, "--yes", "--json"], cwd);
     expect(deletion.exitCode).toBe(0);
@@ -299,6 +316,13 @@ describe("HoneyBee CLI sequential orchestration", () => {
       deleted: true,
     });
     await expect(repository.open(parentRunId)).rejects.toMatchObject({ code: "run.not-found" });
+    const repeated = await runCli(["run", "delete", parentRunId, "--yes", "--json"], cwd);
+    expect(repeated.exitCode).toBe(0);
+    expect(JSON.parse(repeated.stdout)).toMatchObject({
+      ok: true,
+      runId: parentRunId,
+      deleted: true,
+    });
   }, 20_000);
 
   it("refuses to delete an active Unity Run before durable workspace release", async () => {

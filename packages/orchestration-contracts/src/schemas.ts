@@ -45,9 +45,52 @@ export const AgentCommandSchema = z
   .strict();
 export type AgentCommand = z.infer<typeof AgentCommandSchema>;
 
+const AgentTrustSha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
+
+export const AgentLaunchTrustFileV1Schema = z
+  .object({
+    role: z.enum(["entrypoint", "interpreter", "payload"]),
+    path: z.string().min(1),
+    byteLength: z.number().int().nonnegative(),
+    sha256: AgentTrustSha256Schema,
+  })
+  .strict();
+export type AgentLaunchTrustFileV1 = z.infer<typeof AgentLaunchTrustFileV1Schema>;
+
+export const AgentLaunchTrustV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    files: z.array(AgentLaunchTrustFileV1Schema).min(1).max(16),
+    trustDigest: AgentTrustSha256Schema,
+  })
+  .strict()
+  .superRefine((trust, context) => {
+    if (trust.files.filter((file) => file.role === "entrypoint").length !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["files"],
+        message: "Agent trust must contain exactly one entrypoint.",
+      });
+    }
+    const paths = new Set<string>();
+    for (const [index, file] of trust.files.entries()) {
+      const key = file.path.toLocaleLowerCase("en-US");
+      if (paths.has(key)) {
+        context.addIssue({
+          code: "custom",
+          path: ["files", index, "path"],
+          message: "Agent trust paths must be unique.",
+        });
+      }
+      paths.add(key);
+    }
+  });
+export type AgentLaunchTrustV1 = z.infer<typeof AgentLaunchTrustV1Schema>;
+
 export const UnityAgentConfigSchema = z
   .object({
     command: AgentCommandSchema,
+    trust: AgentLaunchTrustV1Schema.optional(),
     harness: z.literal("stdio-framed-v2"),
     timeoutMs: z.number().int().positive().optional(),
     maxOutputBytes: z.number().int().positive().optional(),

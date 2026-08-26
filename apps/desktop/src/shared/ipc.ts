@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 import {
+  AgentLaunchTrustV1Schema,
+  type AgentLaunchTrustV1,
+} from "@honeybee/orchestration-contracts";
+
+import {
   ArtifactViewV1Schema,
   DoctorReportV1Schema,
   EditorPoolSnapshotV1Schema,
@@ -220,6 +225,7 @@ export const DesktopAgentProfileV1Schema = z
     displayName: z.string().trim().min(1).max(120),
     provider: DesktopAgentProviderV1Schema,
     command: SetupCommandSchema,
+    trust: AgentLaunchTrustV1Schema.optional(),
     adapter: z.literal("stdio-framed-v2"),
     enabled: z.boolean(),
     createdAt: z.string().datetime(),
@@ -227,6 +233,7 @@ export const DesktopAgentProfileV1Schema = z
   })
   .strict();
 export type DesktopAgentProfileV1 = z.infer<typeof DesktopAgentProfileV1Schema>;
+export type { AgentLaunchTrustV1 };
 
 export const DesktopAgentStatusV1Schema = z
   .object({
@@ -239,6 +246,8 @@ export const DesktopAgentStatusV1Schema = z
       "unsupported-version",
       "protocol-incompatible",
       "probe-failed",
+      "trust-required",
+      "trust-changed",
       "disabled",
     ]),
     checkedAt: z.string().datetime(),
@@ -255,6 +264,7 @@ export const DesktopAgentUpsertRequestV1Schema = z
     displayName: z.string().trim().min(1).max(120),
     provider: DesktopAgentProviderV1Schema,
     command: SetupCommandSchema,
+    payloadPaths: z.array(z.string().min(1)).max(15).optional(),
     enabled: z.boolean().default(true),
   })
   .strict();

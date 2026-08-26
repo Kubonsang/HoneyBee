@@ -10,6 +10,7 @@ import {
   DesktopProjectProfileSchema,
   SetupCommandSchema,
   type DesktopAgentProfileV1,
+  type AgentLaunchTrustV1,
   type DesktopAgentUpsertRequestV1,
   type DesktopProjectProfile,
   type SetupCommand,
@@ -162,6 +163,7 @@ export class DesktopSettingsStore {
 
   public async upsertAgent(
     requestValue: DesktopAgentUpsertRequestV1,
+    trust?: AgentLaunchTrustV1,
   ): Promise<DesktopAgentProfileV1> {
     const request = DesktopAgentUpsertRequestV1Schema.parse(requestValue);
     const settings = await this.#read();
@@ -176,6 +178,7 @@ export class DesktopSettingsStore {
       displayName: request.displayName,
       provider: request.provider,
       command: request.command,
+      ...(trust === undefined ? {} : { trust }),
       adapter: "stdio-framed-v2",
       enabled: request.enabled,
       createdAt: existing?.createdAt ?? now,

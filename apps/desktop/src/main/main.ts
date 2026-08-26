@@ -264,6 +264,7 @@ const requireReadyAgent = async (agentId: string) => {
   const agent = await agentFor(agentId);
   const status = await agentManager.probe(agent);
   if (status.status !== "ready") throw new Error(status.summary);
+  if (agent.trust === undefined) throw new Error("Agent trust approval is required.");
   return agent;
 };
 
@@ -695,7 +696,11 @@ const registerIpc = (): void => {
           if (agent === undefined) throw new Error("Agent profile resolution failed.");
           return {
             ...work,
-            agent: { command: agent.command, harness: "stdio-framed-v2" as const },
+            agent: {
+              command: agent.command,
+              trust: agent.trust,
+              harness: "stdio-framed-v2" as const,
+            },
           };
         }),
       });
@@ -704,7 +709,7 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.agentsUpsert,
     safeHandler(async (requestValue: unknown) => {
-      await settings.upsertAgent(DesktopAgentUpsertRequestV1Schema.parse(requestValue));
+      await agentManager.upsert(DesktopAgentUpsertRequestV1Schema.parse(requestValue));
       return bootstrap();
     }),
   );

@@ -1,5 +1,6 @@
 import type {
   AnyOrchestrationEvent,
+  AgentLaunchTrustV1,
   ArtifactId,
   ArtifactKind,
   ArtifactMediaType,
@@ -29,6 +30,7 @@ export interface AgentProcessRequest {
   readonly stepId: StepId;
   readonly prompt: string;
   readonly command: WorkflowStep["agent"];
+  readonly trust?: AgentLaunchTrustV1;
   readonly timeoutMs: number;
   readonly maxOutputBytes: number;
   readonly signal?: AbortSignal;

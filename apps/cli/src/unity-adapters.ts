@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   ContentDigestSchema,
   HoneyBeeCoreError,
+  verifyAgentLaunchTrust,
   type AgentCommand,
   type AgentExitObservation,
   type AgentProcessResult,
@@ -637,6 +638,13 @@ export class UnityAgentProcessRunner implements AgentProcessRunner {
         request.stepId,
       );
     }
+    if (request.trust === undefined) {
+      throw new HoneyBeeCoreError(
+        "agent.trust-required",
+        "Unity Agent execution requires an approved launch trust receipt.",
+      );
+    }
+    await verifyAgentLaunchTrust(request.command, request.trust);
     let result: CommandResult;
     try {
       result = await runCommand(request.command, [], {

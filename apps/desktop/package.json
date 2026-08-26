@@ -18,6 +18,7 @@
   "dependencies": {
     "@honeybee/control-plane-contracts": "workspace:*",
     "@honeybee/orchestration-contracts": "workspace:*",
+    "@honeybee/core": "workspace:*",
     "@phosphor-icons/react": "2.1.10",
     "honeybee-cli": "workspace:*",
     "react": "^19.2.8",

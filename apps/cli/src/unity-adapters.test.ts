@@ -16,6 +16,7 @@ import path from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  captureAgentLaunchTrust,
   ContentDigestSchema,
   EventIdSchema,
   RunIdSchema,
@@ -33,6 +34,12 @@ import {
 } from "./unity-adapters.js";
 
 const directories: string[] = [];
+
+const agentTrust = (payload: string) =>
+  captureAgentLaunchTrust([
+    { role: "entrypoint", path: process.execPath },
+    { role: "payload", path: payload },
+  ]);
 
 afterEach(async () => {
   await Promise.all(
@@ -776,6 +783,25 @@ describe("TestPlayCliAdapter process control", () => {
 });
 
 describe("UnityAgentProcessRunner process control", () => {
+  it("refuses to spawn an unpinned Unity Agent", async () => {
+    await expect(
+      new UnityAgentProcessRunner().run(
+        {
+          runId: RunIdSchema.parse(randomUUID()),
+          stepId: StepIdSchema.parse("unity-agent"),
+          prompt: "work",
+          command: { command: process.execPath },
+          timeoutMs: 10_000,
+          maxOutputBytes: 1024,
+        },
+        {
+          onStarted: async () => undefined,
+          onExited: async () => undefined,
+        },
+      ),
+    ).rejects.toMatchObject({ code: "agent.trust-required" });
+  });
+
   it("does not start the Agent before its durable start registration completes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-agent-start-barrier-"));
     directories.push(root);
@@ -794,6 +820,7 @@ describe("UnityAgentProcessRunner process control", () => {
           stepId: StepIdSchema.parse("unity-agent"),
           prompt: "work",
           command: { command: process.execPath, args: [script, marker], cwd: root },
+          trust: await agentTrust(script),
           timeoutMs: 10_000,
           maxOutputBytes: 1024 * 1024,
         },
@@ -826,6 +853,7 @@ describe("UnityAgentProcessRunner process control", () => {
           stepId: StepIdSchema.parse("unity-agent"),
           prompt: "work",
           command: { command: process.execPath, args: [script, marker], cwd: root },
+          trust: await agentTrust(script),
           timeoutMs: 10_000,
           maxOutputBytes: 1024 * 1024,
         },
@@ -868,6 +896,7 @@ describe("UnityAgentProcessRunner process control", () => {
         stepId: StepIdSchema.parse("unity-agent"),
         prompt: "work",
         command: { command: process.execPath, args: [script, marker], cwd: root },
+        trust: await agentTrust(script),
         timeoutMs: 10_000,
         maxOutputBytes: 1024 * 1024,
         signal: aborter.signal,
@@ -939,6 +968,7 @@ describe("UnityAgentProcessRunner process control", () => {
             HONEYBEE_PRELOAD_MARKER: preloadMarker,
           },
         },
+        trust: await agentTrust(script),
         timeoutMs: 10_000,
         maxOutputBytes: 1024 * 1024,
       },
@@ -988,6 +1018,7 @@ describe("UnityAgentProcessRunner process control", () => {
             stepId: StepIdSchema.parse("unity-agent"),
             prompt: "work",
             command: { command: process.execPath, args: [script, grandchildPidPath], cwd: root },
+            trust: await agentTrust(script),
             timeoutMs: 20_000,
             maxOutputBytes: 1024 * 1024,
             signal: aborter.signal,
