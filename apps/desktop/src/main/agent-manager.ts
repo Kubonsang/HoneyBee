@@ -70,6 +70,15 @@ const firstLine = (value: string): string | undefined => {
   return line === undefined ? undefined : line.slice(0, 200);
 };
 
+const exactSessionVersion = (
+  profile: DesktopAgentProfileV1,
+  version: string | undefined,
+): boolean => {
+  if (profile.adapter === "stdio-framed-v2") return true;
+  const expected = profile.adapter === "codex-app-server-v1" ? "0.146.0" : "1.18.16";
+  return version?.match(/\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?/u)?.[0] === expected;
+};
+
 export class DesktopAgentManager {
   public constructor(private readonly settings: DesktopSettingsStore) {}
 
@@ -117,6 +126,19 @@ export class DesktopAgentManager {
         windowsHide: true,
       });
       const version = firstLine(versionResult.stdout || versionResult.stderr);
+      if (!exactSessionVersion(profile, version)) {
+        return DesktopAgentStatusV1Schema.parse({
+          schemaVersion: 1,
+          agentId: profile.agentId,
+          status: "unsupported-version",
+          checkedAt,
+          ...(version === undefined ? {} : { version }),
+          summary:
+            profile.adapter === "codex-app-server-v1"
+              ? "Experimental Codex sessions require exactly Codex CLI 0.146.0."
+              : "Experimental OpenCode sessions require exactly OpenCode 1.18.16.",
+        });
+      }
       const authArgs = authenticationArgs(profile.provider);
       if (authArgs !== undefined) {
         try {

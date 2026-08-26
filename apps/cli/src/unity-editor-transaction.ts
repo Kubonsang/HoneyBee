@@ -14,6 +14,7 @@ import {
   HarnessIdSchema,
   HoneyBeeCoreError,
   OrchestrationEventV5Schema,
+  OrchestrationEventV6Schema,
   PortNameSchema,
   RunIdSchema,
   StepIdSchema,
@@ -31,6 +32,7 @@ import {
   type EditorLaunchIntentV1,
   type FailureMetadata,
   type OrchestrationEventV5,
+  type OrchestrationEventV6,
   type ResourceId,
   type RunControlPort,
   type RunId,
@@ -113,6 +115,7 @@ class V5Writer {
     initialSequence: number,
     private readonly now: () => Date,
     private readonly randomId: () => string,
+    private readonly schemaVersion: 5 | 6 = 5,
   ) {
     this.#sequence = initialSequence;
   }
@@ -131,8 +134,8 @@ class V5Writer {
     stepId?: StepId,
   ): Promise<OrchestrationEventV5> {
     const operation = this.#tail.then(async () => {
-      const event = OrchestrationEventV5Schema.parse({
-        schemaVersion: 5,
+      const value = {
+        schemaVersion: this.schemaVersion,
         eventId: EventIdSchema.parse(this.randomId()),
         runId: this.runId,
         sequence: ++this.#sequence,
@@ -140,11 +143,53 @@ class V5Writer {
         type,
         ...(stepId === undefined ? {} : { stepId }),
         payload,
-      });
+      };
+      const event =
+        this.schemaVersion === 6
+          ? OrchestrationEventV6Schema.parse(value)
+          : OrchestrationEventV5Schema.parse(value);
       await this.journal.append(this.runId, event);
-      return event;
+      return event as OrchestrationEventV5;
     });
     this.#tail = operation.then(() => undefined);
+    void this.#tail.catch(() => undefined);
+    return operation;
+  }
+
+  public emitSession(
+    type:
+      | "work.admission-queued"
+      | "work.admission-entered"
+      | "agent.session-opened"
+      | "agent.turn-started"
+      | "agent.approval-requested"
+      | "agent.approval-resolved"
+      | "agent.approval-delivered"
+      | "agent.turn-completed"
+      | "agent.session-closed",
+    payload: unknown,
+    stepId: StepId,
+  ): Promise<void> {
+    if (this.schemaVersion !== 6) {
+      throw new HoneyBeeCoreError(
+        "journal.write-failed",
+        "Session events require Journal schema v6.",
+      );
+    }
+    const operation = this.#tail.then(async () => {
+      const event = OrchestrationEventV6Schema.parse({
+        schemaVersion: 6,
+        eventId: EventIdSchema.parse(this.randomId()),
+        runId: this.runId,
+        sequence: ++this.#sequence,
+        timestamp: this.now().toISOString(),
+        type,
+        stepId,
+        payload,
+      });
+      await this.journal.append(this.runId, event);
+    });
+    this.#tail = operation;
     void this.#tail.catch(() => undefined);
     return operation;
   }
@@ -294,7 +339,14 @@ export class UnityEditorWorkTransaction {
       JSON.stringify(config),
     );
     const taskArtifact = await this.#put(runId, "task", "text/plain; charset=utf-8", task);
-    const writer = new V5Writer(this.journal, runId, 0, this.#now, this.#randomId);
+    const writer = new V5Writer(
+      this.journal,
+      runId,
+      0,
+      this.#now,
+      this.#randomId,
+      config.agent.adapter === "stdio-framed-v2" ? 5 : 6,
+    );
     await writer.emit("workflow.started", {
       mode: "unity-work-v3",
       config: configArtifact,
@@ -329,15 +381,31 @@ export class UnityEditorWorkTransaction {
     const replay = await this.journal.replay(runId);
     if (replay.status === "indeterminate")
       throw new HoneyBeeCoreError("run.indeterminate", replay.message);
-    const events = replay.events as readonly OrchestrationEventV5[];
-    const start = events[0];
+    const rawEvents = replay.events as readonly (OrchestrationEventV5 | OrchestrationEventV6)[];
+    const start = rawEvents[0];
     if (
-      start?.schemaVersion !== 5 ||
+      (start?.schemaVersion !== 5 && start?.schemaVersion !== 6) ||
       start.type !== "workflow.started" ||
       start.payload.mode !== "unity-work-v3"
     ) {
       throw new HoneyBeeCoreError("run.not-resumable", "Run is not a Unity v0.6 Work.");
     }
+    const events = rawEvents
+      .filter(
+        (event) =>
+          ![
+            "work.admission-queued",
+            "work.admission-entered",
+            "agent.session-opened",
+            "agent.turn-started",
+            "agent.approval-requested",
+            "agent.approval-resolved",
+            "agent.approval-delivered",
+            "agent.turn-completed",
+            "agent.session-closed",
+          ].includes(event.type),
+      )
+      .map((event) => ({ ...event, schemaVersion: 5 as const })) as OrchestrationEventV5[];
     if (
       start.payload.linkage.parentRunId !== execution.parentRunId ||
       start.payload.linkage.workId !== execution.workId ||
@@ -346,7 +414,14 @@ export class UnityEditorWorkTransaction {
     )
       throw new HoneyBeeCoreError("run.indeterminate", "Unity v0.6 Work linkage changed.");
     if (replay.status === "terminal") return this.#resultFrom(events);
-    const writer = new V5Writer(this.journal, runId, events.length, this.#now, this.#randomId);
+    const writer = new V5Writer(
+      this.journal,
+      runId,
+      rawEvents.length,
+      this.#now,
+      this.#randomId,
+      start.schemaVersion,
+    );
     return this.#recover(runId, config, execution, events, writer);
   }
 
@@ -403,6 +478,28 @@ export class UnityEditorWorkTransaction {
         workspaceId,
         config.bridgeOverlay,
       );
+      if (config.agent.adapter !== "stdio-framed-v2") {
+        const context = await this.bootstrap.materializeAgentContext(
+          config.sourceProjectPath,
+          workspacePath,
+        );
+        const files: Array<{ logicalPath: string; artifact: ArtifactRef }> = [];
+        for (const file of context) {
+          const artifact = await this.#put(
+            runId,
+            "agent-context-content",
+            "text/plain; charset=utf-8",
+            file.content,
+          );
+          await writer.emit("artifact.stored", { artifact });
+          files.push({ logicalPath: file.logicalPath, artifact });
+        }
+        await this.#storeJson(writer, runId, "agent-skill-manifest", {
+          schemaVersion: 1,
+          isolation: "observe-only",
+          files,
+        });
+      }
       const preparedManifest = await this.bootstrap.manifest(workspacePath, bridgeOverlayPaths);
       if (!sameManifest(sourceBeforeValue, preparedManifest)) {
         throw new HoneyBeeCoreError(
@@ -953,6 +1050,7 @@ export class UnityEditorWorkTransaction {
             cwd: workspacePath,
             env: { ...config.agent.command.env, HONEYBEE_UNITY_PROJECT_PATH: workspacePath },
           },
+          adapter: config.agent.adapter,
           ...(config.agent.trust === undefined ? {} : { trust: config.agent.trust }),
           timeoutMs: config.agent.timeoutMs ?? 600_000,
           maxOutputBytes: config.agent.maxOutputBytes ?? 1024 * 1024,
@@ -982,6 +1080,125 @@ export class UnityEditorWorkTransaction {
             );
           },
           onExited: (observation) => writer.emit("agent.exited", observation, UNITY_STEP_ID),
+          onSessionEvent: async (event) => {
+            switch (event.type) {
+              case "admission-queued":
+                await writer.emitSession(
+                  "work.admission-queued",
+                  { priority: config.priority },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "admission-entered":
+                await writer.emitSession(
+                  "work.admission-entered",
+                  { priority: config.priority, waitMs: Math.max(0, Math.trunc(event.waitMs)) },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "session-opened":
+                await writer.emitSession(
+                  "agent.session-opened",
+                  {
+                    adapter: event.adapter,
+                    sessionIdDigest: event.sessionIdDigest,
+                    capabilities: event.capabilities,
+                  },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "turn-started":
+                await writer.emitSession(
+                  "agent.turn-started",
+                  { turnIdDigest: event.turnIdDigest },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "skills-observed": {
+                const manifest = await this.#put(
+                  runId,
+                  "agent-skill-manifest",
+                  "application/json",
+                  event.serializedManifest,
+                );
+                await writer.emit("artifact.stored", { artifact: manifest }, UNITY_STEP_ID);
+                break;
+              }
+              case "approval-requested": {
+                const requestArtifact = await this.#put(
+                  runId,
+                  "agent-approval-request",
+                  "application/json",
+                  event.serializedRequest,
+                );
+                await writer.emit("artifact.stored", { artifact: requestArtifact }, UNITY_STEP_ID);
+                await writer.emitSession(
+                  "agent.approval-requested",
+                  {
+                    approvalId: event.approvalId,
+                    kind: event.kind,
+                    request: requestArtifact,
+                  },
+                  UNITY_STEP_ID,
+                );
+                break;
+              }
+              case "approval-resolved": {
+                const receipt = await this.#put(
+                  runId,
+                  "approval-decision",
+                  "application/json",
+                  JSON.stringify(event.decision),
+                );
+                await writer.emit("artifact.stored", { artifact: receipt }, UNITY_STEP_ID);
+                await writer.emitSession(
+                  "agent.approval-resolved",
+                  {
+                    approvalId: event.decision.approvalId,
+                    decision: event.decision.decision,
+                    source: event.decision.source,
+                    receipt,
+                  },
+                  UNITY_STEP_ID,
+                );
+                break;
+              }
+              case "approval-delivered":
+                await writer.emitSession(
+                  "agent.approval-delivered",
+                  { approvalId: event.approvalId },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "turn-completed":
+                await writer.emitSession(
+                  "agent.turn-completed",
+                  {
+                    turnIdDigest: event.turnIdDigest,
+                    status: event.status,
+                    outputBytes: event.outputBytes,
+                  },
+                  UNITY_STEP_ID,
+                );
+                break;
+              case "session-closed":
+                {
+                  const transcript = await this.#put(
+                    runId,
+                    "agent-session-transcript",
+                    "application/x-ndjson",
+                    event.serializedTranscript,
+                  );
+                  await writer.emit("artifact.stored", { artifact: transcript }, UNITY_STEP_ID);
+                  await writer.emitSession(
+                    "agent.session-closed",
+                    { reason: event.reason, transcript },
+                    UNITY_STEP_ID,
+                  );
+                }
+                break;
+            }
+          },
         },
       );
     } catch (error) {

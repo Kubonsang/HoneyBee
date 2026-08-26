@@ -179,7 +179,7 @@ export class DesktopSettingsStore {
       provider: request.provider,
       command: request.command,
       ...(trust === undefined ? {} : { trust }),
-      adapter: "stdio-framed-v2",
+      adapter: request.adapter,
       enabled: request.enabled,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,

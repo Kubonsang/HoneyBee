@@ -5,6 +5,7 @@ import {
   FileRunRepository,
   StepIdSchema,
   type FileRunControl,
+  type AgentProcessRunner,
   type UnityBatchConfigV3,
   type UnityBatchConfigV4,
   type UnityWorkspaceStorageV1,
@@ -71,6 +72,7 @@ export const createUnityEditorTransactionServices = (
   config: UnityWorkConfigV2,
   journal: VersionedOrchestrationJournal,
   controls: FileRunControl,
+  agentRunner: AgentProcessRunner = new UnityAgentProcessRunner(),
 ): Readonly<{ transaction: UnityEditorWorkTransaction; execution: UnityWorkV5Execution }> => {
   const artifacts = new FileArtifactStore(root);
   const bootstrap = new UnityProjectBootstrap();
@@ -83,7 +85,7 @@ export const createUnityEditorTransactionServices = (
   return {
     transaction: new UnityEditorWorkTransaction(
       root,
-      new UnityAgentProcessRunner(),
+      agentRunner,
       artifacts,
       journal,
       controls,
@@ -110,6 +112,7 @@ export const createUnityEditorBatchWorkflow = (
   config: UnityBatchConfigV3 | UnityBatchConfigV4,
   journal: VersionedOrchestrationJournal,
   controls: FileRunControl,
+  agentRunner: AgentProcessRunner = new UnityAgentProcessRunner(),
 ): UnityEditorBatchWorkflow => {
   const artifacts = new FileArtifactStore(root);
   const bootstrap = new UnityProjectBootstrap();
@@ -121,7 +124,7 @@ export const createUnityEditorBatchWorkflow = (
   );
   const transaction = new UnityEditorWorkTransaction(
     root,
-    new UnityAgentProcessRunner(),
+    agentRunner,
     artifacts,
     journal,
     controls,

@@ -244,6 +244,8 @@ const api: HoneyBeeDesktopApi = {
   removeAgent: unsupported,
   probeAgent: unsupported,
   connectAgent: unsupported,
+  listAgentApprovals: async () => ({ schemaVersion: 1, approvals: [] }),
+  respondAgentApproval: unsupported,
   setProjectAgentPreference: unsupported,
 };
 

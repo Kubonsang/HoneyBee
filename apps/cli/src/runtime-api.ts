@@ -55,6 +55,7 @@ import {
   UnityWorkConfigV2Schema,
   type AnyOrchestrationEvent,
   type AgentCommand,
+  type AgentProcessRunner,
   type AnyVersionedJournalReplay,
   type ArtifactRef,
   type RunId,
@@ -66,7 +67,11 @@ import { FileUnityEditorPoolCoordinator } from "./unity-editor-pool.js";
 import { FileOsUnityEditorRegistry } from "./unity-editor-registry.js";
 import { FileUnityPatchControl } from "./unity-patch-control.js";
 import { SystemUnityProcessControl } from "./process-control.js";
-import { runCommand, UnityWorkspaceStorageCliAdapter } from "./unity-adapters.js";
+import {
+  runCommand,
+  UnityAgentProcessRunner,
+  UnityWorkspaceStorageCliAdapter,
+} from "./unity-adapters.js";
 import {
   assertUnityPathsDisjoint,
   createUnityEditorBatchWorkflow,
@@ -155,6 +160,10 @@ export class RuntimeProcessContainment {
     });
   }
 }
+
+export { AgentSessionProcessRunner } from "./agent-session-adapters.js";
+export type { AgentApprovalPort } from "./agent-session-adapters.js";
+export { DesktopWorkScheduler } from "./desktop-work-scheduler.js";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -267,7 +276,7 @@ const modeFrom = (events: readonly AnyOrchestrationEvent[]): string => {
   if (start.schemaVersion === 3) return "unity-work-v1";
   const payload: Record<string, unknown> = isRecord(start.payload) ? start.payload : {};
   if (
-    (start.schemaVersion === 4 || start.schemaVersion === 5) &&
+    (start.schemaVersion === 4 || start.schemaVersion === 5 || start.schemaVersion === 6) &&
     typeof payload.mode === "string"
   ) {
     return payload.mode;
@@ -279,7 +288,11 @@ const linkageFrom = (
   events: readonly AnyOrchestrationEvent[],
 ): Pick<RunSummaryV1, "parentRunId" | "workId" | "priority"> => {
   const start = events[0];
-  if (start?.schemaVersion !== 5 || start.type !== "workflow.started") return {};
+  if (
+    (start?.schemaVersion !== 5 && start?.schemaVersion !== 6) ||
+    start.type !== "workflow.started"
+  )
+    return {};
   const payload: Record<string, unknown> = isRecord(start.payload) ? start.payload : {};
   const linkage = isRecord(payload.linkage) ? payload.linkage : undefined;
   if (linkage === undefined) return {};
@@ -351,6 +364,7 @@ export interface HoneyBeeRuntimeFacadeOptions {
   readonly stateRoot: string;
   readonly now?: () => Date;
   readonly randomId?: () => string;
+  readonly agentRunner?: AgentProcessRunner;
 }
 
 export class HoneyBeeRuntimeFacade {
@@ -358,11 +372,13 @@ export class HoneyBeeRuntimeFacade {
   readonly #now: () => Date;
   readonly #randomId: () => string;
   readonly #executions = new Set<Promise<void>>();
+  readonly #agentRunner: AgentProcessRunner;
 
   public constructor(options: HoneyBeeRuntimeFacadeOptions) {
     this.#root = path.resolve(options.stateRoot);
     this.#now = options.now ?? (() => new Date());
     this.#randomId = options.randomId ?? randomUUID;
+    this.#agentRunner = options.agentRunner ?? new UnityAgentProcessRunner();
   }
 
   public info(): RuntimeInfoV1 {
@@ -792,6 +808,7 @@ export class HoneyBeeRuntimeFacade {
             singleConfig,
             journal,
             controls,
+            this.#agentRunner,
           );
           if (singleConfig.capabilities.length > 0) {
             await services.execution.pool.declare({
@@ -811,10 +828,13 @@ export class HoneyBeeRuntimeFacade {
             agent: "agent" in entry ? entry.agent : baseConfig.transaction.agent,
           })),
         });
-        await createUnityEditorBatchWorkflow(this.#root, config, journal, controls).run(
-          runId,
+        await createUnityEditorBatchWorkflow(
+          this.#root,
           config,
-        );
+          journal,
+          controls,
+          this.#agentRunner,
+        ).run(runId, config);
       } finally {
         await lease.release();
       }
@@ -983,7 +1003,10 @@ export class HoneyBeeRuntimeFacade {
         throw new HoneyBeeCoreError("run.not-resumable", "This Run is not active.");
       }
       const start = replay.events[0];
-      if (start?.schemaVersion !== 5 || start.type !== "workflow.started") {
+      if (
+        (start?.schemaVersion !== 5 && start?.schemaVersion !== 6) ||
+        start.type !== "workflow.started"
+      ) {
         throw new HoneyBeeCoreError(
           "run.not-resumable",
           "The Desktop facade resumes v0.6 Unity Runs only.",
@@ -999,9 +1022,13 @@ export class HoneyBeeRuntimeFacade {
           if (payload.mode === "unity-batch-v2") {
             const config = UnityBatchConfigV3Schema.parse(configValue);
             await assertUnityPathsDisjoint(this.#root, config.transaction);
-            await createUnityEditorBatchWorkflow(this.#root, config, journal, controls).resume(
-              runId,
-            );
+            await createUnityEditorBatchWorkflow(
+              this.#root,
+              config,
+              journal,
+              controls,
+              this.#agentRunner,
+            ).resume(runId);
             return;
           }
           const linkage = isRecord(payload.linkage) ? payload.linkage : undefined;
@@ -1018,6 +1045,7 @@ export class HoneyBeeRuntimeFacade {
             config,
             journal,
             controls,
+            this.#agentRunner,
           );
           await services.transaction.resume(runId, config, services.execution);
         } finally {

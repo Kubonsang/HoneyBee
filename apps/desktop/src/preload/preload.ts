@@ -4,6 +4,7 @@ import {
   DesktopArtifactRequestV1Schema,
   DesktopAgentIdRequestV1Schema,
   DesktopAgentUpsertRequestV1Schema,
+  DesktopAgentApprovalResponseV1Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopIpcChannels,
@@ -190,6 +191,17 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.agentsConnect,
         DesktopAgentIdRequestV1Schema.parse(request),
+      ),
+    ),
+  listAgentApprovals: async () =>
+    DesktopIpcResponseSchemas.agentApprovalsList.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.agentApprovalsList),
+    ),
+  respondAgentApproval: async (request) =>
+    DesktopIpcResponseSchemas.agentApprovalRespond.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.agentApprovalRespond,
+        DesktopAgentApprovalResponseV1Schema.parse(request),
       ),
     ),
   setProjectAgentPreference: async (request) =>

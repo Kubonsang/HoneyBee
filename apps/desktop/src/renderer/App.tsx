@@ -31,6 +31,7 @@ import type {
 import {
   DesktopStartRequestV2Schema,
   type DesktopBootstrapV2,
+  type DesktopPendingAgentApprovalV1,
   type DesktopProjectProfile,
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
@@ -92,6 +93,9 @@ export function App() {
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [defaultAgentId, setDefaultAgentId] = useState<string>();
+  const [agentApprovals, setAgentApprovals] = useState<readonly DesktopPendingAgentApprovalV1[]>(
+    [],
+  );
 
   useEffect(() => {
     void window.honeybee
@@ -107,6 +111,25 @@ export function App() {
         setView("projects");
       })
       .catch((reason: unknown) => setError(readableError(reason)));
+  }, []);
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async (): Promise<void> => {
+      try {
+        const value = await window.honeybee.listAgentApprovals();
+        if (!stopped) setAgentApprovals(value.approvals);
+      } catch (reason) {
+        if (!stopped) setError(readableError(reason));
+      }
+      if (!stopped) timer = setTimeout(() => void poll(), 500);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -404,6 +427,23 @@ export function App() {
     }
   };
 
+  const respondAgentApproval = async (
+    approvalId: string,
+    decision: "allow-once" | "deny",
+  ): Promise<void> => {
+    try {
+      const value = await window.honeybee.respondAgentApproval({
+        schemaVersion: 1,
+        approvalId,
+        decision,
+      });
+      setAgentApprovals(value.approvals);
+      setNotice(decision === "allow-once" ? "Agent action allowed once." : "Agent action denied.");
+    } catch (reason) {
+      setError(readableError(reason));
+    }
+  };
+
   return (
     <div className="app-shell">
       <aside className="sidebar">
@@ -586,6 +626,33 @@ export function App() {
             </p>
           </div>
         </div>
+
+        {agentApprovals.map((approval) => (
+          <section className="agent-approval panel" key={approval.approvalId}>
+            <div>
+              <span className="eyebrow">AGENT APPROVAL · {approval.kind}</span>
+              <h3>{approval.summary}</h3>
+              <p>
+                Run {approval.runId.slice(0, 8)} · {approval.stepId}. Approval applies once and is
+                durably recorded before delivery.
+              </p>
+            </div>
+            <div className="agent-approval-actions">
+              <button
+                className="secondary"
+                onClick={() => void respondAgentApproval(approval.approvalId, "deny")}
+              >
+                Deny
+              </button>
+              <button
+                className="primary"
+                onClick={() => void respondAgentApproval(approval.approvalId, "allow-once")}
+              >
+                Allow once
+              </button>
+            </div>
+          </section>
+        ))}
 
         {view === "projects" ? (
           <section className="projects-home">

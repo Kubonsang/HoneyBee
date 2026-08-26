@@ -1,6 +1,8 @@
 import type {
   AnyOrchestrationEvent,
   AgentLaunchTrustV1,
+  AgentAdapterV1,
+  AgentSessionLifecycleEventV1,
   ArtifactId,
   ArtifactKind,
   ArtifactMediaType,
@@ -12,6 +14,7 @@ import type {
   OrchestrationEventV3,
   OrchestrationEventV4,
   OrchestrationEventV5,
+  OrchestrationEventV6,
   PortName,
   RunId,
   StepId,
@@ -20,6 +23,7 @@ import type {
   TerminalWorkflowEventV3,
   TerminalWorkflowEventV4,
   TerminalWorkflowEventV5,
+  TerminalWorkflowEventV6,
   ControlRequest,
   WorkflowConfigV3,
   WorkflowStep,
@@ -35,6 +39,7 @@ export interface AgentProcessRequest {
   readonly maxOutputBytes: number;
   readonly signal?: AbortSignal;
   readonly cancelGraceMs?: number;
+  readonly adapter?: AgentAdapterV1;
 }
 
 export interface AgentExitObservation {
@@ -55,6 +60,7 @@ export interface AgentProcessLifecycle {
   ) => Promise<void>;
   readonly onRegistered?: (pid: number) => Promise<void>;
   readonly onExited: (observation: AgentExitObservation) => Promise<void>;
+  readonly onSessionEvent?: (event: AgentSessionLifecycleEventV1) => Promise<void>;
 }
 
 export interface AgentProcessResult extends AgentExitObservation {
@@ -187,8 +193,24 @@ export type JournalReplayV5 =
       message: string;
     }>;
 
+export type JournalReplayV6 =
+  | Readonly<{
+      status: "terminal";
+      events: readonly OrchestrationEventV6[];
+      terminal: TerminalWorkflowEventV6;
+    }>
+  | Readonly<{
+      status: "active";
+      events: readonly OrchestrationEventV6[];
+    }>
+  | Readonly<{
+      status: "indeterminate";
+      code: "run.indeterminate";
+      message: string;
+    }>;
+
 export type AnyVersionedJournalReplay =
-  AnyJournalReplay | JournalReplayV3 | JournalReplayV4 | JournalReplayV5;
+  AnyJournalReplay | JournalReplayV3 | JournalReplayV4 | JournalReplayV5 | JournalReplayV6;
 
 export interface VersionedOrchestrationJournal {
   append(runId: RunId, event: AnyOrchestrationEvent): Promise<void>;

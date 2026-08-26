@@ -631,6 +631,13 @@ export class UnityAgentProcessRunner implements AgentProcessRunner {
     request: Parameters<AgentProcessRunner["run"]>[0],
     lifecycle: Parameters<AgentProcessRunner["run"]>[1],
   ): Promise<AgentProcessResult> {
+    if (request.adapter !== undefined && request.adapter !== "stdio-framed-v2") {
+      throw new HoneyBeeCoreError(
+        "validation.invalid-workflow",
+        "Structured Agent sessions are available only through the Desktop runtime.",
+        request.stepId,
+      );
+    }
     if (request.command.command.trim().length === 0) {
       throw new HoneyBeeCoreError(
         "validation.invalid-command",
@@ -686,6 +693,12 @@ export interface SourceManifest {
   readonly projectSettingsDigest: string;
   readonly fileCount: number;
   readonly logicalBytes: number;
+}
+
+export interface MaterializedAgentContextFile {
+  readonly logicalPath: string;
+  readonly content: string;
+  readonly contentDigest: ContentDigest;
 }
 
 interface TreeManifest {
@@ -773,6 +786,113 @@ const safeWorkspacePath = (workspaceRoot: string, workspaceId: string): string =
 };
 
 export class UnityProjectBootstrap {
+  public async materializeAgentContext(
+    sourceProjectPath: string,
+    workspacePath: string,
+  ): Promise<readonly MaterializedAgentContextFile[]> {
+    const candidates: string[] = [];
+    const agentsPath = path.join(sourceProjectPath, "AGENTS.md");
+    try {
+      const entry = await lstat(agentsPath);
+      if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
+        throw new HoneyBeeCoreError(
+          "workspace.invalid-project",
+          "AGENTS.md must be a private regular file.",
+        );
+      }
+      candidates.push("AGENTS.md");
+    } catch (error) {
+      if (error instanceof HoneyBeeCoreError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    const skillsRoot = path.join(sourceProjectPath, ".agents", "skills");
+    try {
+      const entry = await lstat(skillsRoot);
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        throw new HoneyBeeCoreError(
+          "workspace.invalid-project",
+          "The workspace Skill root must be a real directory.",
+        );
+      }
+      for (const relative of await treeFiles(skillsRoot)) {
+        if (relative.split("/").includes("..")) {
+          throw new HoneyBeeCoreError(
+            "workspace.invalid-project",
+            "Agent context escaped its materialization root.",
+          );
+        }
+        candidates.push(".agents/skills/" + relative);
+      }
+    } catch (error) {
+      if (error instanceof HoneyBeeCoreError) throw error;
+      if (errorCode(error) !== "ENOENT") throw error;
+    }
+    if (candidates.length > 512) {
+      throw new HoneyBeeCoreError(
+        "workspace.invalid-project",
+        "Agent context exceeded its file-count budget.",
+      );
+    }
+    const materialized: MaterializedAgentContextFile[] = [];
+    let totalBytes = 0;
+    for (const logicalPath of candidates.sort((left, right) => left.localeCompare(right))) {
+      const source = path.join(sourceProjectPath, ...logicalPath.split("/"));
+      const before = await lstat(source);
+      if (
+        !before.isFile() ||
+        before.isSymbolicLink() ||
+        before.nlink !== 1 ||
+        before.size > 1024 * 1024
+      ) {
+        throw new HoneyBeeCoreError(
+          "workspace.invalid-project",
+          "Agent context files must be private and at most 1 MiB.",
+        );
+      }
+      const handle = await open(source, "r");
+      let bytes: Buffer;
+      try {
+        const opened = await handle.stat();
+        if (
+          !opened.isFile() ||
+          opened.nlink !== 1 ||
+          opened.dev !== before.dev ||
+          opened.ino !== before.ino
+        ) {
+          throw new HoneyBeeCoreError(
+            "workspace.invalid-project",
+            "Agent context changed while it was being read.",
+          );
+        }
+        bytes = await handle.readFile();
+      } finally {
+        await handle.close();
+      }
+      totalBytes += bytes.byteLength;
+      if (totalBytes > 8 * 1024 * 1024) {
+        throw new HoneyBeeCoreError(
+          "workspace.invalid-project",
+          "Agent context exceeded its total byte budget.",
+        );
+      }
+      const target = path.join(workspacePath, ...logicalPath.split("/"));
+      await mkdir(path.dirname(target), { recursive: true });
+      const targetHandle = await open(target, "wx", 0o600);
+      try {
+        await targetHandle.writeFile(bytes);
+        await targetHandle.sync();
+      } finally {
+        await targetHandle.close();
+      }
+      materialized.push({
+        logicalPath,
+        content: bytes.toString("utf8"),
+        contentDigest: digestOf(bytes),
+      });
+    }
+    return materialized;
+  }
+
   public async manifest(
     sourceProjectPath: string,
     ignoredPaths: ReadonlySet<string> = new Set(),

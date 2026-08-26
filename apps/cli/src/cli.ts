@@ -219,7 +219,7 @@ const eventLine = (event: AnyOrchestrationEvent): string => {
     if (event.schemaVersion === 4) {
       return "[workflow] started run=" + event.runId + " mode=" + event.payload.mode;
     }
-    if (event.schemaVersion === 5) {
+    if (event.schemaVersion === 5 || event.schemaVersion === 6) {
       return "[workflow] started run=" + event.runId + " mode=" + event.payload.mode;
     }
     return "[workflow] started run=" + event.runId + " steps=" + event.payload.stepCount;
@@ -559,7 +559,10 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
   try {
     const journal = new FileOrchestrationJournal(root);
     const replay = await journal.replay(runId);
-    if (replay.status !== "indeterminate" && replay.events[0]?.schemaVersion === 5) {
+    if (
+      replay.status !== "indeterminate" &&
+      (replay.events[0]?.schemaVersion === 5 || replay.events[0]?.schemaVersion === 6)
+    ) {
       const start = replay.events[0];
       if (start.type !== "workflow.started")
         throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
@@ -669,7 +672,7 @@ const showRun = async (args: Extract<ParsedArguments, { command: "show" }>): Pro
     return;
   }
   const executorPresent = await new FileRunControl(root).executorPresent(runId);
-  if (replay.events[0]?.schemaVersion === 5) {
+  if (replay.events[0]?.schemaVersion === 5 || replay.events[0]?.schemaVersion === 6) {
     const events = replay.events as readonly OrchestrationEventV5[];
     const start = events[0];
     if (start?.type !== "workflow.started")
@@ -901,7 +904,7 @@ const submitControl = async (
     throw new HoneyBeeCoreError("run.terminal", "A terminal Run cannot accept control requests.");
   }
   const start = replay.events[0];
-  if (start?.schemaVersion === 5) {
+  if (start?.schemaVersion === 5 || start?.schemaVersion === 6) {
     if (start.type !== "workflow.started")
       throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
     if (start.payload.mode === "unity-work-v3" && start.payload.linkage.parentRunId !== undefined) {
@@ -1097,7 +1100,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     const start = replay.status === "indeterminate" ? undefined : replay.events[0];
     let batchDeletion = false;
     if (
-      start?.schemaVersion === 5 &&
+      (start?.schemaVersion === 5 || start?.schemaVersion === 6) &&
       start.type === "workflow.started" &&
       start.payload.mode === "unity-work-v3" &&
       start.payload.linkage.parentRunId !== undefined
@@ -1119,7 +1122,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
     }
     if (
       replay.status === "indeterminate" ||
-      (replay.status === "active" && [3, 4, 5].includes(replay.events[0]?.schemaVersion ?? 0))
+      (replay.status === "active" && [3, 4, 5, 6].includes(replay.events[0]?.schemaVersion ?? 0))
     ) {
       throw new HoneyBeeCoreError(
         "run.cleanup-pending",
@@ -1169,7 +1172,7 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
             childReplay.status === "indeterminate" ? undefined : childReplay.events[0];
           if (
             childReplay.status !== "terminal" ||
-            childStart?.schemaVersion !== 5 ||
+            (childStart?.schemaVersion !== 5 && childStart?.schemaVersion !== 6) ||
             childStart.type !== "workflow.started" ||
             childStart.payload.mode !== "unity-work-v3" ||
             childStart.payload.linkage.parentRunId !== runId

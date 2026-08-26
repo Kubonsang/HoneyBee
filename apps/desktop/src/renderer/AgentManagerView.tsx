@@ -29,6 +29,19 @@ const defaults = (provider: DesktopAgentProviderV1) =>
         ? { name: "OpenCode", command: "opencode", args: "run --pure" }
         : { name: "Custom Agent", command: "", args: "" };
 
+type AgentAdapter = DesktopAgentProfileV1["adapter"];
+
+const sessionDefaults = (provider: DesktopAgentProviderV1, adapter: AgentAdapter) => {
+  if (adapter === "codex-app-server-v1") {
+    return { command: "codex", args: "app-server --stdio" };
+  }
+  if (adapter === "opencode-acp-v1") {
+    return { command: "opencode", args: "acp" };
+  }
+  const legacy = defaults(provider);
+  return { command: legacy.command, args: legacy.args };
+};
+
 const message = (error: unknown): string =>
   error instanceof Error ? error.message : "Agent operation failed.";
 
@@ -40,6 +53,7 @@ export function AgentManagerView({
   onNotice,
 }: AgentManagerViewProps) {
   const [provider, setProvider] = useState<DesktopAgentProviderV1>("codex");
+  const [adapter, setAdapter] = useState<AgentAdapter>("stdio-framed-v2");
   const [displayName, setDisplayName] = useState(defaults("codex").name);
   const [command, setCommand] = useState(defaults("codex").command);
   const [args, setArgs] = useState(defaults("codex").args);
@@ -50,6 +64,7 @@ export function AgentManagerView({
   const selectProvider = (value: DesktopAgentProviderV1): void => {
     const next = defaults(value);
     setProvider(value);
+    setAdapter("stdio-framed-v2");
     setDisplayName(next.name);
     setCommand(next.command);
     setArgs(next.args);
@@ -65,6 +80,7 @@ export function AgentManagerView({
         ...(editingId === undefined ? {} : { agentId: editingId }),
         displayName: displayName.trim(),
         provider,
+        adapter,
         command: {
           command: command.trim(),
           ...(args.trim().length === 0 ? {} : { args: args.trim().split(/\s+/u) }),
@@ -151,7 +167,9 @@ export function AgentManagerView({
                   <div>
                     <h3>{agent.displayName}</h3>
                     <p>
-                      {agent.provider} · {status?.version ?? "version pending"}
+                      {agent.provider} ·{" "}
+                      {agent.adapter === "stdio-framed-v2" ? "Legacy" : "Experimental session"} ·{" "}
+                      {status?.version ?? "version pending"}
                     </p>
                   </div>
                   <span className={`agent-state ${status?.status ?? "probe-failed"}`}>
@@ -182,6 +200,7 @@ export function AgentManagerView({
                     onClick={() => {
                       setEditingId(agent.agentId);
                       setProvider(agent.provider);
+                      setAdapter(agent.adapter);
                       setDisplayName(agent.displayName);
                       setCommand(agent.command.command);
                       setArgs(agent.command.args?.join(" ") ?? "");
@@ -228,6 +247,27 @@ export function AgentManagerView({
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </label>
           <label>
+            <span>Adapter</span>
+            <select
+              value={adapter}
+              onChange={(event) => {
+                const next = event.target.value as AgentAdapter;
+                setAdapter(next);
+                const launch = sessionDefaults(provider, next);
+                setCommand(launch.command);
+                setArgs(launch.args);
+              }}
+            >
+              <option value="stdio-framed-v2">Legacy batch (stable)</option>
+              {provider === "codex" && (
+                <option value="codex-app-server-v1">Codex app-server (Experimental)</option>
+              )}
+              {provider === "opencode" && (
+                <option value="opencode-acp-v1">OpenCode ACP (Experimental)</option>
+              )}
+            </select>
+          </label>
+          <label>
             <span>Executable</span>
             <input value={command} onChange={(event) => setCommand(event.target.value)} />
           </label>
@@ -256,6 +296,12 @@ export function AgentManagerView({
             Saving approves hashes for the executable and resolved launch payloads. HoneyBee blocks
             execution if they change. Secrets and API keys must not be entered here.
           </p>
+          {adapter !== "stdio-framed-v2" && (
+            <p className="hint">
+              Experimental sessions expose root tool approval and Skill observation. Plan, resume,
+              steer, plugins, structured questions, and subagent approval remain unavailable.
+            </p>
+          )}
           <button
             className="primary wide"
             onClick={() => void save()}

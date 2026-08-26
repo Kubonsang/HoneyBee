@@ -1519,3 +1519,23 @@ select:focus {
     position: static;
   }
 }
+.agent-approval {
+  align-items: center;
+  border-color: rgba(245, 177, 0, 0.55);
+  display: flex;
+  gap: 24px;
+  justify-content: space-between;
+  margin: 0 32px 18px;
+  padding: 18px 20px;
+}
+
+.agent-approval h3,
+.agent-approval p {
+  margin: 4px 0 0;
+}
+
+.agent-approval-actions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 10px;
+}

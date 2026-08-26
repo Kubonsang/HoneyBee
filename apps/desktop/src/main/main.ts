@@ -5,12 +5,18 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, dialog, ipcMain } from "electron";
-import { HoneyBeeRuntimeFacade } from "honeybee-cli/runtime";
+import {
+  AgentSessionProcessRunner,
+  DesktopWorkScheduler,
+  HoneyBeeRuntimeFacade,
+} from "honeybee-cli/runtime";
 
 import {
   DesktopArtifactRequestV1Schema,
   DesktopAgentIdRequestV1Schema,
   DesktopAgentUpsertRequestV1Schema,
+  DesktopAgentApprovalListV1Schema,
+  DesktopAgentApprovalResponseV1Schema,
   DesktopBootstrapV2Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
@@ -33,6 +39,7 @@ import {
 } from "../shared/ipc.js";
 import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
 import { DesktopAgentManager } from "./agent-manager.js";
+import { DesktopAgentApprovalBroker } from "./agent-approval-broker.js";
 import { DesktopSettingsStore } from "./settings.js";
 import {
   DesktopSetupCoordinator,
@@ -80,8 +87,14 @@ const setup = new DesktopSetupCoordinator(
   },
 );
 const agentManager = new DesktopAgentManager(settings);
+const agentApprovalBroker = new DesktopAgentApprovalBroker();
+const desktopWorkScheduler = new DesktopWorkScheduler(4);
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
+  agentRunner: new AgentSessionProcessRunner(undefined, {
+    scheduler: desktopWorkScheduler,
+    approval: agentApprovalBroker,
+  }),
 });
 const components = new DesktopComponentManager(
   path.join(userData, "components"),
@@ -700,6 +713,7 @@ const registerIpc = (): void => {
               command: agent.command,
               trust: agent.trust,
               harness: "stdio-framed-v2" as const,
+              adapter: agent.adapter,
             },
           };
         }),
@@ -733,6 +747,26 @@ const registerIpc = (): void => {
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopAgentIdRequestV1Schema.parse(requestValue);
       return agentManager.connect(await agentFor(request.agentId));
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentApprovalsList,
+    safeHandler(async () =>
+      DesktopAgentApprovalListV1Schema.parse({
+        schemaVersion: 1,
+        approvals: agentApprovalBroker.pending(),
+      }),
+    ),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.agentApprovalRespond,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopAgentApprovalResponseV1Schema.parse(requestValue);
+      agentApprovalBroker.respond(request.approvalId, request.decision);
+      return DesktopAgentApprovalListV1Schema.parse({
+        schemaVersion: 1,
+        approvals: agentApprovalBroker.pending(),
+      });
     }),
   );
   ipcMain.handle(

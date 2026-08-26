@@ -109,7 +109,7 @@ The OS Editor Registry and Warm Bridge binding are separate contracts. HoneyBee-
 
 Capabilities are selected by HoneyBee config, not by Agent output. compile and warm-test execute sequentially inside the child Run while its assigned Editor slot is exclusive. HoneyBee accepts Evidence only when the TestPlay protocol 3 response matches the requested capability, Editor/workspace/session binding, process exit, and durable summary/manifest; Warm Test must also report at least one executed test. Capture, Semantic IR, Recipe systems, distributed workers, preemption, and automatic capacity optimization remain out of scope.
 
-Parent and v0.6 child Journals use schema v5. Crash recovery does not rerun the Agent or a capability: it drains unmatched recorded processes/containment, closes the Editor-pool lease, verifies the source, preserves any verified patch Artifact, and releases the workspace. Terminal success follows workspace release, and deterministic E2E coverage asserts Editor, pool, child-process, and workspace residual zero. See [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md).
+Parent and stable v0.6 child Journals use schema v5; an opt-in structured Agent session child uses the v5-compatible schema v6 extension. Crash recovery does not rerun the Agent or a capability: it drains unmatched recorded processes/containment, closes the Editor-pool lease, verifies the source, preserves any verified patch Artifact, and releases the workspace. Terminal success follows workspace release, and deterministic E2E coverage asserts Editor, pool, child-process, and workspace residual zero. See [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md).
 
 ## Desktop control plane MVP
 
@@ -130,6 +130,15 @@ Open **Agents** first to connect Codex, Claude Code, OpenCode, or a custom `stdi
 HoneyBee stores global execution profiles, not provider credentials: official CLI login remains
 provider-owned, while HoneyBee records only bounded readiness and version results. Existing managed
 profiles are migrated by extracting and deduplicating their embedded Agent command.
+
+**stdio-framed-v2** remains the stable default. The Agent editor also offers explicit Experimental
+profiles for exactly Codex CLI 0.146.0 (app-server --stdio) and OpenCode 1.18.16 (acp).
+These profiles use one Desktop-local capacity-four priority/FIFO scheduler rather than another
+durable lease. Root approval requests appear in Desktop and support only **Allow once** or
+**Deny**; the decision Artifact is flushed before delivery. Current capabilities are intentionally
+limited to tool approval and observe-only Skill discovery/materialization. Plan, resume, steer,
+plugins, structured questions, and subagent approval remain unsupported. See
+[ADR-026](docs/decisions/ADR-026-structured-agent-sessions.md).
 
 Open Projects and choose **Add project**. The one-time Environment Profile step discovers local
 Unity and asks only for a changeable preferred Agent from the global library; HoneyBee then installs or reuses the immutable `unity-workspace-storage` version

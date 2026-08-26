@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 import {
+  AgentAdapterV1Schema,
   AgentLaunchTrustV1Schema,
   type AgentLaunchTrustV1,
 } from "@honeybee/orchestration-contracts";
@@ -226,12 +227,25 @@ export const DesktopAgentProfileV1Schema = z
     provider: DesktopAgentProviderV1Schema,
     command: SetupCommandSchema,
     trust: AgentLaunchTrustV1Schema.optional(),
-    adapter: z.literal("stdio-framed-v2"),
+    adapter: AgentAdapterV1Schema,
     enabled: z.boolean(),
     createdAt: z.string().datetime(),
     updatedAt: z.string().datetime(),
   })
-  .strict();
+  .strict()
+  .superRefine((profile, context) => {
+    if (
+      (profile.adapter === "codex-app-server-v1" && profile.provider !== "codex") ||
+      (profile.adapter === "opencode-acp-v1" && profile.provider !== "opencode") ||
+      (profile.provider === "claude" && profile.adapter !== "stdio-framed-v2")
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["adapter"],
+        message: "The selected Agent provider does not support this adapter.",
+      });
+    }
+  });
 export type DesktopAgentProfileV1 = z.infer<typeof DesktopAgentProfileV1Schema>;
 export type { AgentLaunchTrustV1 };
 
@@ -263,12 +277,13 @@ export const DesktopAgentUpsertRequestV1Schema = z
     agentId: z.string().uuid().optional(),
     displayName: z.string().trim().min(1).max(120),
     provider: DesktopAgentProviderV1Schema,
+    adapter: AgentAdapterV1Schema.default("stdio-framed-v2"),
     command: SetupCommandSchema,
     payloadPaths: z.array(z.string().min(1)).max(15).optional(),
     enabled: z.boolean().default(true),
   })
   .strict();
-export type DesktopAgentUpsertRequestV1 = z.infer<typeof DesktopAgentUpsertRequestV1Schema>;
+export type DesktopAgentUpsertRequestV1 = z.input<typeof DesktopAgentUpsertRequestV1Schema>;
 
 export const DesktopAgentIdRequestV1Schema = z
   .object({ schemaVersion: z.literal(1), agentId: z.string().uuid() })
@@ -284,6 +299,36 @@ export const DesktopAgentConnectResultV1Schema = z
   })
   .strict();
 export type DesktopAgentConnectResultV1 = z.infer<typeof DesktopAgentConnectResultV1Schema>;
+
+export const DesktopPendingAgentApprovalV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    approvalId: z.string().uuid(),
+    runId: z.string().uuid(),
+    stepId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u),
+    kind: z.enum(["command", "file-change", "permissions", "unknown"]),
+    summary: z.string().trim().min(1).max(500),
+    requestedAt: z.string().datetime(),
+  })
+  .strict();
+export type DesktopPendingAgentApprovalV1 = z.infer<typeof DesktopPendingAgentApprovalV1Schema>;
+
+export const DesktopAgentApprovalListV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    approvals: z.array(DesktopPendingAgentApprovalV1Schema),
+  })
+  .strict();
+export type DesktopAgentApprovalListV1 = z.infer<typeof DesktopAgentApprovalListV1Schema>;
+
+export const DesktopAgentApprovalResponseV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    approvalId: z.string().uuid(),
+    decision: z.enum(["allow-once", "deny"]),
+  })
+  .strict();
+export type DesktopAgentApprovalResponseV1 = z.infer<typeof DesktopAgentApprovalResponseV1Schema>;
 
 export const ManagedUnityEnvironmentV1Schema = z
   .object({
@@ -779,6 +824,8 @@ export const DesktopIpcChannels = {
   agentsRemove: "desktop.agents.remove.v1",
   agentsProbe: "desktop.agents.probe.v1",
   agentsConnect: "desktop.agents.connect.v1",
+  agentApprovalsList: "desktop.agent-approvals.list.v1",
+  agentApprovalRespond: "desktop.agent-approvals.respond.v1",
   projectAgentPreference: "desktop.project.agent-preference.v1",
 } as const;
 
@@ -819,6 +866,10 @@ export interface HoneyBeeDesktopApi {
   removeAgent(request: DesktopAgentIdRequestV1): Promise<DesktopBootstrapV2>;
   probeAgent(request: DesktopAgentIdRequestV1): Promise<DesktopAgentStatusV1>;
   connectAgent(request: DesktopAgentIdRequestV1): Promise<DesktopAgentConnectResultV1>;
+  listAgentApprovals(): Promise<DesktopAgentApprovalListV1>;
+  respondAgentApproval(
+    request: DesktopAgentApprovalResponseV1,
+  ): Promise<DesktopAgentApprovalListV1>;
   setProjectAgentPreference(
     request: z.infer<typeof DesktopProjectAgentPreferenceRequestV1Schema>,
   ): Promise<DesktopBootstrapV2>;
@@ -851,6 +902,8 @@ export const DesktopIpcResponseSchemas = {
   agentsRemove: DesktopBootstrapV2Schema,
   agentsProbe: DesktopAgentStatusV1Schema,
   agentsConnect: DesktopAgentConnectResultV1Schema,
+  agentApprovalsList: DesktopAgentApprovalListV1Schema,
+  agentApprovalRespond: DesktopAgentApprovalListV1Schema,
   projectAgentPreference: DesktopBootstrapV2Schema,
 } as const;
 

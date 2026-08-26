@@ -92,6 +92,9 @@ export const UnityAgentConfigSchema = z
     command: AgentCommandSchema,
     trust: AgentLaunchTrustV1Schema.optional(),
     harness: z.literal("stdio-framed-v2"),
+    adapter: z
+      .enum(["stdio-framed-v2", "codex-app-server-v1", "opencode-acp-v1"])
+      .default("stdio-framed-v2"),
     timeoutMs: z.number().int().positive().optional(),
     maxOutputBytes: z.number().int().positive().optional(),
   })
@@ -149,6 +152,10 @@ export const ArtifactKindSchema = z.enum([
   "editor-ownership-receipt",
   "warm-bridge-binding",
   "unity-capability-evidence",
+  "agent-session-transcript",
+  "agent-approval-request",
+  "agent-skill-manifest",
+  "agent-context-content",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
@@ -3119,9 +3126,160 @@ export const TERMINAL_WORKFLOW_EVENT_V5_TYPES = new Set<TerminalWorkflowEventV5[
   "workflow.cancelled",
 ]);
 
+const EventV6BaseSchema = EventV5BaseSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(6),
+});
+const eventV6 = <Type extends string, Payload extends z.ZodType>(type: Type, payload: Payload) =>
+  EventV6BaseSchema.extend({ type: z.literal(type), payload }).strict();
+const AgentCapabilitiesJournalV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    adapter: z.enum(["codex-app-server-v1", "opencode-acp-v1"]),
+    toolApproval: z.literal("root-only"),
+    skills: z.enum(["exact-isolation", "observe-only"]),
+    plan: z.literal("unsupported"),
+    resume: z.literal("unsupported"),
+    steer: z.literal("unsupported"),
+    userInput: z.literal("unsupported"),
+    subagentApproval: z.literal("unsupported"),
+    plugins: z.literal("disabled"),
+  })
+  .strict();
+const SessionEventV6Schema = z.discriminatedUnion("type", [
+  eventV6("work.admission-queued", z.object({ priority: UnityWorkPrioritySchema }).strict()),
+  eventV6(
+    "work.admission-entered",
+    z
+      .object({ priority: UnityWorkPrioritySchema, waitMs: z.number().int().nonnegative() })
+      .strict(),
+  ),
+  eventV6(
+    "agent.session-opened",
+    z
+      .object({
+        adapter: z.enum(["codex-app-server-v1", "opencode-acp-v1"]),
+        sessionIdDigest: ContentDigestSchema,
+        capabilities: AgentCapabilitiesJournalV1Schema,
+      })
+      .strict(),
+  ),
+  eventV6("agent.turn-started", z.object({ turnIdDigest: ContentDigestSchema }).strict()),
+  eventV6(
+    "agent.approval-requested",
+    z
+      .object({
+        approvalId: EventIdSchema,
+        kind: z.enum(["command", "file-change", "permissions", "unknown"]),
+        request: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+  eventV6(
+    "agent.approval-resolved",
+    z
+      .object({
+        approvalId: EventIdSchema,
+        decision: z.enum(["allow-once", "deny"]),
+        source: z.enum(["policy", "user"]),
+        receipt: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+  eventV6("agent.approval-delivered", z.object({ approvalId: EventIdSchema }).strict()),
+  eventV6(
+    "agent.turn-completed",
+    z
+      .object({
+        turnIdDigest: ContentDigestSchema,
+        status: z.enum(["completed", "failed", "interrupted"]),
+        outputBytes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ),
+  eventV6(
+    "agent.session-closed",
+    z
+      .object({
+        reason: z.enum(["completed", "failed", "interrupted"]),
+        transcript: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+]);
+
+const V5EventAsV6Schema = z
+  .preprocess(
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      "schemaVersion" in value &&
+      value.schemaVersion === 6
+        ? { ...value, schemaVersion: 5 }
+        : value,
+    OrchestrationEventV5Schema,
+  )
+  .transform((event) => ({ ...event, schemaVersion: 6 as const }));
+
+export const OrchestrationEventV6Schema = z
+  .union([SessionEventV6Schema, V5EventAsV6Schema])
+  .superRefine((event, context) => {
+    if (
+      (event.type.startsWith("agent.") || event.type.startsWith("work.admission-")) &&
+      event.stepId === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Session event needs stepId.",
+      });
+    }
+    if (
+      event.type === "agent.approval-requested" &&
+      event.payload.request.kind !== "agent-approval-request"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "request", "kind"],
+        message: "Approval requests need an agent-approval-request Artifact.",
+      });
+    }
+    if (
+      event.type === "agent.approval-resolved" &&
+      event.payload.receipt.kind !== "approval-decision"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "receipt", "kind"],
+        message: "Approval decisions need an approval-decision Artifact.",
+      });
+    }
+    if (
+      event.type === "agent.session-closed" &&
+      event.payload.transcript.kind !== "agent-session-transcript"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "transcript", "kind"],
+        message: "Closed sessions need an agent-session-transcript Artifact.",
+      });
+    }
+  });
+export type OrchestrationEventV6 = z.infer<typeof OrchestrationEventV6Schema>;
+
+export type TerminalWorkflowEventV6 = Extract<
+  OrchestrationEventV6,
+  { type: "workflow.completed" | "workflow.failed" | "workflow.cancelled" }
+>;
+export const TERMINAL_WORKFLOW_EVENT_V6_TYPES = new Set<TerminalWorkflowEventV6["type"]>([
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+]);
+
 export type AnyOrchestrationEvent =
   | OrchestrationEventV1
   | OrchestrationEventV2
   | OrchestrationEventV3
   | OrchestrationEventV4
-  | OrchestrationEventV5;
+  | OrchestrationEventV5
+  | OrchestrationEventV6;
