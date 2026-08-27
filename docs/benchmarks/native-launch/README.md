@@ -19,7 +19,8 @@ disposable project-root copy first and excludes generated top-level roots such a
 For each project the baseline records:
 
 - HoneyBee warm Parent: 20 samples.
-- HoneyBee cold Parent: 5 samples, each using a distinct, already provisioned schema-2 Parent.
+- HoneyBee cold Parent: up to 5 non-blocking diagnostic samples when distinct, safely
+  provisioned schema-2 Parents already exist.
 - Direct CLI process creation: 20 samples against the disposable copy.
 - Operator-observed Direct CLI prompt readiness: 5 samples against the disposable copy.
 
@@ -32,19 +33,22 @@ HoneyBee timings use durable Journal timestamps:
 - acquire: `workspace.acquire-started` to `workspace.acquired`.
 
 Reports contain the median, maximum, sample count, and raw values. They deliberately do not label a
-five- or twenty-sample maximum as p95. Cold Parent values are absolute gates; they are not compared
-with a nonexistent Direct CLI cold leg.
+five- or twenty-sample maximum as p95. Only warm Parent values are performance gates. Cold Parent
+values are diagnostics and are not compared with a nonexistent Direct CLI cold leg.
 
-## Cold Parent constraint
+## Cold Parent diagnostic
 
 The current workspace-storage public contract can begin, commit, and abort parent staging, but it
-does not expose deletion of a committed immutable Parent. The benchmark therefore refuses to make
-up compatibility keys or purge machine-global storage state. Supply five distinct Parent configs
-that Setup Center provisioned for benchmark inputs. An immutable committed Parent is provider cache,
-not a residual; each measured Work must still release its child workspace/VHDX with residual zero.
+does not expose a safe reset or deletion operation for a committed immutable Parent. The benchmark
+therefore refuses to make up compatibility keys or purge machine-global storage state. If five
+distinct Parent configs already exist, their samples are recorded as diagnostics. An immutable
+committed Parent is provider cache, not a residual; each measured Work must still release its child
+workspace/VHDX with residual zero.
 
-If `coldBatchConfigPaths` is empty, warm/direct/primitive collection remains usable, but the report
-stays `incomplete` and cannot be frozen.
+If `coldBatchConfigPaths` is empty, the report records
+`not-collected: safe-reset-unavailable`. This does not block freezing a complete warm/direct/primitive
+baseline. If cold configs are supplied, every cold sample must still satisfy source integrity,
+terminal Journal, and residual-zero checks; a collected safety failure blocks freezing.
 
 ## Primitive activation budget
 
@@ -97,9 +101,9 @@ The Evidence directory contains:
 - `journals/`: exact per-sample JSONL copies;
 - `logs/`: bounded probe/provider stdout and stderr.
 
-After the Evidence and proposed gate values are explicitly approved, prepare a local gate JSON with
-`schemaVersion`, `approvedAt`, `approvedBy`, project-specific warm/cold prepare/acquire maxima, and a
-native activation `formula` plus `budgetMs`. Then freeze it:
+After the Evidence and proposed gate values are explicitly approved, prepare a strict schema-v2
+local gate JSON with `approvedAt`, `approvedBy`, project-specific warm prepare/acquire maxima, and a
+native activation `formula` plus `budgetMs`. Cold thresholds are not accepted. Then freeze it:
 
 ```powershell
 py dogfood/native_benchmark.py freeze <session-id> `

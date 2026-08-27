@@ -301,7 +301,7 @@ def save_session(session: dict[str, Any]) -> None:
 
 def load_session(identifier: str) -> dict[str, Any]:
     value = read_json(session_file(identifier))
-    if (not isinstance(value, dict) or value.get("schemaVersion") != 1
+    if (not isinstance(value, dict) or value.get("schemaVersion") != 2
             or value.get("sessionId") != identifier):
         raise ValueError("Native benchmark session is invalid.")
     return value
@@ -392,8 +392,8 @@ def initialize(spec_path: Path, identifier: str | None) -> dict[str, Any]:
     spec = strict_object(
         read_json(spec_path), {"schemaVersion", "projects", "provider", "counts"}, "spec"
     )
-    if spec.get("schemaVersion") != 1:
-        raise ValueError("Native benchmark spec must use schemaVersion 1.")
+    if spec.get("schemaVersion") != 2:
+        raise ValueError("Native benchmark spec must use schemaVersion 2.")
     counts = counts_from(spec)
     project_values = spec.get("projects")
     if not isinstance(project_values, list) or len(project_values) != 2:
@@ -462,7 +462,7 @@ def initialize(spec_path: Path, identifier: str | None) -> dict[str, Any]:
     evidence_root.mkdir(parents=True)
     state_root.mkdir(parents=True)
     session: dict[str, Any] = {
-        "schemaVersion": 1, "sessionId": session_id, "createdAt": utc_now(),
+        "schemaVersion": 2, "sessionId": session_id, "createdAt": utc_now(),
         "updatedAt": utc_now(), "phase": "baseline", "evidenceRoot": str(evidence_root),
         "stateRoot": str(state_root), "specPath": str(spec_path.resolve()), "counts": counts,
         "projects": projects, "provider": provider,
@@ -818,13 +818,15 @@ def report_payload(session: Mapping[str, Any]) -> dict[str, Any]:
     for project in session["projects"]:
         honeybee = session["samples"]["honeybee"][project["id"]]
         direct = session["samples"]["direct"][project["id"]]
-        if not project["coldConfigs"]:
+        cold_collected = bool(project["coldConfigs"])
+        if not cold_collected:
             cold_count = session["counts"]["cold"]
             issues.append({
-                "code": "benchmark.cold-parent-input-missing",
+                "code": "benchmark.cold-diagnostic-not-collected",
+                "severity": "diagnostic",
                 "message": (
-                    f"{project['id']} has no {cold_count} distinct "
-                    "schema-2 Parent configs."
+                    f"{project['id']} has no safe reset mechanism for {cold_count} distinct "
+                    "schema-2 Parent diagnostics; warm gates remain valid."
                 ),
             })
         projects.append({
@@ -840,6 +842,12 @@ def report_payload(session: Mapping[str, Any]) -> dict[str, Any]:
                     "passed": sum(item.get("status") == "pass" for item in honeybee["warm"]),
                 },
                 "cold": {
+                    "collectionStatus": (
+                        "collected" if cold_collected else "not-collected"
+                    ),
+                    **({} if cold_collected else {
+                        "reason": "safe-reset-unavailable",
+                    }),
                     "prepare": sample_stats([item.get("prepareMs") for item in honeybee["cold"]]),
                     "acquire": sample_stats([item.get("acquireMs") for item in honeybee["cold"]]),
                     "stdioActivation": sample_stats([
@@ -881,15 +889,20 @@ def report_payload(session: Mapping[str, Any]) -> dict[str, Any]:
         if not primitive_complete:
             issues.append({
                 "code": "benchmark.primitive-incomplete",
+                "severity": "error",
                 "message": "Primitive samples are missing, unsupported, or have the wrong count.",
             })
         complete = complete and primitive_complete
     for project in session["projects"]:
         honeybee = session["samples"]["honeybee"][project["id"]]
         direct = session["samples"]["direct"][project["id"]]
+        cold_configured = bool(project["coldConfigs"])
         expected_counts = all((
             len(honeybee["warm"]) == session["counts"]["warm"],
-            len(honeybee["cold"]) == session["counts"]["cold"],
+            (
+                len(honeybee["cold"]) == session["counts"]["cold"]
+                if cold_configured else len(honeybee["cold"]) == 0
+            ),
             len(direct["processActivation"]) == session["counts"]["directProcess"],
             len(direct["promptReady"]) == session["counts"]["promptReady"],
         ))
@@ -906,6 +919,7 @@ def report_payload(session: Mapping[str, Any]) -> dict[str, Any]:
         if not expected_counts or not samples_pass or not timings_complete:
             issues.append({
                 "code": "benchmark.project-incomplete",
+                "severity": "error",
                 "message": (
                     f"{project['id']} has missing, failed, or non-durable timing samples."
                 ),
@@ -914,11 +928,12 @@ def report_payload(session: Mapping[str, Any]) -> dict[str, Any]:
     if session["environmentPins"].get("gitTrackedDirty"):
         issues.append({
             "code": "benchmark.git-dirty",
+            "severity": "error",
             "message": "Baseline was initialized from a dirty tracked tree.",
         })
         complete = False
     return {
-        "schemaVersion": 1, "sessionId": session["sessionId"], "phase": "baseline",
+        "schemaVersion": 2, "sessionId": session["sessionId"], "phase": "baseline",
         "generatedAt": utc_now(),
         "status": "complete-awaiting-approval" if complete else "incomplete",
         "approvalStatus": "pending", "counts": session["counts"],
@@ -942,7 +957,7 @@ def render_summary(metrics: Mapping[str, Any]) -> str:
         "- Status: **{}**".format(metrics["status"]),
         "- Gate approval: **{}**".format(metrics["approvalStatus"]),
         "- Statistics: median + max; no p95 is reported.",
-        "- Cold measurements are absolute and are not compared with Direct CLI.", "",
+        "- Cold Parent measurements are non-blocking diagnostics, never performance gates.", "",
         "## Projects", "",
         "| Project | Role | Files / bytes | Warm prepare | Warm acquire | Cold prepare | Cold acquire | Direct process | Prompt ready |",
         "|---|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -976,7 +991,7 @@ def render_summary(metrics: Mapping[str, Any]) -> str:
         )
     else:
         lines.append("- Not measured.")
-    lines.extend(["", "## Issues", ""])
+    lines.extend(["", "## Diagnostics and issues", ""])
     if metrics["issues"]:
         lines.extend(
             "- {}: {}".format(issue["code"], issue["message"])
@@ -1022,7 +1037,7 @@ def validate_gate_approval(
         "gate approval",
     )
     approved_by = gate.get("approvedBy")
-    if gate.get("schemaVersion") != 1 or not isinstance(approved_by, str) or not approved_by.strip():
+    if gate.get("schemaVersion") != 2 or not isinstance(approved_by, str) or not approved_by.strip():
         raise ValueError("Gate approval identity is invalid.")
     approved_at = datetime.fromisoformat(
         str(gate.get("approvedAt", "")).replace("Z", "+00:00")
@@ -1034,20 +1049,19 @@ def validate_gate_approval(
         raise ValueError("Gate approval must cover every measured project exactly once.")
     for project_id in project_ids:
         temperatures = strict_object(
-            prepare[project_id], {"warm", "cold"}, f"prepareAcquire.{project_id}"
+            prepare[project_id], {"warm"}, f"prepareAcquire.{project_id}"
         )
-        if set(temperatures) != {"warm", "cold"}:
-            raise ValueError("Prepare/acquire gates require warm and cold values.")
-        for temperature in ("warm", "cold"):
-            limits = strict_object(
-                temperatures[temperature],
-                {"prepareMaxMs", "acquireMaxMs"},
-                f"prepareAcquire.{project_id}.{temperature}",
-            )
-            for name in ("prepareMaxMs", "acquireMaxMs"):
-                number = limits.get(name)
-                if not isinstance(number, (int, float)) or isinstance(number, bool) or number <= 0:
-                    raise ValueError(f"{project_id} {temperature} {name} must be positive.")
+        if set(temperatures) != {"warm"}:
+            raise ValueError("Prepare/acquire gates require exactly the warm value.")
+        limits = strict_object(
+            temperatures["warm"],
+            {"prepareMaxMs", "acquireMaxMs"},
+            f"prepareAcquire.{project_id}.warm",
+        )
+        for name in ("prepareMaxMs", "acquireMaxMs"):
+            number = limits.get(name)
+            if not isinstance(number, (int, float)) or isinstance(number, bool) or number <= 0:
+                raise ValueError(f"{project_id} warm {name} must be positive.")
     activation = strict_object(
         gate.get("nativeActivation"), {"formula", "budgetMs"}, "nativeActivation"
     )
@@ -1077,7 +1091,7 @@ def freeze_baseline(
     except ValueError as error:
         raise ValueError("Frozen baselines must be under docs/benchmarks/native-launch.") from error
     frozen = {
-        "schemaVersion": 1, "baselineId": session["sessionId"],
+        "schemaVersion": 2, "baselineId": session["sessionId"],
         "measuredAt": metrics["generatedAt"], "gitCommit": session["environmentPins"]["gitCommit"],
         "environment": {
             "platform": session["environmentPins"]["platform"],

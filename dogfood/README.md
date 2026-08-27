@@ -80,7 +80,9 @@ The Desktop session observer above measures end-to-end dogfood work. The separat
 `native_benchmark.py` runner measures the prerequisite isolation/activation cost before Native
 Agent Terminal product work begins. It uses the production Runtime Facade and stdio containment,
 runs the checked-in no-change demo Agent, protects Direct CLI measurements with disposable full-root
-copies, and reports median plus maximum rather than a low-sample fake p95.
+copies, and reports median plus maximum rather than a low-sample fake p95. Cold Parent measurements
+are non-blocking diagnostics until workspace-storage exposes a safe committed-Parent reset operation;
+source or cleanup failures in any collected cold sample still fail closed.
 
 See [the Native launch baseline protocol](../docs/benchmarks/native-launch/README.md) and
 `native-benchmark.spec.example.json`. Generated Evidence remains under

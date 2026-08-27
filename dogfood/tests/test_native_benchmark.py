@@ -170,7 +170,7 @@ class NativeBenchmarkTest(unittest.TestCase):
             )
             self.assertNotEqual(after_storage["providerSha256"], after_provider["providerSha256"])
 
-    def test_report_stays_incomplete_without_cold_parent_inputs(self) -> None:
+    def test_report_can_complete_with_cold_parent_diagnostic_not_collected(self) -> None:
         project = {
             "id": "fixture",
             "role": "fixture",
@@ -191,6 +191,7 @@ class NativeBenchmarkTest(unittest.TestCase):
             "environmentPins": {"gitTrackedDirty": False},
             "samples": {
                 "primitives": {
+                    "supported": True,
                     "rawFsync": [1],
                     "journalAppend": [1],
                     "artifactPut": [1],
@@ -199,13 +200,99 @@ class NativeBenchmarkTest(unittest.TestCase):
                     "jobObjectCreateAssign": [1],
                 },
                 "honeybee": {
-                    name: {"warm": [{"status": "pass"}], "cold": []}
+                    name: {
+                        "warm": [{
+                            "status": "pass",
+                            "prepareMs": 1,
+                            "acquireMs": 1,
+                            "durableStdioActivationMs": 1,
+                        }],
+                        "cold": [],
+                    }
                     for name in ("fixture", "actual")
                 },
                 "direct": {
                     name: {
-                        "processActivation": [{"activationMs": 1, "copyUnchanged": True}],
-                        "promptReady": [{"promptReadyMs": 1, "copyUnchanged": True}],
+                        "processActivation": [{
+                            "status": "pass", "activationMs": 1, "copyUnchanged": True,
+                        }],
+                        "promptReady": [{
+                            "status": "pass", "promptReadyMs": 1, "copyUnchanged": True,
+                        }],
+                    }
+                    for name in ("fixture", "actual")
+                },
+            },
+        }
+        report = report_payload(session)
+        self.assertEqual("complete-awaiting-approval", report["status"])
+        self.assertEqual(
+            2,
+            sum(
+                issue["code"] == "benchmark.cold-diagnostic-not-collected"
+                for issue in report["issues"]
+            ),
+        )
+        self.assertTrue(all(
+            project["honeybee"]["cold"]["collectionStatus"] == "not-collected"
+            and project["honeybee"]["cold"]["reason"] == "safe-reset-unavailable"
+            for project in report["projects"]
+        ))
+
+    def test_collected_cold_failure_still_blocks_completion(self) -> None:
+        project = {
+            "id": "fixture",
+            "role": "fixture",
+            "inputManifest": {"fileCount": 1, "logicalBytes": 1, "digest": "a"},
+            "coldConfigs": [{"parentId": "cold"}],
+        }
+        actual = {**project, "id": "actual", "role": "actual"}
+        session = {
+            "sessionId": "session",
+            "counts": {
+                "warm": 1,
+                "cold": 1,
+                "directProcess": 1,
+                "promptReady": 1,
+                "primitive": 1,
+            },
+            "projects": [project, actual],
+            "environmentPins": {"gitTrackedDirty": False},
+            "samples": {
+                "primitives": {
+                    "supported": True,
+                    "rawFsync": [1],
+                    "journalAppend": [1],
+                    "artifactPut": [1],
+                    "immutablePublication": [1],
+                    "suspendedProcessCreate": [1],
+                    "jobObjectCreateAssign": [1],
+                },
+                "honeybee": {
+                    name: {
+                        "warm": [{
+                            "status": "pass",
+                            "prepareMs": 1,
+                            "acquireMs": 1,
+                            "durableStdioActivationMs": 1,
+                        }],
+                        "cold": [{
+                            "status": "fail",
+                            "prepareMs": 1,
+                            "acquireMs": 1,
+                            "durableStdioActivationMs": 1,
+                        }],
+                    }
+                    for name in ("fixture", "actual")
+                },
+                "direct": {
+                    name: {
+                        "processActivation": [{
+                            "status": "pass", "activationMs": 1, "copyUnchanged": True,
+                        }],
+                        "promptReady": [{
+                            "status": "pass", "promptReadyMs": 1, "copyUnchanged": True,
+                        }],
                     }
                     for name in ("fixture", "actual")
                 },
@@ -213,25 +300,23 @@ class NativeBenchmarkTest(unittest.TestCase):
         }
         report = report_payload(session)
         self.assertEqual("incomplete", report["status"])
-        self.assertEqual(
-            2,
-            sum(issue["code"] == "benchmark.cold-parent-input-missing" for issue in report["issues"]),
-        )
+        self.assertTrue(all(
+            project["honeybee"]["cold"]["collectionStatus"] == "collected"
+            for project in report["projects"]
+        ))
 
-    def test_gate_approval_is_strict_and_covers_both_temperatures(self) -> None:
+    def test_gate_approval_is_strict_and_warm_only(self) -> None:
         formula = "4 * journal"
         gate = {
-            "schemaVersion": 1,
+            "schemaVersion": 2,
             "approvedAt": "2026-08-26T00:00:00Z",
             "approvedBy": "owner",
             "prepareAcquire": {
                 "fixture": {
                     "warm": {"prepareMaxMs": 1, "acquireMaxMs": 2},
-                    "cold": {"prepareMaxMs": 3, "acquireMaxMs": 4},
                 },
                 "actual": {
                     "warm": {"prepareMaxMs": 5, "acquireMaxMs": 6},
-                    "cold": {"prepareMaxMs": 7, "acquireMaxMs": 8},
                 },
             },
             "nativeActivation": {"formula": formula, "budgetMs": 9},
@@ -242,6 +327,16 @@ class NativeBenchmarkTest(unittest.TestCase):
         invalid = {**gate, "nativeActivation": {"formula": "changed", "budgetMs": 9}}
         with self.assertRaises(ValueError):
             validate_gate_approval(invalid, ["fixture", "actual"], formula)
+        legacy = {**gate, "schemaVersion": 1}
+        with self.assertRaises(ValueError):
+            validate_gate_approval(legacy, ["fixture", "actual"], formula)
+        with_cold = json.loads(json.dumps(gate))
+        with_cold["prepareAcquire"]["fixture"]["cold"] = {
+            "prepareMaxMs": 3,
+            "acquireMaxMs": 4,
+        }
+        with self.assertRaises(ValueError):
+            validate_gate_approval(with_cold, ["fixture", "actual"], formula)
 
 
 if __name__ == "__main__":
