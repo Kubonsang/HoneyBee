@@ -71,7 +71,7 @@ class MeasuringAgentRunner {
   }
 }
 
-const benchmarkConfig = async (baseConfigPath, targetPath) => {
+export const benchmarkConfig = async (baseConfigPath, targetPath) => {
   const config = await readJson(baseConfigPath);
   if (![3, 4].includes(config.schemaVersion) || config.mode !== "unity-batch") {
     throw new Error("The benchmark requires a v0.6 schema-3 or schema-4 Unity batch config.");
@@ -83,7 +83,7 @@ const benchmarkConfig = async (baseConfigPath, targetPath) => {
     { role: "entrypoint", path: process.execPath },
     { role: "payload", path: DEMO_AGENT },
   ]);
-  const agent = {
+  const runtimeAgent = {
     command: { command: process.execPath, args: [DEMO_AGENT, "native-baseline"] },
     trust,
     harness: "stdio-framed-v2",
@@ -91,22 +91,29 @@ const benchmarkConfig = async (baseConfigPath, targetPath) => {
     timeoutMs: 120_000,
     maxOutputBytes: 1024 * 1024,
   };
+  const configAgent = {
+    command: runtimeAgent.command,
+    harness: runtimeAgent.harness,
+    timeoutMs: runtimeAgent.timeoutMs,
+    maxOutputBytes: runtimeAgent.maxOutputBytes,
+  };
   const output = {
     ...config,
-    transaction: { ...config.transaction, agent },
+    transaction: { ...config.transaction, agent: configAgent },
   };
   if (config.schemaVersion === 4) {
-    output.works = config.works.map((work) => ({ ...work, agent }));
+    output.works = config.works.map((work) => ({ ...work, agent: runtimeAgent }));
   }
   await writeJsonStable(targetPath, output);
-  return output;
+  return { config: output, runtimeAgent };
 };
 
 const runUnitySample = async (requestPath) => {
   const request = await readJson(requestPath);
   const stateRoot = path.resolve(request.stateRoot);
   const configPath = path.join(path.dirname(path.resolve(requestPath)), "benchmark-config.json");
-  const config = await benchmarkConfig(request.batchConfigPath, configPath);
+  const benchmark = await benchmarkConfig(request.batchConfigPath, configPath);
+  const config = benchmark.config;
   const projectPath = path.resolve(request.projectPath);
   const configured = path.resolve(config.transaction.sourceProjectPath);
   if (
@@ -126,7 +133,7 @@ const runUnitySample = async (requestPath) => {
   let journalPath;
   if (existing[0] === undefined) {
     const started = await runtime.startUnityWorks({
-      schemaVersion: 1,
+      schemaVersion: 2,
       batchConfigPath: configPath,
       projectPath,
       maxParallelWorks: 1,
@@ -136,6 +143,7 @@ const runUnitySample = async (requestPath) => {
           task: "Benchmark activation only. Make no changes and return a completed response.",
           priority: "background",
           capabilities: [],
+          agent: benchmark.runtimeAgent,
         },
       ],
     });
@@ -284,11 +292,16 @@ const main = async () => {
   );
 };
 
-try {
-  process.stdout.write(JSON.stringify(await main()) + "\n");
-} catch (error) {
-  process.stderr.write(
-    `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
-  );
-  process.exitCode = 1;
+if (
+  process.argv[1] !== undefined &&
+  path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+) {
+  try {
+    process.stdout.write(JSON.stringify(await main()) + "\n");
+  } catch (error) {
+    process.stderr.write(
+      `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+    );
+    process.exitCode = 1;
+  }
 }
