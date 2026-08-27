@@ -5,6 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  publishImmutableFile,
   readRecoveredImmutableFile,
   UnsafeImmutablePublicationError,
 } from "./immutable-publication.js";
@@ -54,5 +55,17 @@ describe("readRecoveredImmutableFile", () => {
     await expect(readRecoveredImmutableFile(bounded, () => false, 4)).rejects.toBeInstanceOf(
       UnsafeImmutablePublicationError,
     );
+  });
+
+  it("publishes without overwrite when two writers race for one final name", async () => {
+    const directory = await root();
+    const finalPath = path.join(directory, "record.json");
+    const results = await Promise.allSettled([
+      publishImmutableFile(finalPath, Buffer.from("first", "utf8")),
+      publishImmutableFile(finalPath, Buffer.from("second", "utf8")),
+    ]);
+    expect(results.filter((result) => result.status === "fulfilled")).toHaveLength(1);
+    expect(results.filter((result) => result.status === "rejected")).toHaveLength(1);
+    expect(["first", "second"]).toContain(await readFile(finalPath, "utf8"));
   });
 });

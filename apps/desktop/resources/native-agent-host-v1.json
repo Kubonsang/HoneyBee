@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "component": "honeybee-native-agent-host",
+  "protocol": "native-agent-host-v1",
+  "platform": "win32-x64",
+  "fileName": "honeybee-native-agent-host.exe",
+  "byteLength": 4452352,
+  "sha256": "e685244992499f3f1b58501cf87460756b28e274d0c8179d39871035a9582b78"
+}

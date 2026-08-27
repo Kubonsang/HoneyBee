@@ -32,7 +32,8 @@
     "test:watch": "vitest",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
-    "test:run": "vitest run"
+    "test:run": "vitest run && corepack pnpm test:native-host",
+    "test:native-host": "go -C tools/native-agent-host test ./..."
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
