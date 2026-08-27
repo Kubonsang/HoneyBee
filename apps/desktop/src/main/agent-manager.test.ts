@@ -1,4 +1,4 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -101,10 +101,14 @@ describe("DesktopAgentManager", () => {
       command: { command: shim },
       enabled: true,
     });
+    const [canonicalShim, canonicalPayload] = await Promise.all([
+      realpath(shim),
+      realpath(payload),
+    ]);
     expect(profile.trust?.files).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ role: "entrypoint", path: shim }),
-        expect.objectContaining({ role: "payload", path: payload }),
+        expect.objectContaining({ role: "entrypoint", path: canonicalShim }),
+        expect.objectContaining({ role: "payload", path: canonicalPayload }),
       ]),
     );
   });
