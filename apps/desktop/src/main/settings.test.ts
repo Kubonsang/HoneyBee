@@ -40,11 +40,12 @@ describe("DesktopSettingsStore", () => {
     await store.upsertProfile(older);
     await store.upsertProfile(newer);
     expect(await store.listProfiles()).toEqual([newer, older]);
-    expect(JSON.parse(await readFile(path.join(root, "settings-v3.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
+    expect(JSON.parse(await readFile(path.join(root, "settings-v4.json"), "utf8"))).toEqual({
+      schemaVersion: 4,
       profiles: [newer, older],
       agents: [],
       preferredAgentIds: {},
+      developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
     });
 
     await store.removeProfile(newer.profileId);
@@ -76,6 +77,33 @@ describe("DesktopSettingsStore", () => {
       schemaVersion: 1,
       profiles: [legacy],
     });
+  });
+
+  it("migrates settings v3 and persists the developer toggle in settings v4", async () => {
+    const root = await temporaryRoot();
+    const legacy = profile(new Date(3).toISOString(), "V3");
+    await writeFile(
+      path.join(root, "settings-v3.json"),
+      JSON.stringify({
+        schemaVersion: 3,
+        profiles: [legacy],
+        agents: [],
+        preferredAgentIds: {},
+      }),
+      "utf8",
+    );
+    const store = new DesktopSettingsStore(root);
+    expect(await store.developerSettings()).toEqual({
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: false,
+    });
+    await store.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true });
+    const persisted = JSON.parse(await readFile(path.join(root, "settings-v4.json"), "utf8"));
+    expect(persisted.developer).toEqual({
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: true,
+    });
+    expect(await store.listProfiles()).toEqual([legacy]);
   });
 
   it("keeps one managed environment per Unity project when Project Settings is reapplied", async () => {

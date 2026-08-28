@@ -797,6 +797,70 @@ export const DesktopStorageActivateRequestV1Schema = z
   })
   .strict();
 
+export const DesktopDeveloperSettingsV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    dogfoodMetricsEnabled: z.boolean(),
+  })
+  .strict();
+export type DesktopDeveloperSettingsV1 = z.infer<typeof DesktopDeveloperSettingsV1Schema>;
+
+export const DesktopDeveloperSettingsUpdateV1Schema = DesktopDeveloperSettingsV1Schema;
+
+export const DesktopDogfoodStartRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), profileId: z.string().uuid() })
+  .strict();
+
+export const DesktopDogfoodFinalizeRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), sessionId: z.string().uuid() })
+  .strict();
+
+export const DesktopDogfoodOpenEvidenceRequestV1Schema = DesktopDogfoodFinalizeRequestV1Schema;
+
+export const DesktopDogfoodSummaryV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    verdict: z.enum(["incomplete", "passed", "failed"]),
+    sessionWallClockMs: z.number().int().nonnegative().nullable(),
+    workCount: z.number().int().nonnegative(),
+    completedWorks: z.number().int().nonnegative(),
+    failedWorks: z.number().int().nonnegative(),
+    changedFiles: z.number().int().nonnegative(),
+    testCount: z.number().int().nonnegative(),
+    agentOverlapMs: z.number().int().nonnegative(),
+    maxConcurrentAgents: z.number().int().nonnegative(),
+    residualTotal: z.number().int().nonnegative(),
+    issueCount: z.number().int().nonnegative(),
+  })
+  .strict();
+export type DesktopDogfoodSummaryV1 = z.infer<typeof DesktopDogfoodSummaryV1Schema>;
+
+export const DesktopDogfoodSessionV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sessionId: z.string().uuid(),
+    profileId: z.string().uuid(),
+    projectLabel: z.string().min(1).max(120),
+    startedAt: z.string().datetime(),
+    stoppedAt: z.string().datetime().optional(),
+    evidencePath: z.string().min(1),
+    workCount: z.number().int().nonnegative(),
+    summary: DesktopDogfoodSummaryV1Schema.optional(),
+  })
+  .strict();
+export type DesktopDogfoodSessionV1 = z.infer<typeof DesktopDogfoodSessionV1Schema>;
+
+export const DesktopDogfoodStatusV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    enabled: z.boolean(),
+    state: z.enum(["idle", "recording", "incomplete", "passed", "failed"]),
+    observedAt: z.string().datetime(),
+    session: DesktopDogfoodSessionV1Schema.optional(),
+  })
+  .strict();
+export type DesktopDogfoodStatusV1 = z.infer<typeof DesktopDogfoodStatusV1Schema>;
+
 export const DesktopIpcChannels = {
   bootstrap: "desktop.bootstrap.v1",
   chooseProfile: "desktop.profile.choose.v1",
@@ -827,6 +891,12 @@ export const DesktopIpcChannels = {
   agentApprovalsList: "desktop.agent-approvals.list.v1",
   agentApprovalRespond: "desktop.agent-approvals.respond.v1",
   projectAgentPreference: "desktop.project.agent-preference.v1",
+  developerSettingsGet: "desktop.developer-settings.get.v1",
+  developerSettingsUpdate: "desktop.developer-settings.update.v1",
+  dogfoodStatus: "desktop.dogfood.status.v1",
+  dogfoodStart: "desktop.dogfood.start.v1",
+  dogfoodFinalize: "desktop.dogfood.finalize.v1",
+  dogfoodOpenEvidence: "desktop.dogfood.open-evidence.v1",
 } as const;
 
 export interface HoneyBeeDesktopApi {
@@ -873,6 +943,18 @@ export interface HoneyBeeDesktopApi {
   setProjectAgentPreference(
     request: z.infer<typeof DesktopProjectAgentPreferenceRequestV1Schema>,
   ): Promise<DesktopBootstrapV2>;
+  developerSettings(): Promise<DesktopDeveloperSettingsV1>;
+  updateDeveloperSettings(request: DesktopDeveloperSettingsV1): Promise<DesktopDeveloperSettingsV1>;
+  dogfoodStatus(): Promise<DesktopDogfoodStatusV1>;
+  startDogfood(
+    request: z.infer<typeof DesktopDogfoodStartRequestV1Schema>,
+  ): Promise<DesktopDogfoodStatusV1>;
+  finalizeDogfood(
+    request: z.infer<typeof DesktopDogfoodFinalizeRequestV1Schema>,
+  ): Promise<DesktopDogfoodStatusV1>;
+  openDogfoodEvidence(
+    request: z.infer<typeof DesktopDogfoodOpenEvidenceRequestV1Schema>,
+  ): Promise<boolean>;
 }
 
 export const DesktopIpcResponseSchemas = {
@@ -905,6 +987,12 @@ export const DesktopIpcResponseSchemas = {
   agentApprovalsList: DesktopAgentApprovalListV1Schema,
   agentApprovalRespond: DesktopAgentApprovalListV1Schema,
   projectAgentPreference: DesktopBootstrapV2Schema,
+  developerSettingsGet: DesktopDeveloperSettingsV1Schema,
+  developerSettingsUpdate: DesktopDeveloperSettingsV1Schema,
+  dogfoodStatus: DesktopDogfoodStatusV1Schema,
+  dogfoodStart: DesktopDogfoodStatusV1Schema,
+  dogfoodFinalize: DesktopDogfoodStatusV1Schema,
+  dogfoodOpenEvidence: z.boolean(),
 } as const;
 
 export type DesktopRuntimeInfo = RuntimeInfoV1;

@@ -5,6 +5,25 @@ HoneyBee.exe. It does not submit Works, alter runtime state, apply patches, or i
 orchestration model. HoneyBee's Journal, Artifact Store, Editor Pool Journal, Registry tombstones,
 patch disposition records, runtime API, and workspace-storage status remain authoritative.
 
+## Built-in Desktop Debug Mode
+
+For day-to-day dogfood, open `Settings → Developer` in HoneyBee Desktop and enable **Dogfood
+Metrics**. The Command Center then exposes an explicit recording control:
+
+1. Select a project and click **Start Recording**.
+2. Run one or more Works, inspect their patches, and Apply or Reject each result.
+3. Resolve cleanup-pending Runs, then click **Stop & Finalize**.
+4. Use **Open Evidence Folder** to inspect `metrics.json`, `events.ndjson`, `summary.md`, and bounded
+   Journal logs.
+
+Built-in Evidence is stored under Electron userData at `dogfood/evidence/<session-id>/`. An
+unfinished recording is reconnected after Desktop restarts. Finalizing while Work or cleanup is
+still active produces `incomplete`; **Refresh Finalize** regenerates the same session after cleanup.
+Debug Mode is off by default and does not read dogfood state while disabled.
+
+The Python launcher below remains useful for isolated `--user-data-dir` comparisons and controlled
+sequential-versus-parallel benchmark runs. It is not required for the built-in recorder.
+
 Generated state and Evidence are ignored by Git:
 
 - dogfood/state/<session-id>/: one isolated Electron userData directory and runtime root.
@@ -18,9 +37,9 @@ From the repository root:
     corepack pnpm --filter honeybee-desktop package:smoke
     py -m unittest discover -s dogfood\tests -v
 
-Use a v0.6 schema-3 batch config whose pinned TestPlay and workspace-storage binaries are installed,
-and a disposable Unity project for the first run. The observer hashes the packaged executable,
-config, and Git revision into session.json.
+Use a v0.6 schema-3 batch config whose pinned workspace-storage binary is installed, and a
+disposable Unity project for the first run. TestPlay is required only when compile or warm-test is
+selected. The observer hashes the packaged executable, config, and Git revision into session.json.
 
 ## Run a session
 
@@ -55,10 +74,11 @@ after an observer interruption or to regenerate Evidence from unchanged authorit
     py dogfood\session.py finalize <session-id>
     py dogfood\session.py compare --baseline <sequential-id> --candidate <parallel-id>
 
-Finalize fails the verdict unless Doctor passed, the expected Works completed, configured
-capabilities completed in order, both compile and warm-test were observed, source stayed unchanged
-before disposition, the disposition scenario completed, all Journal-referenced Artifacts pass
-byte-length and SHA-256 verification, and residuals are zero.
+Finalize fails the verdict unless Doctor passed, the expected Works completed, every requested
+capability completed in order, source stayed unchanged before disposition, the disposition scenario
+completed, all Journal-referenced Artifacts pass byte-length and SHA-256 verification, and residuals
+are zero. Agent-only Work does not fail merely because TestPlay is not installed or no capability
+was requested.
 
 Each finalized session contains:
 

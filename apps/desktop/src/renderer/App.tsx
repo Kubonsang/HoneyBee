@@ -37,10 +37,11 @@ import {
 } from "../shared/ipc.js";
 import { CommandCenter } from "./CommandCenter.js";
 import { AgentManagerView } from "./AgentManagerView.js";
+import { DogfoodMetricsPanel } from "./DogfoodMetricsPanel.js";
 import { RunDetailView } from "./RunDetailView.js";
 import { SetupCenter } from "./SetupCenter.js";
 
-type DesktopView = "projects" | "command" | "work" | "history" | "setup" | "agents";
+type DesktopView = "projects" | "command" | "work" | "history" | "setup" | "agents" | "settings";
 
 interface WorkDraft {
   readonly key: number;
@@ -488,6 +489,12 @@ export function App() {
           <button className={view === "agents" ? "selected" : ""} onClick={() => setView("agents")}>
             <Robot size={20} weight="duotone" /> Agents
           </button>
+          <button
+            className={view === "settings" ? "selected" : ""}
+            onClick={() => setView("settings")}
+          >
+            <Gear size={20} weight="duotone" /> Settings
+          </button>
         </nav>
         <div className="sidebar-heading">
           <span>Recent projects</span>
@@ -607,9 +614,11 @@ export function App() {
                     ? "Run History"
                     : view === "agents"
                       ? "Agents"
-                      : view === "setup"
-                        ? "Setup Center"
-                        : (selectedProfile?.label ?? "Choose a Unity project")}
+                      : view === "settings"
+                        ? "Settings"
+                        : view === "setup"
+                          ? "Setup Center"
+                          : (selectedProfile?.label ?? "Choose a Unity project")}
             </h1>
             <p>
               {view === "projects"
@@ -620,9 +629,11 @@ export function App() {
                     ? "Inspect durable outcomes, Evidence, and verified patches."
                     : view === "agents"
                       ? "Connect and manage AI execution profiles independently of Unity projects."
-                      : view === "setup"
-                        ? "Create and recover a strict local managed Unity environment."
-                        : "Describe focused changes and launch a bounded parallel batch."}
+                      : view === "settings"
+                        ? "Developer diagnostics and local Desktop preferences."
+                        : view === "setup"
+                          ? "Create and recover a strict local managed Unity environment."
+                          : "Describe focused changes and launch a bounded parallel batch."}
             </p>
           </div>
         </div>
@@ -760,6 +771,14 @@ export function App() {
             onError={(message) => setError(message)}
             onNotice={(message) => setNotice(message)}
           />
+        ) : view === "settings" ? (
+          <div className="settings-layout">
+            <DogfoodMetricsPanel
+              {...(selectedProfileId === undefined ? {} : { profileId: selectedProfileId })}
+              onError={(message) => setError(message)}
+              onNotice={(message) => setNotice(message)}
+            />
+          </div>
         ) : view === "work" ? (
           <div className="content-grid">
             <section className="composer panel">
@@ -998,96 +1017,104 @@ export function App() {
               historyOnly={view === "history"}
               composer={
                 view === "command" ? (
-                  <section className="surface quick-composer">
-                    <div className="quick-composer-heading">
-                      <div>
-                        <FirstAidKit size={19} weight="duotone" />
-                        <strong>What shall we build today?</strong>
-                      </div>
-                      <button className="text-button" onClick={() => setView("work")}>
-                        Batch builder
-                      </button>
-                    </div>
-                    <textarea
-                      value={primaryWork.task}
-                      onChange={(event) =>
-                        updateWork(primaryWork.key, { task: event.target.value })
-                      }
-                      placeholder="Describe a feature, fix, or refactor…"
-                      rows={2}
+                  <>
+                    <DogfoodMetricsPanel
+                      compact
+                      {...(selectedProfileId === undefined ? {} : { profileId: selectedProfileId })}
+                      onError={(message) => setError(message)}
+                      onNotice={(message) => setNotice(message)}
                     />
-                    <div className="quick-composer-actions">
-                      <label className="compact-select">
-                        <span>Agent</span>
-                        <select
-                          value={defaultAgentId ?? ""}
-                          onChange={(event) => setDefaultAgentId(event.target.value || undefined)}
-                        >
-                          <option value="">Choose Agent</option>
-                          {enabledAgents.map((agent) => (
-                            <option key={agent.agentId} value={agent.agentId}>
-                              {agent.displayName}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                      <label className="compact-select">
-                        <span>Priority</span>
-                        <select
-                          value={primaryWork.priority}
-                          onChange={(event) =>
-                            updateWork(primaryWork.key, {
-                              priority: event.target.value as WorkDraft["priority"],
-                            })
-                          }
-                        >
-                          <option value="interactive">Interactive</option>
-                          <option value="validation">Validation</option>
-                          <option value="background">Background</option>
-                        </select>
-                      </label>
-                      <label className="capability-chip">
-                        <input
-                          type="checkbox"
-                          checked={primaryWork.compile}
-                          disabled={!testplayAvailable}
-                          onChange={(event) =>
-                            updateWork(primaryWork.key, { compile: event.target.checked })
-                          }
-                        />
-                        Compile
-                      </label>
-                      <label className="capability-chip">
-                        <input
-                          type="checkbox"
-                          checked={primaryWork.warmTest}
-                          disabled={!testplayAvailable}
-                          onChange={(event) =>
-                            updateWork(primaryWork.key, { warmTest: event.target.checked })
-                          }
-                        />
-                        Warm test
-                      </label>
-                      <span className="composer-spacer" />
-                      {doctor?.ok !== true && (
-                        <button className="doctor-required" onClick={() => void runDoctor()}>
-                          <Stethoscope size={16} /> Run Doctor
+                    <section className="surface quick-composer">
+                      <div className="quick-composer-heading">
+                        <div>
+                          <FirstAidKit size={19} weight="duotone" />
+                          <strong>What shall we build today?</strong>
+                        </div>
+                        <button className="text-button" onClick={() => setView("work")}>
+                          Batch builder
                         </button>
-                      )}
-                      <button
-                        className="primary create-work-button"
-                        onClick={() => void startWorks()}
-                        disabled={busy !== undefined || !validWorks || doctor?.ok !== true}
-                      >
-                        <Play size={16} weight="fill" />
-                        {busy === "start"
-                          ? "Starting…"
-                          : works.length === 1
-                            ? "Create Work"
-                            : `Create ${works.length} Works`}
-                      </button>
-                    </div>
-                  </section>
+                      </div>
+                      <textarea
+                        value={primaryWork.task}
+                        onChange={(event) =>
+                          updateWork(primaryWork.key, { task: event.target.value })
+                        }
+                        placeholder="Describe a feature, fix, or refactor…"
+                        rows={2}
+                      />
+                      <div className="quick-composer-actions">
+                        <label className="compact-select">
+                          <span>Agent</span>
+                          <select
+                            value={defaultAgentId ?? ""}
+                            onChange={(event) => setDefaultAgentId(event.target.value || undefined)}
+                          >
+                            <option value="">Choose Agent</option>
+                            {enabledAgents.map((agent) => (
+                              <option key={agent.agentId} value={agent.agentId}>
+                                {agent.displayName}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="compact-select">
+                          <span>Priority</span>
+                          <select
+                            value={primaryWork.priority}
+                            onChange={(event) =>
+                              updateWork(primaryWork.key, {
+                                priority: event.target.value as WorkDraft["priority"],
+                              })
+                            }
+                          >
+                            <option value="interactive">Interactive</option>
+                            <option value="validation">Validation</option>
+                            <option value="background">Background</option>
+                          </select>
+                        </label>
+                        <label className="capability-chip">
+                          <input
+                            type="checkbox"
+                            checked={primaryWork.compile}
+                            disabled={!testplayAvailable}
+                            onChange={(event) =>
+                              updateWork(primaryWork.key, { compile: event.target.checked })
+                            }
+                          />
+                          Compile
+                        </label>
+                        <label className="capability-chip">
+                          <input
+                            type="checkbox"
+                            checked={primaryWork.warmTest}
+                            disabled={!testplayAvailable}
+                            onChange={(event) =>
+                              updateWork(primaryWork.key, { warmTest: event.target.checked })
+                            }
+                          />
+                          Warm test
+                        </label>
+                        <span className="composer-spacer" />
+                        {doctor?.ok !== true && (
+                          <button className="doctor-required" onClick={() => void runDoctor()}>
+                            <Stethoscope size={16} /> Run Doctor
+                          </button>
+                        )}
+                        <button
+                          className="primary create-work-button"
+                          onClick={() => void startWorks()}
+                          disabled={busy !== undefined || !validWorks || doctor?.ok !== true}
+                        >
+                          <Play size={16} weight="fill" />
+                          {busy === "start"
+                            ? "Starting…"
+                            : works.length === 1
+                              ? "Create Work"
+                              : `Create ${works.length} Works`}
+                        </button>
+                      </div>
+                    </section>
+                  </>
                 ) : undefined
               }
               onSelectRun={(runId) => {

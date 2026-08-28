@@ -1539,3 +1539,121 @@ select:focus {
   flex: 0 0 auto;
   gap: 10px;
 }
+
+.settings-layout {
+  display: grid;
+  max-width: 880px;
+}
+
+.dogfood-panel {
+  display: grid;
+  gap: 18px;
+  padding: 22px;
+}
+
+.dogfood-panel.compact {
+  gap: 12px;
+  margin-bottom: 12px;
+  padding: 14px 16px;
+}
+
+.dogfood-heading {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+}
+
+.dogfood-heading h2,
+.dogfood-heading p {
+  margin: 2px 0 0;
+}
+
+.dogfood-heading p,
+.dogfood-state span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dogfood-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  border: 1px solid rgba(245, 177, 0, 0.35);
+  border-radius: 10px;
+  color: var(--accent);
+  background: rgba(245, 177, 0, 0.08);
+}
+
+.developer-toggle {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.dogfood-body {
+  display: grid;
+  gap: 12px;
+}
+
+.dogfood-state {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  padding: 11px 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.dogfood-state strong {
+  color: var(--text-secondary);
+  font-size: 12px;
+  text-transform: uppercase;
+}
+
+.dogfood-state.recording strong {
+  color: var(--accent);
+}
+
+.dogfood-state.passed strong {
+  color: var(--success);
+}
+
+.dogfood-state.failed strong,
+.dogfood-state.incomplete strong {
+  color: var(--danger);
+}
+
+.dogfood-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.dogfood-summary span {
+  padding: 9px 11px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.dogfood-summary strong {
+  color: var(--text-primary);
+}
+
+.dogfood-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 9px;
+}
+
+@media (max-width: 900px) {
+  .dogfood-summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
