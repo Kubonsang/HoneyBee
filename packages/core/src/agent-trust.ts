@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream } from "node:fs";
-import { lstat, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -15,6 +15,13 @@ import { HoneyBeeCoreError } from "./errors.js";
 export interface AgentTrustPath {
   readonly role: AgentLaunchTrustFileV1["role"];
   readonly path: string;
+}
+
+const MAX_COMMAND_SHIM_BYTES = 64 * 1024;
+
+export interface PreparedAgentLaunch {
+  readonly command: AgentCommand;
+  readonly trust: AgentLaunchTrustV1;
 }
 
 const pathKey = (value: string): string =>
@@ -97,6 +104,143 @@ export const captureAgentLaunchTrust = async (
     files,
     trustDigest: trustDigest(files),
   });
+};
+
+const resolvePathExecutable = async (command: string): Promise<string | undefined> => {
+  if (path.isAbsolute(command)) return path.resolve(command);
+  const pathValue = process.env.PATH ?? process.env.Path ?? "";
+  const extensions =
+    process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD")
+          .split(";")
+          .filter(Boolean)
+          .map((value) => value.toLowerCase())
+      : [""];
+  for (const directory of pathValue.split(path.delimiter).filter(Boolean)) {
+    const suppliedExtension = path.extname(command).toLowerCase();
+    const candidates =
+      process.platform === "win32" && suppliedExtension.length === 0
+        ? extensions.map((extension) => path.join(directory, command + extension))
+        : [path.join(directory, command)];
+    for (const candidate of candidates) {
+      const metadata = await lstat(candidate).catch(() => undefined);
+      if (metadata?.isFile() === true && !metadata.isSymbolicLink()) return path.resolve(candidate);
+    }
+  }
+  return undefined;
+};
+
+const commandShimPayload = async (
+  commandPath: string,
+): Promise<Readonly<{ payload: string; interpreter?: string }>> => {
+  const metadata = await lstat(commandPath).catch(() => undefined);
+  if (
+    metadata === undefined ||
+    !metadata.isFile() ||
+    metadata.isSymbolicLink() ||
+    metadata.size > MAX_COMMAND_SHIM_BYTES
+  ) {
+    throw new HoneyBeeCoreError("agent.trust-invalid", "Agent command shim is unsafe.");
+  }
+  const source = await readFile(commandPath, "utf8");
+  const referenced = new Set<string>();
+  for (const match of source.matchAll(/%dp0%[\\/]([^"\r\n]+?\.(?:exe|[cm]?js))/giu)) {
+    if (match[1] === undefined) continue;
+    const candidate = path.resolve(path.dirname(commandPath), match[1]);
+    const entry = await lstat(candidate).catch(() => undefined);
+    if (entry?.isFile() === true && !entry.isSymbolicLink()) referenced.add(candidate);
+  }
+  const scripts = [...referenced].filter((candidate) => /\.[cm]?js$/iu.test(candidate));
+  const executables = [...referenced].filter(
+    (candidate) =>
+      path.extname(candidate).toLowerCase() === ".exe" &&
+      path.basename(candidate).toLowerCase() !== "node.exe",
+  );
+  const script = scripts.length === 1 ? scripts[0] : undefined;
+  if (script !== undefined && executables.length === 0) {
+    const localNode = [...referenced].find(
+      (candidate) => path.basename(candidate).toLowerCase() === "node.exe",
+    );
+    const interpreter = localNode ?? (await resolvePathExecutable("node"));
+    if (interpreter === undefined) {
+      throw new HoneyBeeCoreError(
+        "agent.trust-invalid",
+        "The Agent command shim requires Node, but node.exe could not be resolved.",
+      );
+    }
+    return { payload: script, interpreter };
+  }
+  const executable = executables.length === 1 ? executables[0] : undefined;
+  if (scripts.length === 0 && executable !== undefined) return { payload: executable };
+  throw new HoneyBeeCoreError(
+    "agent.trust-invalid",
+    "The Agent command shim must identify exactly one executable payload.",
+  );
+};
+
+export const prepareAgentLaunch = async (
+  commandValue: AgentCommand,
+  explicitPayloadPaths: readonly string[] = [],
+): Promise<PreparedAgentLaunch> => {
+  const commandPath = await resolvePathExecutable(commandValue.command);
+  if (commandPath === undefined) {
+    throw new HoneyBeeCoreError(
+      "agent.trust-invalid",
+      "The Agent executable could not be resolved to an approved absolute path.",
+    );
+  }
+  const command = { ...commandValue, command: commandPath };
+  const trustPaths: AgentTrustPath[] = [{ role: "entrypoint", path: commandPath }];
+  for (const candidate of explicitPayloadPaths) {
+    trustPaths.push({ role: "payload", path: path.resolve(candidate) });
+  }
+  if (process.platform === "win32" && path.extname(commandPath).toLowerCase() === ".cmd") {
+    const resolved = await commandShimPayload(commandPath);
+    trustPaths.push({ role: "payload", path: resolved.payload });
+    if (resolved.interpreter !== undefined) {
+      trustPaths.push({ role: "interpreter", path: resolved.interpreter });
+    }
+  }
+  return { command, trust: await captureAgentLaunchTrust(trustPaths) };
+};
+
+export const trustedAgentInvocation = async (
+  command: AgentCommand,
+  trustValue: AgentLaunchTrustV1,
+  args: readonly string[] = command.args ?? [],
+): Promise<AgentCommand> => {
+  const trust = AgentLaunchTrustV1Schema.parse(trustValue);
+  if (process.platform !== "win32" || path.extname(command.command).toLowerCase() !== ".cmd") {
+    return { ...command, args: [...args] };
+  }
+  const resolved = await commandShimPayload(command.command);
+  const payload = trust.files.find(
+    (file) => file.role === "payload" && pathKey(file.path) === pathKey(resolved.payload),
+  );
+  if (payload === undefined) {
+    throw new HoneyBeeCoreError(
+      "agent.trust-changed",
+      "The Agent command shim target is not present in its approved trust receipt.",
+    );
+  }
+  const resolvedInterpreter = resolved.interpreter;
+  if (resolvedInterpreter !== undefined) {
+    const interpreter = trust.files.find(
+      (file) => file.role === "interpreter" && pathKey(file.path) === pathKey(resolvedInterpreter),
+    );
+    if (interpreter === undefined) {
+      throw new HoneyBeeCoreError(
+        "agent.trust-changed",
+        "The Agent command shim interpreter is not present in its approved trust receipt.",
+      );
+    }
+    return {
+      ...command,
+      command: interpreter.path,
+      args: [payload.path, ...args],
+    };
+  }
+  return { ...command, command: payload.path, args: [...args] };
 };
 
 export const verifyAgentLaunchTrust = async (

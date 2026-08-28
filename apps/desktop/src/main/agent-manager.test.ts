@@ -112,4 +112,36 @@ describe("DesktopAgentManager", () => {
       ]),
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "probes a pinned npm-style command shim without invoking cmd.exe",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.js");
+      const extra = path.join(directory, "extra-payload.js");
+      await writeFile(
+        payload,
+        "if (process.argv.includes('--version')) process.stdout.write('fixture 1.0.0\\n');\n",
+        "utf8",
+      );
+      await writeFile(extra, "export {};\n", "utf8");
+      await writeFile(shim, '@echo off\r\nnode "%dp0%\\fixture.js" %*\r\n', "utf8");
+      const manager = new DesktopAgentManager(settings);
+      const profile = await manager.upsert({
+        schemaVersion: 1,
+        displayName: "Runnable shim fixture",
+        provider: "custom",
+        command: { command: shim },
+        payloadPaths: [extra],
+        enabled: true,
+      });
+      await expect(manager.probe(profile)).resolves.toMatchObject({
+        status: "ready",
+        version: "fixture 1.0.0",
+      });
+      expect(profile.command.command).toBe(path.resolve(shim));
+    },
+  );
 });

@@ -40,6 +40,42 @@ ${body}
 `;
 
 describe("structured Agent session adapters", () => {
+  it("times out while provider initialization is pending", async () => {
+    const events: AgentSessionLifecycleEventV1[] = [];
+    let exited = 0;
+    const stalled = provider("rl.on('line', () => undefined);");
+    const startedAt = Date.now();
+    await expect(
+      new CodexAppServerAdapter().run(
+        { ...request(stalled), timeoutMs: 50 },
+        {
+          ...lifecycle(events),
+          onExited: async () => {
+            exited += 1;
+          },
+        },
+        { decide: async () => Promise.reject(new Error("unexpected approval")) },
+      ),
+    ).rejects.toMatchObject({ code: "agent.timed-out" });
+    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    expect(exited).toBe(1);
+  });
+
+  it("rejects pending initialization when the provider exits", async () => {
+    const events: AgentSessionLifecycleEventV1[] = [];
+    const exitsDuringInitialize = provider(String.raw`
+rl.on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") process.exit(0);
+});
+`);
+    await expect(
+      new CodexAppServerAdapter().run(request(exitsDuringInitialize), lifecycle(events), {
+        decide: async () => Promise.reject(new Error("unexpected approval")),
+      }),
+    ).rejects.toMatchObject({ code: "protocol.invalid-agent-response" });
+  });
+
   it("runs a Codex app-server turn and normalizes its final message", async () => {
     const events: AgentSessionLifecycleEventV1[] = [];
     const script = provider(String.raw`
@@ -70,6 +106,43 @@ rl.on("line", line => {
       "turn-completed",
       "session-closed",
     ]);
+  });
+
+  it("drains the provider when terminal lifecycle persistence fails", async () => {
+    const events: AgentSessionLifecycleEventV1[] = [];
+    let containmentPid: number | undefined;
+    const script = provider(String.raw`
+rl.on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: {} });
+  else if (message.method === "skills/list") send({ jsonrpc: "2.0", id: message.id, result: { data: [] } });
+  else if (message.method === "thread/start") send({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } });
+  else if (message.method === "turn/start") {
+    send({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } });
+    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "done" } });
+    send({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });
+    setInterval(() => undefined, 1000);
+  }
+});
+`);
+    await expect(
+      new CodexAppServerAdapter().run(
+        request(script),
+        {
+          ...lifecycle(events),
+          onStarted: async (pid) => {
+            containmentPid = pid;
+          },
+          onSessionEvent: async (event) => {
+            if (event.type === "turn-completed") throw new Error("journal failed");
+            events.push(event);
+          },
+        },
+        { decide: async () => Promise.reject(new Error("unexpected approval")) },
+      ),
+    ).rejects.toThrow("journal failed");
+    expect(containmentPid).toBeDefined();
+    expect(() => process.kill(containmentPid as number, 0)).toThrow();
   });
 
   it("persists the normalized approval lifecycle before ACP delivery", async () => {

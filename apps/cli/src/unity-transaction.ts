@@ -880,6 +880,8 @@ export class UnityWorkTransaction {
               HONEYBEE_UNITY_PROJECT_PATH: workspacePath,
             },
           },
+          adapter: config.agent.adapter,
+          ...(config.agent.trust === undefined ? {} : { trust: config.agent.trust }),
           timeoutMs: config.agent.timeoutMs ?? 600_000,
           maxOutputBytes: config.agent.maxOutputBytes ?? 1024 * 1024,
           signal,

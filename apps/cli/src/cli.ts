@@ -19,7 +19,6 @@ import {
   StepIdSchema,
   WorkflowConfigV3Schema,
   UnityBatchConfigSchema,
-  UnityBatchConfigV3Schema,
   UnityWorkConfigV1Schema,
   UnityWorkConfigV2Schema,
   type AnyOrchestrationEvent,
@@ -34,6 +33,10 @@ import {
 } from "@honeybee/core";
 
 import { loadUnityBatchConfig, loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
+import {
+  prepareDirectUnityBatchConfig,
+  prepareDirectUnityWorkConfig,
+} from "./direct-unity-config.js";
 import {
   TestPlayCliAdapter,
   UnityAgentProcessRunner,
@@ -468,7 +471,8 @@ const executeUnity = async (
   }
   const task = args.task;
   if (args.config === undefined) throw new Error("--config is required for unity run.");
-  const config = await loadUnityWorkConfig(args.config);
+  const loadedConfig = await loadUnityWorkConfig(args.config);
+  const config = await prepareDirectUnityWorkConfig(loadedConfig);
   const runId = RunIdSchema.parse(randomUUID());
   const root = stateRoot();
   await assertUnityPathsDisjoint(root, config);
@@ -503,7 +507,8 @@ const executeUnityBatch = async (
   args: Extract<ParsedArguments, { command: "unity-batch-execute" }>,
 ): Promise<void> => {
   if (args.config === undefined) throw new Error("--config is required for unity batch run.");
-  const config = await loadUnityBatchConfig(args.config);
+  const loadedConfig = await loadUnityBatchConfig(args.config);
+  const config = await prepareDirectUnityBatchConfig(loadedConfig);
   const runId = RunIdSchema.parse(randomUUID());
   const root = stateRoot();
   await assertUnityPathsDisjoint(root, config.transaction);
@@ -568,9 +573,16 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
         throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
       const artifacts = new FileArtifactStore(root);
       if (start.payload.mode === "unity-batch-v2") {
-        const config = UnityBatchConfigV3Schema.parse(
+        const storedConfig = UnityBatchConfigSchema.parse(
           JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
         );
+        if (storedConfig.schemaVersion !== 3 && storedConfig.schemaVersion !== 4) {
+          throw new HoneyBeeCoreError(
+            "run.indeterminate",
+            "A v0.6 Journal references an incompatible Unity batch config.",
+          );
+        }
+        const config = await prepareDirectUnityBatchConfig(storedConfig);
         await assertUnityPathsDisjoint(root, config.transaction);
         const result = await createUnityEditorBatchWorkflow(root, config, journal, controls).resume(
           runId,
@@ -584,8 +596,10 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
           "A Unity v0.6 batch child can only be resumed through its parent Run.",
         );
       }
-      const config = UnityWorkConfigV2Schema.parse(
-        JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+      const config = await prepareDirectUnityWorkConfig(
+        UnityWorkConfigV2Schema.parse(
+          JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+        ),
       );
       await assertUnityPathsDisjoint(root, config);
       const services = createUnityEditorTransactionServices(root, config, journal, controls);
@@ -605,8 +619,10 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
         );
       }
       const artifacts = new FileArtifactStore(root);
-      const config = UnityBatchConfigSchema.parse(
-        JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+      const config = await prepareDirectUnityBatchConfig(
+        UnityBatchConfigSchema.parse(
+          JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+        ),
       );
       if (config.schemaVersion === 3 || config.schemaVersion === 4)
         throw new HoneyBeeCoreError(
@@ -624,8 +640,10 @@ const resumeRun = async (args: Extract<ParsedArguments, { command: "resume" }>):
         throw new HoneyBeeCoreError("run.indeterminate", "Run has no start event.");
       }
       const artifacts = new FileArtifactStore(root);
-      const config = UnityWorkConfigV1Schema.parse(
-        JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+      const config = await prepareDirectUnityWorkConfig(
+        UnityWorkConfigV1Schema.parse(
+          JSON.parse(await artifacts.get({ runId, artifact: start.payload.config })) as unknown,
+        ),
       );
       await assertUnityPathsDisjoint(root, config);
       const result = await unityTransactionFor(root, config, journal, controls).resume(

@@ -116,7 +116,7 @@ describe("DesktopComponentManager", () => {
     const manifest = await readCompatibilityManifest(
       path.resolve("apps", "desktop", "resources", "component-compatibility-v1.json"),
     );
-    expect(manifest.workspaceStorage[0]?.version).toBe("0.0.0+e69fb8a0c55c.hb2");
+    expect(manifest.workspaceStorage[0]?.version).toBe("0.0.0+e69fb8a0c55c.hb3");
   });
 
   it("installs immutable storage versions and requires an exact active service lock", async () => {

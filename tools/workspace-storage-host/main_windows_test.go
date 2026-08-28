@@ -5,10 +5,12 @@ package main
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
+	"golang.org/x/sys/windows"
 )
 
 func TestServiceWithoutReceiptFailsClosedAsTypedConflict(t *testing.T) {
@@ -91,5 +93,61 @@ func TestReceiptVersionSwitchPublishesAndRecoversAtomically(t *testing.T) {
 	recovered, err := loadReceipt(target)
 	if err != nil || sameReceipt(recovered, next) != nil {
 		t.Fatal("interrupted receipt replacement was not recovered")
+	}
+}
+
+func TestSecureDirectoryTreeRejectsIntermediateJunction(t *testing.T) {
+	root := t.TempDir()
+	target := t.TempDir()
+	alias := filepath.Join(root, "alias")
+	if output, err := exec.Command("cmd.exe", "/d", "/c", "mklink", "/J", alias, target).CombinedOutput(); err != nil {
+		t.Skipf("junction creation is unavailable: %v: %s", err, output)
+	}
+	guard, err := secureDirectoryTree(filepath.Join(alias, "child"))
+	if guard != nil {
+		guard.close()
+	}
+	if err == nil {
+		t.Fatal("intermediate junction was accepted")
+	}
+	if _, statErr := os.Stat(filepath.Join(target, "child")); !os.IsNotExist(statErr) {
+		t.Fatal("privileged directory creation followed the rejected junction")
+	}
+}
+
+func TestSecureDirectoryTreeCreatesAndHoldsRealComponents(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "one", "two")
+	guard, err := secureDirectoryTree(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer guard.close()
+	if guard.final == 0 {
+		t.Fatal("final directory handle was not retained")
+	}
+	info, err := os.Stat(target)
+	if err != nil || !info.IsDir() {
+		t.Fatal("real directory tree was not created")
+	}
+}
+
+func TestRelativeDirectoryCreationUsesTheParentHandleNotTheDisplayPath(t *testing.T) {
+	anchor := t.TempDir()
+	decoy := t.TempDir()
+	parent, err := openRealDirectory(anchor, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(parent)
+	handle, err := openOrCreateRealChildDirectory(parent, "child", filepath.Join(decoy, "child"), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	if _, err := os.Stat(filepath.Join(anchor, "child")); err != nil {
+		t.Fatal("child was not created below the held parent handle")
+	}
+	if _, err := os.Stat(filepath.Join(decoy, "child")); !os.IsNotExist(err) {
+		t.Fatal("display path was used for privileged directory creation")
 	}
 }

@@ -157,4 +157,37 @@ describe("DesktopSettingsStore", () => {
     });
     expect(migrated.preferredAgentIds[second.profileId]).toBe(migrated.agents[0]?.agentId);
   });
+
+  it("serializes concurrent mutations across stores for the same settings path", async () => {
+    const root = await temporaryRoot();
+    const profiles = new DesktopSettingsStore(root);
+    const agents = new DesktopSettingsStore(root);
+    const project = profile(new Date(6).toISOString(), "Concurrent");
+    await Promise.all([
+      profiles.upsertProfile(project),
+      agents.upsertAgent({
+        schemaVersion: 1,
+        displayName: "Concurrent Agent",
+        provider: "custom",
+        command: { command: process.execPath },
+        adapter: "stdio-framed-v2",
+        enabled: true,
+      }),
+    ]);
+    const snapshot = await new DesktopSettingsStore(root).snapshot();
+    expect(snapshot.profiles).toEqual([project]);
+    expect(snapshot.agents).toHaveLength(1);
+    expect(snapshot.agents[0]?.displayName).toBe("Concurrent Agent");
+  });
+
+  it("continues processing settings mutations after a rejected operation", async () => {
+    const root = await temporaryRoot();
+    const store = new DesktopSettingsStore(root);
+    await expect(store.setPreferredAgent(randomUUID(), randomUUID())).rejects.toThrow(
+      "Project profile was not found",
+    );
+    const next = profile(new Date(7).toISOString(), "AfterFailure");
+    await store.upsertProfile(next);
+    await expect(store.listProfiles()).resolves.toEqual([next]);
+  });
 });

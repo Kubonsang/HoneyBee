@@ -51,6 +51,8 @@ const emptySettings = (): DesktopSettingsV3 =>
     preferredAgentIds: {},
   });
 
+const operationTails = new Map<string, Promise<void>>();
+
 const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
     ? error.code
@@ -143,155 +145,186 @@ export class DesktopSettingsStore {
   }
 
   public async snapshot(): Promise<DesktopSettingsSnapshot> {
-    return this.#read();
+    return this.#serialized(() => this.#read());
   }
 
   public async listProfiles(): Promise<readonly DesktopProjectProfile[]> {
-    const settings = await this.#read();
-    return [...settings.profiles].sort((left, right) =>
-      right.lastOpenedAt.localeCompare(left.lastOpenedAt),
-    );
+    return this.#serialized(async () => {
+      const settings = await this.#read();
+      return [...settings.profiles].sort((left, right) =>
+        right.lastOpenedAt.localeCompare(left.lastOpenedAt),
+      );
+    });
   }
 
   public async listAgents(): Promise<readonly DesktopAgentProfileV1[]> {
-    return (await this.#read()).agents;
+    return this.#serialized(async () => (await this.#read()).agents);
   }
 
   public async agent(agentId: string): Promise<DesktopAgentProfileV1 | undefined> {
-    return (await this.#read()).agents.find((agent) => agent.agentId === agentId);
+    return this.#serialized(async () =>
+      (await this.#read()).agents.find((agent) => agent.agentId === agentId),
+    );
   }
 
   public async upsertAgent(
     requestValue: DesktopAgentUpsertRequestV1,
     trust?: AgentLaunchTrustV1,
   ): Promise<DesktopAgentProfileV1> {
-    const request = DesktopAgentUpsertRequestV1Schema.parse(requestValue);
-    const settings = await this.#read();
-    const existing =
-      request.agentId === undefined
-        ? undefined
-        : settings.agents.find((agent) => agent.agentId === request.agentId);
-    const now = new Date().toISOString();
-    const profile = DesktopAgentProfileV1Schema.parse({
-      schemaVersion: 1,
-      agentId: request.agentId ?? randomUUID(),
-      displayName: request.displayName,
-      provider: request.provider,
-      command: request.command,
-      ...(trust === undefined ? {} : { trust }),
-      adapter: request.adapter,
-      enabled: request.enabled,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+    return this.#serialized(async () => {
+      const request = DesktopAgentUpsertRequestV1Schema.parse(requestValue);
+      const settings = await this.#read();
+      const existing =
+        request.agentId === undefined
+          ? undefined
+          : settings.agents.find((agent) => agent.agentId === request.agentId);
+      const now = new Date().toISOString();
+      const profile = DesktopAgentProfileV1Schema.parse({
+        schemaVersion: 1,
+        agentId: request.agentId ?? randomUUID(),
+        displayName: request.displayName,
+        provider: request.provider,
+        command: request.command,
+        ...(trust === undefined ? {} : { trust }),
+        adapter: request.adapter,
+        enabled: request.enabled,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      const agents = [
+        profile,
+        ...settings.agents.filter((agent) => agent.agentId !== profile.agentId),
+      ];
+      await this.#write({
+        ...settings,
+        agents,
+        lastUsedAgentId: settings.lastUsedAgentId ?? profile.agentId,
+      });
+      return profile;
     });
-    const agents = [
-      profile,
-      ...settings.agents.filter((agent) => agent.agentId !== profile.agentId),
-    ];
-    await this.#write({
-      ...settings,
-      agents,
-      lastUsedAgentId: settings.lastUsedAgentId ?? profile.agentId,
-    });
-    return profile;
   }
 
   public async removeAgent(agentId: string): Promise<void> {
-    const settings = await this.#read();
-    const preferredAgentIds = Object.fromEntries(
-      Object.entries(settings.preferredAgentIds).filter(([, value]) => value !== agentId),
-    );
-    const agents = settings.agents.filter((agent) => agent.agentId !== agentId);
-    await this.#write({
-      ...settings,
-      agents,
-      preferredAgentIds,
-      ...(settings.lastUsedAgentId === agentId
-        ? agents[0] === undefined
-          ? { lastUsedAgentId: undefined }
-          : { lastUsedAgentId: agents[0].agentId }
-        : {}),
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      const preferredAgentIds = Object.fromEntries(
+        Object.entries(settings.preferredAgentIds).filter(([, value]) => value !== agentId),
+      );
+      const agents = settings.agents.filter((agent) => agent.agentId !== agentId);
+      await this.#write({
+        ...settings,
+        agents,
+        preferredAgentIds,
+        ...(settings.lastUsedAgentId === agentId
+          ? agents[0] === undefined
+            ? { lastUsedAgentId: undefined }
+            : { lastUsedAgentId: agents[0].agentId }
+          : {}),
+      });
     });
   }
 
   public async setPreferredAgent(profileId: string, agentId: string): Promise<void> {
-    const settings = await this.#read();
-    if (!settings.profiles.some((profile) => profile.profileId === profileId))
-      throw new Error("Project profile was not found.");
-    if (!settings.agents.some((agent) => agent.agentId === agentId && agent.enabled))
-      throw new Error("Agent profile was not found or is disabled.");
-    await this.#write({
-      ...settings,
-      preferredAgentIds: { ...settings.preferredAgentIds, [profileId]: agentId },
-      lastUsedAgentId: agentId,
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      if (!settings.profiles.some((profile) => profile.profileId === profileId))
+        throw new Error("Project profile was not found.");
+      if (!settings.agents.some((agent) => agent.agentId === agentId && agent.enabled))
+        throw new Error("Agent profile was not found or is disabled.");
+      await this.#write({
+        ...settings,
+        preferredAgentIds: { ...settings.preferredAgentIds, [profileId]: agentId },
+        lastUsedAgentId: agentId,
+      });
     });
   }
 
   public async markAgentUsed(agentId: string): Promise<void> {
-    const settings = await this.#read();
-    if (!settings.agents.some((agent) => agent.agentId === agentId)) return;
-    await this.#write({ ...settings, lastUsedAgentId: agentId });
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      if (!settings.agents.some((agent) => agent.agentId === agentId)) return;
+      await this.#write({ ...settings, lastUsedAgentId: agentId });
+    });
   }
 
   public async upsertProfile(profileValue: DesktopProjectProfile): Promise<void> {
-    const profile = DesktopProjectProfileSchema.parse(profileValue);
-    const settings = await this.#read();
-    const projectKey = (value: string): string => {
-      const resolved = path.resolve(value);
-      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    };
-    const replacedIds = settings.profiles
-      .filter(
+    await this.#serialized(async () => {
+      const profile = DesktopProjectProfileSchema.parse(profileValue);
+      const settings = await this.#read();
+      const projectKey = (value: string): string => {
+        const resolved = path.resolve(value);
+        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+      };
+      const replacedIds = settings.profiles
+        .filter(
+          (candidate) =>
+            candidate.profileId !== profile.profileId &&
+            profile.schemaVersion !== 1 &&
+            candidate.schemaVersion !== 1 &&
+            projectKey(candidate.projectPath) === projectKey(profile.projectPath),
+        )
+        .map((candidate) => candidate.profileId);
+      const profiles = settings.profiles.filter(
         (candidate) =>
           candidate.profileId !== profile.profileId &&
-          profile.schemaVersion !== 1 &&
-          candidate.schemaVersion !== 1 &&
-          projectKey(candidate.projectPath) === projectKey(profile.projectPath),
-      )
-      .map((candidate) => candidate.profileId);
-    const profiles = settings.profiles.filter(
-      (candidate) =>
-        candidate.profileId !== profile.profileId &&
-        !(
-          profile.schemaVersion !== 1 &&
-          candidate.schemaVersion !== 1 &&
-          projectKey(candidate.projectPath) === projectKey(profile.projectPath)
-        ) &&
-        !(
-          candidate.projectPath === profile.projectPath &&
-          candidate.batchConfigPath === profile.batchConfigPath
+          !(
+            profile.schemaVersion !== 1 &&
+            candidate.schemaVersion !== 1 &&
+            projectKey(candidate.projectPath) === projectKey(profile.projectPath)
+          ) &&
+          !(
+            candidate.projectPath === profile.projectPath &&
+            candidate.batchConfigPath === profile.batchConfigPath
+          ),
+      );
+      const replacementPreference = replacedIds
+        .map((id) => settings.preferredAgentIds[id])
+        .find((value) => value !== undefined);
+      const preferredAgentIds = {
+        ...Object.fromEntries(
+          Object.entries(settings.preferredAgentIds).filter(
+            ([profileId]) => !replacedIds.includes(profileId),
+          ),
         ),
-    );
-    const replacementPreference = replacedIds
-      .map((id) => settings.preferredAgentIds[id])
-      .find((value) => value !== undefined);
-    const preferredAgentIds = {
-      ...Object.fromEntries(
-        Object.entries(settings.preferredAgentIds).filter(
-          ([profileId]) => !replacedIds.includes(profileId),
-        ),
-      ),
-      ...(replacementPreference === undefined
-        ? {}
-        : { [profile.profileId]: replacementPreference }),
-    };
-    await this.#write({
-      ...settings,
-      profiles: [profile, ...profiles].slice(0, 50),
-      preferredAgentIds,
+        ...(replacementPreference === undefined
+          ? {}
+          : { [profile.profileId]: replacementPreference }),
+      };
+      await this.#write({
+        ...settings,
+        profiles: [profile, ...profiles].slice(0, 50),
+        preferredAgentIds,
+      });
     });
   }
 
   public async removeProfile(profileId: string): Promise<void> {
-    const settings = await this.#read();
-    const preferredAgentIds = Object.fromEntries(
-      Object.entries(settings.preferredAgentIds).filter(([candidate]) => candidate !== profileId),
-    );
-    await this.#write({
-      ...settings,
-      profiles: settings.profiles.filter((profile) => profile.profileId !== profileId),
-      preferredAgentIds,
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      const preferredAgentIds = Object.fromEntries(
+        Object.entries(settings.preferredAgentIds).filter(([candidate]) => candidate !== profileId),
+      );
+      await this.#write({
+        ...settings,
+        profiles: settings.profiles.filter((profile) => profile.profileId !== profileId),
+        preferredAgentIds,
+      });
     });
+  }
+
+  #serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const key = process.platform === "win32" ? this.#filePath.toLowerCase() : this.#filePath;
+    const previous = operationTails.get(key) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    operationTails.set(key, tail);
+    void tail.then(() => {
+      if (operationTails.get(key) === tail) operationTails.delete(key);
+    });
+    return result;
   }
 
   async #read(): Promise<DesktopSettingsV3> {

@@ -601,6 +601,38 @@ describe("orchestration contracts", () => {
       ],
     } as const;
     expect(UnityBatchConfigV3Schema.safeParse(config).success).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...config,
+        transaction: {
+          ...transaction,
+          agent: {
+            ...transaction.agent,
+            trust: {
+              schemaVersion: 1,
+              files: [
+                {
+                  role: "entrypoint",
+                  path: "C:\\Tools\\agent.exe",
+                  byteLength: 1,
+                  sha256: "a".repeat(64),
+                },
+              ],
+              trustDigest: "b".repeat(64),
+            },
+          },
+        },
+      }).success,
+    ).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...config,
+        transaction: {
+          ...transaction,
+          agent: { ...transaction.agent, adapter: "codex-app-server-v1" },
+        },
+      }).success,
+    ).toBe(false);
     const perWorkAgents = {
       ...config,
       schemaVersion: 4,

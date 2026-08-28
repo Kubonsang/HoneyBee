@@ -11,10 +11,10 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
+	"unsafe"
 
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
 	"golang.org/x/sys/windows"
@@ -124,6 +124,22 @@ func install(workspaceRootValue, userSID, componentVersion string, replace bool)
 	configPath := filepath.Join(storeRoot, "broker-config.json")
 	installedExecutable := filepath.Join(storeRoot, "broker", "unity-workspace-storage-host.exe")
 	receiptPath := filepath.Join(storeRoot, "install-receipt.json")
+	storeGuard, err := secureDirectoryTree(storeRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer storeGuard.close()
+	workspaceGuard, err := secureDirectoryTree(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer workspaceGuard.close()
+	if err := applyACL(storeGuard.final, userSID, false); err != nil {
+		return nil, err
+	}
+	if err := applyACL(workspaceGuard.final, userSID, true); err != nil {
+		return nil, err
+	}
 	if err := reconcileReceiptFile(receiptPath); err != nil {
 		return nil, err
 	}
@@ -172,32 +188,16 @@ func install(workspaceRootValue, userSID, componentVersion string, replace bool)
 		if err := requireNewOrEmptyDirectory(storeRoot); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(receiptPath), 0700); err != nil {
-			return nil, err
-		}
 		if err := writeExclusiveJSON(receiptPath, receipt); err != nil {
 			return nil, err
 		}
 	}
-	if err := os.MkdirAll(filepath.Dir(installedExecutable), 0700); err != nil {
+	brokerGuard, err := secureDirectoryTree(filepath.Dir(installedExecutable))
+	if err != nil {
 		return nil, err
 	}
-	if err := os.MkdirAll(workspaceRoot, 0700); err != nil {
-		return nil, err
-	}
-	if err := rejectReparse(storeRoot); err != nil {
-		return nil, err
-	}
-	if err := rejectReparse(workspaceRoot); err != nil {
-		return nil, err
-	}
+	defer brokerGuard.close()
 	if err := copyOrVerify(source, installedExecutable); err != nil {
-		return nil, err
-	}
-	if err := applyACL(storeRoot, userSID, false); err != nil {
-		return nil, err
-	}
-	if err := applyACL(workspaceRoot, userSID, true); err != nil {
 		return nil, err
 	}
 	config := workspace.ServiceConfig{
@@ -680,41 +680,161 @@ func requireNewOrEmptyDirectory(target string) error {
 	return nil
 }
 
-func rejectReparse(target string) error {
-	info, err := os.Lstat(target)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("storage path is not a real directory: %s", target)
+type secureDirectoryGuard struct {
+	handles []windows.Handle
+	final   windows.Handle
+}
+
+func (guard *secureDirectoryGuard) close() {
+	for index := len(guard.handles) - 1; index >= 0; index-- {
+		_ = windows.CloseHandle(guard.handles[index])
 	}
+}
+
+func openRealDirectory(target string, final bool) (windows.Handle, error) {
 	pointer, err := windows.UTF16PtrFromString(target)
 	if err != nil {
-		return err
+		return windows.InvalidHandle, err
 	}
-	attributes, err := windows.GetFileAttributes(pointer)
+	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE)
+	if final {
+		access |= windows.READ_CONTROL | windows.WRITE_DAC
+	}
+	handle, err := windows.CreateFile(
+		pointer,
+		access,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		nil,
+		windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
+		0,
+	)
 	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	if err := validateRealDirectoryHandle(handle, target); err != nil {
+		_ = windows.CloseHandle(handle)
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
+}
+
+func validateRealDirectoryHandle(handle windows.Handle, target string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
 		return err
 	}
-	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return fmt.Errorf("storage path is a reparse point: %s", target)
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
+		info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("storage path component is not a real directory: %s", target)
 	}
 	return nil
 }
 
-func applyACL(target, userSID string, modify bool) error {
-	permission := "(OI)(CI)RX"
-	if modify {
-		permission = "(OI)(CI)M"
+func openOrCreateRealChildDirectory(parent windows.Handle, component, displayPath string, final bool) (windows.Handle, error) {
+	if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `\\/`) {
+		return windows.InvalidHandle, fmt.Errorf("storage path component is invalid: %s", displayPath)
 	}
-	output, err := exec.Command(
-		"icacls.exe",
-		target,
-		"/inheritance:r",
-		"/grant:r",
-		"*S-1-5-18:(OI)(CI)F",
-		"*S-1-5-32-544:(OI)(CI)F",
-		"*"+userSID+":"+permission,
-	).CombinedOutput()
+	objectName, err := windows.NewNTUnicodeString(component)
 	if err != nil {
-		return fmt.Errorf("set storage ACL: %w: %s", err, output)
+		return windows.InvalidHandle, err
+	}
+	attributes := &windows.OBJECT_ATTRIBUTES{
+		RootDirectory: parent,
+		ObjectName:    objectName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE | windows.OBJ_DONT_REPARSE,
+	}
+	attributes.Length = uint32(unsafe.Sizeof(*attributes))
+	access := uint32(windows.FILE_LIST_DIRECTORY | windows.FILE_TRAVERSE | windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE)
+	if final {
+		access |= windows.READ_CONTROL | windows.WRITE_DAC
+	}
+	var handle windows.Handle
+	var status windows.IO_STATUS_BLOCK
+	if err := windows.NtCreateFile(
+		&handle,
+		access,
+		attributes,
+		&status,
+		nil,
+		windows.FILE_ATTRIBUTE_DIRECTORY,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE,
+		windows.FILE_OPEN_IF,
+		windows.FILE_DIRECTORY_FILE|windows.FILE_OPEN_REPARSE_POINT|windows.FILE_OPEN_FOR_BACKUP_INTENT|windows.FILE_SYNCHRONOUS_IO_NONALERT,
+		0,
+		0,
+	); err != nil {
+		return windows.InvalidHandle, err
+	}
+	if err := validateRealDirectoryHandle(handle, displayPath); err != nil {
+		_ = windows.CloseHandle(handle)
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
+}
+
+func secureDirectoryTree(target string) (*secureDirectoryGuard, error) {
+	clean := filepath.Clean(target)
+	volume := filepath.VolumeName(clean)
+	if volume == "" || strings.HasPrefix(volume, `\\`) {
+		return nil, fmt.Errorf("storage path must use a local absolute volume: %s", target)
+	}
+	root := volume + string(os.PathSeparator)
+	relative, err := filepath.Rel(root, clean)
+	if err != nil || relative == "." || strings.HasPrefix(relative, ".."+string(os.PathSeparator)) {
+		return nil, fmt.Errorf("storage path is outside its local volume: %s", target)
+	}
+	components := strings.Split(relative, string(os.PathSeparator))
+	guard := &secureDirectoryGuard{}
+	current := root
+	rootHandle, err := openRealDirectory(root, false)
+	if err != nil {
+		return nil, err
+	}
+	guard.handles = append(guard.handles, rootHandle)
+	for index, component := range components {
+		current = filepath.Join(current, component)
+		handle, err := openOrCreateRealChildDirectory(
+			guard.handles[len(guard.handles)-1],
+			component,
+			current,
+			index == len(components)-1,
+		)
+		if err != nil {
+			guard.close()
+			return nil, err
+		}
+		guard.handles = append(guard.handles, handle)
+		guard.final = handle
+	}
+	return guard, nil
+}
+
+func applyACL(target windows.Handle, userSID string, modify bool) error {
+	permission := "0x1200a9"
+	if modify {
+		permission = "0x1301bf"
+	}
+	descriptor, err := windows.SecurityDescriptorFromString(
+		"D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;" + permission + ";;;" + userSID + ")",
+	)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return err
+	}
+	if err := windows.SetSecurityInfo(
+		target,
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		dacl,
+		nil,
+	); err != nil {
+		return fmt.Errorf("set storage ACL: %w", err)
 	}
 	return nil
 }

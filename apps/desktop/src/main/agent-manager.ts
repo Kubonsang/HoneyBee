@@ -1,5 +1,4 @@
 import { execFile, spawn } from "node:child_process";
-import { lstat, readFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -12,10 +11,10 @@ import {
   type DesktopAgentStatusV1,
 } from "../shared/ipc.js";
 import {
-  captureAgentLaunchTrust,
   HoneyBeeCoreError,
+  prepareAgentLaunch,
+  trustedAgentInvocation,
   verifyAgentLaunchTrust,
-  type AgentTrustPath,
 } from "@honeybee/core";
 import type { DesktopAgentUpsertRequestV1 } from "../shared/ipc.js";
 import type { DesktopSettingsStore } from "./settings.js";
@@ -119,12 +118,19 @@ export class DesktopAgentManager {
     }
     try {
       await verifyAgentLaunchTrust(profile.command, profile.trust);
-      const versionResult = await execFileAsync(profile.command.command, ["--version"], {
-        cwd: profile.command.cwd,
-        timeout: PROBE_TIMEOUT_MS,
-        maxBuffer: MAX_PROBE_BYTES,
-        windowsHide: true,
-      });
+      const versionInvocation = await trustedAgentInvocation(profile.command, profile.trust, [
+        "--version",
+      ]);
+      const versionResult = await execFileAsync(
+        versionInvocation.command,
+        versionInvocation.args ?? [],
+        {
+          cwd: versionInvocation.cwd,
+          timeout: PROBE_TIMEOUT_MS,
+          maxBuffer: MAX_PROBE_BYTES,
+          windowsHide: true,
+        },
+      );
       const version = firstLine(versionResult.stdout || versionResult.stderr);
       if (!exactSessionVersion(profile, version)) {
         return DesktopAgentStatusV1Schema.parse({
@@ -142,8 +148,13 @@ export class DesktopAgentManager {
       const authArgs = authenticationArgs(profile.provider);
       if (authArgs !== undefined) {
         try {
-          await execFileAsync(profile.command.command, [...authArgs], {
-            cwd: profile.command.cwd,
+          const authInvocation = await trustedAgentInvocation(
+            profile.command,
+            profile.trust,
+            authArgs,
+          );
+          await execFileAsync(authInvocation.command, authInvocation.args ?? [], {
+            cwd: authInvocation.cwd,
             timeout: PROBE_TIMEOUT_MS,
             maxBuffer: MAX_PROBE_BYTES,
             windowsHide: true,
@@ -203,9 +214,10 @@ export class DesktopAgentManager {
         launched: false,
         message: "Custom Agents manage authentication outside HoneyBee.",
       });
+    const invocation = await trustedAgentInvocation(profile.command, profile.trust, args);
     await new Promise<void>((resolve, reject) => {
-      const child = spawn(profile.command.command, [...args], {
-        cwd: profile.command.cwd,
+      const child = spawn(invocation.command, invocation.args ?? [], {
+        cwd: invocation.cwd,
         detached: true,
         stdio: "ignore",
         windowsHide: false,
@@ -235,9 +247,7 @@ export class DesktopAgentManager {
         "The Agent executable could not be resolved to an approved absolute path.",
       );
     }
-    const trustPaths: AgentTrustPath[] = [{ role: "entrypoint", path: commandPath }];
     const explicit = (request.payloadPaths ?? []).map((candidate) => path.resolve(candidate));
-    for (const candidate of explicit) trustPaths.push({ role: "payload", path: candidate });
     const scriptHosts = new Set([
       "node",
       "node.exe",
@@ -262,37 +272,8 @@ export class DesktopAgentManager {
         "Interpreter-based custom Agents must declare their launch payload files.",
       );
     }
-    if (process.platform === "win32" && path.extname(commandPath).toLowerCase() === ".cmd") {
-      const metadata = await lstat(commandPath);
-      if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.size > MAX_PROBE_BYTES) {
-        throw new HoneyBeeCoreError("agent.trust-invalid", "Agent command shim is unsafe.");
-      }
-      const source = await readFile(commandPath, "utf8");
-      const localPayloads = new Set<string>();
-      for (const match of source.matchAll(/%dp0%[\\/]([^"\r\n]+?\.(?:exe|[cm]?js))/giu)) {
-        if (match[1] === undefined) continue;
-        const candidate = path.resolve(path.dirname(commandPath), match[1]);
-        const entry = await lstat(candidate).catch(() => undefined);
-        if (entry?.isFile() === true && !entry.isSymbolicLink()) localPayloads.add(candidate);
-      }
-      if (localPayloads.size === 0 && explicit.length === 0) {
-        throw new HoneyBeeCoreError(
-          "agent.trust-invalid",
-          "The Agent command shim payload could not be resolved.",
-        );
-      }
-      for (const candidate of localPayloads) trustPaths.push({ role: "payload", path: candidate });
-      if ([...localPayloads].some((candidate) => /\.[cm]?js$/iu.test(candidate))) {
-        const node = await this.#resolve("node");
-        if (node === undefined) {
-          throw new HoneyBeeCoreError(
-            "agent.trust-invalid",
-            "The Agent shim requires Node, but node.exe could not be resolved.",
-          );
-        }
-        trustPaths.push({ role: "interpreter", path: node });
-      }
-    } else if (
+    if (
+      !(process.platform === "win32" && path.extname(commandPath).toLowerCase() === ".cmd") &&
       ![".exe", ""].includes(path.extname(commandPath).toLowerCase()) &&
       explicit.length === 0
     ) {
@@ -301,13 +282,16 @@ export class DesktopAgentManager {
         "Script-based custom Agents must declare their launch payload files.",
       );
     }
-    const trust = await captureAgentLaunchTrust(trustPaths);
+    const prepared = await prepareAgentLaunch(
+      { ...request.command, command: commandPath },
+      explicit,
+    );
     return this.settings.upsertAgent(
       {
         ...request,
-        command: { ...request.command, command: commandPath },
+        command: prepared.command,
       },
-      trust,
+      prepared.trust,
     );
   }
 

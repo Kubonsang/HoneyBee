@@ -7,6 +7,7 @@ import {
   ContentDigestSchema,
   EventIdSchema,
   HoneyBeeCoreError,
+  trustedAgentInvocation,
   verifyAgentLaunchTrust,
   type AgentAdapterV1,
   type AgentApprovalDecisionV1,
@@ -159,20 +160,49 @@ class JsonRpcPeer {
   #child?: ChildProcess;
   #startedAt = 0;
   #exit?: { exitCode: number | null; signal: NodeJS.Signals | null };
+  readonly #targetExited: Promise<void>;
+  #targetExitResolve?: () => void;
   #closed?: Promise<void>;
   #closeResolve?: () => void;
-  #closeReject?: (error: unknown) => void;
+  readonly #failure: Promise<never>;
+  #failureReject?: (error: unknown) => void;
+  #failed = false;
+  #finishing = false;
 
   public constructor(options: JsonRpcPeerOptions) {
     this.#request = options.request;
     this.#lifecycle = options.lifecycle;
     this.#onMessage = options.onMessage;
+    this.#failure = new Promise<never>((_resolve, reject) => {
+      this.#failureReject = reject;
+    });
+    this.#targetExited = new Promise<void>((resolve) => {
+      this.#targetExitResolve = resolve;
+    });
+  }
+
+  public wait<T>(operation: Promise<T>): Promise<T> {
+    return Promise.race([operation, this.#failure]);
+  }
+
+  public fail(error: unknown): void {
+    if (this.#failed) return;
+    this.#failed = true;
+    const failure =
+      error instanceof Error ? error : new Error("Agent session failed without an Error value.");
+    for (const pending of this.#pending.values()) pending.reject(failure);
+    this.#pending.clear();
+    this.#failureReject?.(failure);
   }
 
   public get pid(): number {
     const pid = this.#child?.pid;
     if (pid === undefined) throw new Error("Agent containment process has no PID.");
     return pid;
+  }
+
+  public get hasProcess(): boolean {
+    return this.#child?.pid !== undefined;
   }
 
   public stderr(): string {
@@ -193,14 +223,39 @@ class JsonRpcPeer {
       windowsHide: true,
     });
     this.#child = child;
-    this.#closed = new Promise<void>((resolve, reject) => {
+    this.#closed = new Promise<void>((resolve) => {
       this.#closeResolve = resolve;
-      this.#closeReject = reject;
     });
     child.stdout?.on("data", (chunk: Buffer | string) => this.#acceptStdout(chunk));
     child.stderr?.on("data", (chunk: Buffer | string) => this.#acceptStderr(chunk));
-    child.once("error", (error) => this.#closeReject?.(error));
-    child.once("close", () => this.#closeResolve?.());
+    child.on("message", (value: unknown) => {
+      if (!isRecord(value) || value.type !== "target-exit") return;
+      this.#exit = {
+        exitCode: typeof value.exitCode === "number" ? value.exitCode : null,
+        signal: typeof value.signal === "string" ? (value.signal as NodeJS.Signals) : null,
+      };
+      this.#targetExitResolve?.();
+      if (!this.#finishing) {
+        this.fail(
+          new HoneyBeeCoreError(
+            "protocol.invalid-agent-response",
+            "The Agent provider exited before completing the session protocol.",
+          ),
+        );
+      }
+    });
+    child.once("error", (error) => this.fail(error));
+    child.once("close", () => {
+      this.#closeResolve?.();
+      if (!this.#finishing) {
+        this.fail(
+          new HoneyBeeCoreError(
+            "protocol.invalid-agent-response",
+            "The Agent provider exited before completing the session protocol.",
+          ),
+        );
+      }
+    });
     await new Promise<void>((resolve, reject) => {
       child.once("spawn", () => resolve());
       child.once("error", reject);
@@ -249,7 +304,10 @@ class JsonRpcPeer {
   }
 
   public notify(method: string, params: unknown): void {
-    void this.#write({ jsonrpc: "2.0", method, params }).catch(() => this.stop("input-write"));
+    void this.#write({ jsonrpc: "2.0", method, params }).catch((error: unknown) => {
+      this.fail(error);
+      void this.stop("input-write");
+    });
   }
 
   public request(method: string, params: unknown): Promise<unknown> {
@@ -292,6 +350,9 @@ class JsonRpcPeer {
     this.#stdoutBytes += chunk.byteLength;
     this.#stdoutHash.update(chunk);
     if (this.#stdoutBytes + this.#stderrBytes > this.#request.maxOutputBytes) {
+      this.fail(
+        new HoneyBeeCoreError("agent.output-limit", "Agent session output limit exceeded."),
+      );
       void this.stop("output-limit");
       return;
     }
@@ -306,6 +367,12 @@ class JsonRpcPeer {
       try {
         value = JSON.parse(line) as unknown;
       } catch {
+        this.fail(
+          new HoneyBeeCoreError(
+            "protocol.invalid-agent-response",
+            "The Agent provider emitted invalid JSON-RPC output.",
+          ),
+        );
         void this.stop("protocol");
         return;
       }
@@ -329,6 +396,9 @@ class JsonRpcPeer {
     this.#stderrHash.update(chunk);
     if (this.#stderrBytes <= this.#request.maxOutputBytes) this.#stderr.push(chunk);
     if (this.#stdoutBytes + this.#stderrBytes > this.#request.maxOutputBytes) {
+      this.fail(
+        new HoneyBeeCoreError("agent.output-limit", "Agent session output limit exceeded."),
+      );
       void this.stop("output-limit");
     }
   }
@@ -344,26 +414,16 @@ class JsonRpcPeer {
     termination: AgentProcessResult["termination"],
     stdout: string,
   ): Promise<AgentProcessResult> {
+    this.#finishing = true;
     const child = this.#child;
     if (child === undefined) throw new Error("Agent containment process was not started.");
-    const targetExited = await new Promise<boolean>((resolve) => {
-      const listener = (value: unknown): void => {
-        if (!isRecord(value) || value.type !== "target-exit") return;
-        this.#exit = {
-          exitCode: typeof value.exitCode === "number" ? value.exitCode : null,
-          signal: typeof value.signal === "string" ? (value.signal as NodeJS.Signals) : null,
-        };
-        child.off("message", listener);
-        clearTimeout(timer);
-        resolve(true);
-      };
-      const timer = setTimeout(() => {
-        child.off("message", listener);
-        resolve(false);
-      }, 1_000);
-      child.on("message", listener);
-      child.stdin?.end();
-    });
+    child.stdin?.end();
+    const targetExited =
+      this.#exit !== undefined ||
+      (await Promise.race([
+        this.#targetExited.then(() => true),
+        new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      ]));
     if (!targetExited) {
       await terminateProcessTree(this.pid);
       await this.#closed;
@@ -443,61 +503,96 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
       onMessage: (value, activePeer) =>
         this.handleProviderMessage(value, activePeer, request, approval),
     });
-    await peer.start();
     const sessionId = randomUUID();
-    await observer?.({
-      type: "session-opened",
-      adapter: this.kind,
-      sessionIdDigest: digest(sessionId),
-      capabilities: this.capabilities(),
-    });
     const completion = new Promise<"completed" | "failed" | "interrupted">((resolve) => {
       this.turnDone = resolve;
     });
+    let timedOut = false;
+    let sessionOpened = false;
+    let turnStarted = false;
     const abort = (): void => {
+      const error = new HoneyBeeCoreError("agent.cancelled", "Agent session was cancelled.");
+      peer.fail(error);
       this.interrupt(peer);
       this.turnDone?.("interrupted");
+      void peer.stop("cancelled");
     };
     request.signal?.addEventListener("abort", abort, { once: true });
     const timeout = setTimeout(() => {
+      timedOut = true;
+      const error = new HoneyBeeCoreError("agent.timed-out", "Agent session timed out.");
+      peer.fail(error);
       this.interrupt(peer);
       this.turnDone?.("interrupted");
+      void peer.stop("timeout");
     }, request.timeoutMs);
     let runError: unknown;
-    await observer?.({ type: "turn-started", turnIdDigest: digest(this.turnId) });
+    let lifecycleError: unknown;
     try {
-      await this.initialize(peer, request);
-      status = await completion;
+      await peer.wait(peer.start());
+      await peer.wait(
+        observer?.({
+          type: "session-opened",
+          adapter: this.kind,
+          sessionIdDigest: digest(sessionId),
+          capabilities: this.capabilities(),
+        }) ?? Promise.resolve(),
+      );
+      sessionOpened = true;
+      await peer.wait(
+        observer?.({ type: "turn-started", turnIdDigest: digest(this.turnId) }) ??
+          Promise.resolve(),
+      );
+      turnStarted = true;
+      await peer.wait(this.initialize(peer, request));
+      status = await peer.wait(completion);
     } catch (error) {
       runError = error;
       status =
-        error instanceof HoneyBeeCoreError && error.code === "transaction.interrupted"
+        error instanceof HoneyBeeCoreError &&
+        ["transaction.interrupted", "agent.cancelled", "agent.timed-out"].includes(error.code)
           ? "interrupted"
           : "failed";
     } finally {
       clearTimeout(timeout);
       request.signal?.removeEventListener("abort", abort);
-      await observer?.({
-        type: "turn-completed",
-        turnIdDigest: digest(this.turnId),
-        status,
-        outputBytes: Buffer.byteLength(this.output),
-      });
-      await observer?.({
-        type: "session-closed",
-        reason: status === "completed" ? "completed" : status,
-        serializedTranscript: peer.transcript(),
-      });
+      try {
+        if (turnStarted) {
+          await observer?.({
+            type: "turn-completed",
+            turnIdDigest: digest(this.turnId),
+            status,
+            outputBytes: Buffer.byteLength(this.output),
+          });
+        }
+        if (sessionOpened) {
+          await observer?.({
+            type: "session-closed",
+            reason: status === "completed" ? "completed" : status,
+            serializedTranscript: peer.transcript(),
+          });
+        }
+      } catch (error) {
+        lifecycleError = error;
+      }
     }
-    const result = await peer.finish(
-      status === "interrupted"
-        ? request.signal?.aborted === true
-          ? "cancelled"
-          : "timed-out"
-        : "exited",
-      this.output,
-    );
+    const result = peer.hasProcess
+      ? await peer.finish(
+          status === "interrupted"
+            ? request.signal?.aborted === true
+              ? "cancelled"
+              : timedOut
+                ? "timed-out"
+                : "cancelled"
+            : "exited",
+          this.output,
+        )
+      : undefined;
     if (runError !== undefined) throw runError;
+    if (lifecycleError !== undefined) throw lifecycleError;
+    if (result === undefined) {
+      throw new HoneyBeeCoreError("agent.spawn-failed", "Agent session process did not start.");
+    }
     return result;
   }
 
@@ -793,11 +888,15 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
       );
     }
     await verifyAgentLaunchTrust(request.command, request.trust);
+    const invocationRequest: AgentProcessRequest = {
+      ...request,
+      command: await trustedAgentInvocation(request.command, request.trust),
+    };
     const adapter: AgentSessionAdapter =
       request.adapter === "codex-app-server-v1"
         ? new CodexAppServerAdapter()
         : new OpenCodeAcpAdapter();
-    return this.#scheduler.withSlot(
+    const result = await this.#scheduler.withSlot(
       {
         priority: this.#priority(request),
         ...(request.signal === undefined ? {} : { signal: request.signal }),
@@ -806,7 +905,8 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
         onEntered: (waitMs) =>
           lifecycle.onSessionEvent?.({ type: "admission-entered", waitMs }) ?? Promise.resolve(),
       },
-      () => adapter.run(request, lifecycle, this.#approval),
+      () => adapter.run(invocationRequest, lifecycle, this.#approval),
     );
+    return { ...result, command: request.command.command };
   }
 }
