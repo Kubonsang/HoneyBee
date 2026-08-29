@@ -2,6 +2,11 @@ import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  captureAgentLaunchTrust,
+  trustedAgentInvocation,
+  verifyAgentLaunchTrust,
+} from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DesktopAgentManager } from "./agent-manager.js";
@@ -161,6 +166,15 @@ describe("DesktopAgentManager", () => {
           ]),
         );
         process.env.PATH = `${decoyDirectory}${path.delimiter}${previousPath ?? ""}`;
+        const trust = profile.trust;
+        if (trust === undefined) throw new Error("Expected the shim launch to be trusted.");
+        const observedTrust = await captureAgentLaunchTrust(
+          trust.files.map((file) => ({ role: file.role, path: file.path })),
+        );
+        expect(observedTrust).toEqual(trust);
+        await verifyAgentLaunchTrust(profile.command, trust);
+        const invocation = await trustedAgentInvocation(profile.command, trust, ["--version"]);
+        expect(invocation.command).toBe(await realpath(trustedNode));
         await expect(manager.probe(profile)).resolves.toMatchObject({
           status: "ready",
           version: "fixture 1.0.0",
