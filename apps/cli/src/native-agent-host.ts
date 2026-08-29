@@ -180,6 +180,7 @@ interface HostEventWaiter {
 class HostEventStream {
   readonly #events: HostWireEvent[] = [];
   readonly #waiters: HostEventWaiter[] = [];
+  readonly #closed: Promise<void>;
   #ended: unknown;
   #sawExit = false;
 
@@ -228,17 +229,25 @@ class HostEventStream {
         this.#events.push(event);
       }
     });
-    child.once("error", (error) => this.fail(error));
-    child.once("exit", (code) => {
-      if (this.#ended === undefined && (!this.#sawExit || code !== 0)) {
-        this.fail(
-          new HoneyBeeCoreError(
-            "native-agent-host.failed",
-            "Native Agent Host supervisor exited before completing its protocol.",
-          ),
+    this.#closed = new Promise<void>((resolve, reject) => {
+      child.once("error", (error) => {
+        this.fail(error);
+        reject(error);
+      });
+      child.once("close", (code) => {
+        if (this.#sawExit && code === 0) {
+          resolve();
+          return;
+        }
+        const error = new HoneyBeeCoreError(
+          "native-agent-host.failed",
+          "Native Agent Host supervisor closed before completing its protocol.",
         );
-      }
+        this.fail(error);
+        reject(error);
+      });
     });
+    void this.#closed.catch(() => undefined);
   }
 
   public wait(expected: HostWireEvent["type"], timeoutMs?: number): Promise<HostWireEvent> {
@@ -267,6 +276,10 @@ class HostEventStream {
       }
       this.#waiters.push(waiter);
     });
+  }
+
+  public async waitForClose(): Promise<void> {
+    await this.#closed;
   }
 
   private fail(error: unknown): void {
@@ -475,6 +488,7 @@ export class SystemNativeAgentHost {
       );
     }
     assertReceiptIdentity(receipt, intent);
+    await events.waitForClose();
     return receipt;
   }
 
