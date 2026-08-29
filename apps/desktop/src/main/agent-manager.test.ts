@@ -119,6 +119,54 @@ describe("DesktopAgentManager", () => {
   });
 
   it.runIf(process.platform === "win32")(
+    "rejects command shims whose fixed arguments cannot survive direct invocation",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.exe");
+      await writeFile(payload, "fixture payload", "utf8");
+      await writeFile(shim, '@echo off\r\n"%dp0%\\fixture.exe" --mode native %*\r\n', "utf8");
+
+      await expect(
+        new DesktopAgentManager(settings).upsert({
+          schemaVersion: 1,
+          displayName: "Unsupported shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          enabled: true,
+        }),
+      ).rejects.toMatchObject({ code: "agent.trust-invalid" });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "rejects command shims whose environment setup cannot survive direct invocation",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.exe");
+      await writeFile(payload, "fixture payload", "utf8");
+      await writeFile(
+        shim,
+        '@echo off\r\nset HONEYBEE_MODE=native\r\n"%dp0%\\fixture.exe" %*\r\n',
+        "utf8",
+      );
+
+      await expect(
+        new DesktopAgentManager(settings).upsert({
+          schemaVersion: 1,
+          displayName: "Unsupported setup shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          enabled: true,
+        }),
+      ).rejects.toMatchObject({ code: "agent.trust-invalid" });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
     "probes a pinned npm-style command shim without invoking cmd.exe",
     async () => {
       const settings = await store();

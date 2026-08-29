@@ -3,13 +3,14 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { DesktopDogfoodController } from "./desktop-dogfood.js";
 
 const roots: string[] = [];
 
 afterEach(async () => {
+  vi.useRealTimers();
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
@@ -88,6 +89,52 @@ describe("DesktopDogfoodController", () => {
     await expect(controller.start({ ...startInput(), doctorPassed: false })).rejects.toThrow(
       "Doctor must pass",
     );
+  });
+
+  it("retains the recorded project and config paths for finalization", async () => {
+    const root = await temporaryRoot();
+    const controller = new DesktopDogfoodController(root, path.join(root, "runs"));
+    const input = startInput();
+    const started = await controller.start(input);
+
+    await expect(
+      controller.finalizationTarget(started.session?.sessionId as string),
+    ).resolves.toEqual({
+      projectPath: path.resolve(input.projectPath),
+      configPath: path.resolve(input.configPath),
+    });
+  });
+
+  it("advances the timing window when an incomplete finalization is refreshed", async () => {
+    vi.useFakeTimers();
+    const root = await temporaryRoot();
+    const controller = new DesktopDogfoodController(root, path.join(root, "runs"));
+    const input = startInput();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00.000Z"));
+    const started = await controller.start(input);
+    const parentRunId = randomUUID();
+    await controller.recordParentRun(input.profileId, parentRunId, 1);
+    const sessionId = started.session?.sessionId as string;
+
+    vi.setSystemTime(new Date("2026-01-01T01:00:00.000Z"));
+    const first = await controller.finalize({
+      sessionId,
+      observation: {
+        ...emptyObservation,
+        runs: [{ runId: parentRunId, status: "running", terminal: false }],
+      },
+    });
+    expect(first.session).toMatchObject({
+      stoppedAt: "2026-01-01T01:00:00.000Z",
+      summary: { sessionWallClockMs: 3_600_000 },
+    });
+
+    vi.setSystemTime(new Date("2026-01-01T02:00:00.000Z"));
+    const refreshed = await controller.finalize({ sessionId, observation: emptyObservation });
+    expect(refreshed.session).toMatchObject({
+      stoppedAt: "2026-01-01T02:00:00.000Z",
+      summary: { sessionWallClockMs: 7_200_000 },
+    });
   });
 
   it("finalizes missing or active work fail-closed and writes idempotent Evidence", async () => {

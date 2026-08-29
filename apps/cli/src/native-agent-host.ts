@@ -396,7 +396,7 @@ export class SystemNativeAgentHost {
     });
     const events = new HostEventStream(child);
     child.stderr.resume();
-    let activated = false;
+    let providerMayBeActive = false;
     try {
       const hostEvent = await events.wait("host-registered", intent.registrationTimeoutMs);
       const host = await this.#readHostReceipt(intent, hostEvent.receiptPath);
@@ -406,6 +406,7 @@ export class SystemNativeAgentHost {
       const target = await this.#readProcessReceipt(intent, processEvent.receiptPath);
       await lifecycle.onProcessRegistered(target);
       await this.#writeMessage(child, { type: "activate" });
+      providerMayBeActive = true;
       await events.wait("provider-resumed", intent.activationTimeoutMs);
       const activationEvent = await events.wait("activated", intent.activationTimeoutMs);
       const activationReceipt = await this.#readActivationReceipt(
@@ -413,7 +414,6 @@ export class SystemNativeAgentHost {
         target,
         activationEvent.receiptPath,
       );
-      activated = true;
       await lifecycle.onActivated(activationReceipt);
       const completion = this.#completion(intent, events);
       let cancelRequestId: string | undefined;
@@ -426,10 +426,10 @@ export class SystemNativeAgentHost {
         cancel: async () => (cancelRequestId ??= await this.#requestCancel(directory, intent)),
       };
     } catch (error) {
-      if (activated) {
+      if (providerMayBeActive) {
         try {
           await this.#requestCancel(directory, intent);
-          await this.#completion(intent, events);
+          await this.#awaitExitReceipt(intent);
         } catch (cleanupError) {
           throw new HoneyBeeCoreError(
             "native-agent-host.failed",
@@ -443,6 +443,28 @@ export class SystemNativeAgentHost {
         child.kill();
       }
       throw error;
+    }
+  }
+
+  async #awaitExitReceipt(
+    intent: NativeAgentHostLaunchIntentV1,
+  ): Promise<NativeAgentExitReceiptV1> {
+    const expected = path.join(intent.receiptDirectory, "exit-receipt.json");
+    const deadline = Date.now() + intent.shutdownTimeoutMs;
+    for (;;) {
+      const receipt = await readReceipt(expected, NativeAgentExitReceiptV1Schema);
+      if (receipt !== undefined) {
+        assertReceiptIdentity(receipt, intent);
+        return receipt;
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new HoneyBeeCoreError(
+          "native-agent-host.timeout",
+          "Native Host did not publish its durable exit receipt during cleanup.",
+        );
+      }
+      await delay(Math.min(50, remaining));
     }
   }
 

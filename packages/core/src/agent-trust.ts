@@ -130,6 +130,65 @@ const resolvePathExecutable = async (command: string): Promise<string | undefine
   return undefined;
 };
 
+const regularExpressionLiteral = (value: string): string =>
+  value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+
+const hasUnsupportedShimSetup = (source: string): boolean => {
+  const allowedAssignments = new Set(["dp0", "_prog", "pathext"]);
+  for (const line of source.split(/\r?\n/gu)) {
+    for (const match of line.matchAll(/(?:^|[&|]\s*)@?\s*set\s+"?([a-z_][a-z0-9_]*)=/giu)) {
+      if (match[1] !== undefined && !allowedAssignments.has(match[1].toLowerCase())) return true;
+    }
+    if (/(?:^|[&|]\s*)@?\s*(?:cd|chdir|pushd|popd)\b/iu.test(line)) return true;
+  }
+  return false;
+};
+
+const hasDirectShimInvocation = (
+  source: string,
+  targetTokens: readonly string[],
+  requiresNode: boolean,
+): boolean => {
+  const nodeInterpreter =
+    '(?:"(?:%_prog%|%dp0%[\\\\/][^"]*node\\.exe)"|(?:%_prog%|node(?:\\.exe)?|%dp0%[\\\\/]\\S*node\\.exe))';
+  for (const line of source.split(/\r?\n/gu)) {
+    const foldedLine = line.toLocaleLowerCase("en-US");
+    for (const token of targetTokens) {
+      const foldedToken = token.toLocaleLowerCase("en-US");
+      let offset = 0;
+      for (;;) {
+        const targetIndex = foldedLine.indexOf(foldedToken, offset);
+        if (targetIndex < 0) break;
+        const separatorIndex = Math.max(
+          line.lastIndexOf("&", targetIndex),
+          line.lastIndexOf("|", targetIndex),
+        );
+        const prefix = line.slice(0, separatorIndex + 1).trim();
+        if (
+          separatorIndex >= 0 &&
+          !/^endlocal\s*&\s*goto\s+#_undefined_#\s+2>nul\s+\|\|\s+title\s+%comspec%\s*&$/iu.test(
+            prefix,
+          )
+        ) {
+          offset = targetIndex + token.length;
+          continue;
+        }
+        const segment = line.slice(separatorIndex + 1).trim();
+        const quotedTarget = `"?${regularExpressionLiteral(token)}"?`;
+        const pattern = new RegExp(
+          requiresNode
+            ? `^${nodeInterpreter}\\s+${quotedTarget}\\s+%\\*\\s*$`
+            : `^${quotedTarget}\\s+%\\*\\s*$`,
+          "iu",
+        );
+        if (pattern.test(segment)) return true;
+        offset = targetIndex + token.length;
+      }
+    }
+  }
+  return false;
+};
+
 const commandShimPayload = async (
   commandPath: string,
 ): Promise<
@@ -149,7 +208,14 @@ const commandShimPayload = async (
     throw new HoneyBeeCoreError("agent.trust-invalid", "Agent command shim is unsafe.");
   }
   const source = await readFile(commandPath, "utf8");
+  if (hasUnsupportedShimSetup(source)) {
+    throw new HoneyBeeCoreError(
+      "agent.trust-invalid",
+      "The Agent command shim contains unsupported fixed arguments or setup.",
+    );
+  }
   const referenced = new Set<string>();
+  const tokensByPath = new Map<string, Set<string>>();
   for (const match of source.matchAll(/%dp0%[\\/]([^"\r\n]+?\.(?:exe|[cm]?js))/giu)) {
     if (match[1] === undefined) continue;
     const candidate = path.resolve(path.dirname(commandPath), match[1]);
@@ -159,7 +225,12 @@ const commandShimPayload = async (
     if (canonical === undefined) continue;
     const canonicalEntry = await lstat(canonical).catch(() => undefined);
     if (canonicalEntry?.isFile() === true && !canonicalEntry.isSymbolicLink()) {
-      referenced.add(path.resolve(canonical));
+      const resolved = path.resolve(canonical);
+      referenced.add(resolved);
+      const key = pathKey(resolved);
+      const tokens = tokensByPath.get(key) ?? new Set<string>();
+      tokens.add(match[0]);
+      tokensByPath.set(key, tokens);
     }
   }
   const scripts = [...referenced].filter((candidate) => /\.[cm]?js$/iu.test(candidate));
@@ -173,6 +244,12 @@ const commandShimPayload = async (
     const localNode = [...referenced].find(
       (candidate) => path.basename(candidate).toLowerCase() === "node.exe",
     );
+    if (!hasDirectShimInvocation(source, [...(tokensByPath.get(pathKey(script)) ?? [])], true)) {
+      throw new HoneyBeeCoreError(
+        "agent.trust-invalid",
+        "The Agent command shim contains unsupported fixed arguments or setup.",
+      );
+    }
     return {
       payload: script,
       requiresNode: true,
@@ -180,7 +257,17 @@ const commandShimPayload = async (
     };
   }
   const executable = executables.length === 1 ? executables[0] : undefined;
-  if (scripts.length === 0 && executable !== undefined) return { payload: executable };
+  if (scripts.length === 0 && executable !== undefined) {
+    if (
+      !hasDirectShimInvocation(source, [...(tokensByPath.get(pathKey(executable)) ?? [])], false)
+    ) {
+      throw new HoneyBeeCoreError(
+        "agent.trust-invalid",
+        "The Agent command shim contains unsupported fixed arguments or setup.",
+      );
+    }
+    return { payload: executable };
+  }
   throw new HoneyBeeCoreError(
     "agent.trust-invalid",
     "The Agent command shim must identify exactly one executable payload.",
