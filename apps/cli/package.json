@@ -6,6 +6,12 @@
   "files": [
     "dist"
   ],
+  "exports": {
+    "./runtime": {
+      "types": "./dist/runtime-api.d.ts",
+      "import": "./dist/runtime-api.js"
+    }
+  },
   "bin": {
     "honeybee": "./dist/cli.js"
   },
@@ -15,8 +21,10 @@
     "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.json --pretty false"
   },
   "dependencies": {
+    "@honeybee/control-plane-contracts": "workspace:*",
     "@honeybee/core": "workspace:*",
-    "@honeybee/orchestration-contracts": "workspace:*"
+    "@honeybee/orchestration-contracts": "workspace:*",
+    "zod": "^4.0.0"
   },
   "license": "MIT"
 }

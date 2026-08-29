@@ -1,6 +1,6 @@
 import { execFile, spawn, type ChildProcess } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, open, readFile, realpath } from "node:fs/promises";
+import { lstat, readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -14,6 +14,10 @@ import {
 import { HoneyBeeCoreError } from "@honeybee/core";
 
 import { SystemUnityProcessControl, type UnityProcessControl } from "./process-control.js";
+import {
+  readRecoveredImmutableFile,
+  UnsafeImmutablePublicationError,
+} from "./immutable-publication.js";
 
 const MAX_RECEIPT_BYTES = 64 * 1024;
 const execFileAsync = promisify(execFile);
@@ -261,41 +265,26 @@ const readReceipt = async (
       "Containment receipt escaped its directory.",
     );
   }
-  const initial = await lstat(intent.containmentReceiptPath);
-  if (
-    !initial.isFile() ||
-    initial.isSymbolicLink() ||
-    initial.nlink !== 1 ||
-    initial.size > MAX_RECEIPT_BYTES
-  ) {
-    throw new HoneyBeeCoreError(
-      "editor.receipt-invalid",
-      "Containment receipt is not a private bounded file.",
-    );
-  }
-  const handle = await open(intent.containmentReceiptPath, "r");
   let bytes: Buffer;
   try {
-    const opened = await handle.stat();
-    if (
-      !opened.isFile() ||
-      opened.nlink !== 1 ||
-      opened.dev !== initial.dev ||
-      opened.ino !== initial.ino ||
-      opened.size > MAX_RECEIPT_BYTES
-    ) {
+    const receiptName = path.basename(intent.containmentReceiptPath);
+    const temporaryPrefix = `${receiptName}.`;
+    ({ bytes } = await readRecoveredImmutableFile(
+      intent.containmentReceiptPath,
+      (candidate) => {
+        if (!candidate.startsWith(temporaryPrefix)) return false;
+        return /^[0-9a-f-]{36}\.tmp$/iu.test(candidate.slice(temporaryPrefix.length));
+      },
+      MAX_RECEIPT_BYTES,
+    ));
+  } catch (error) {
+    if (error instanceof UnsafeImmutablePublicationError) {
       throw new HoneyBeeCoreError(
         "editor.receipt-invalid",
-        "Containment receipt changed while opening.",
+        "Containment receipt has an unrecognized hard link.",
       );
     }
-    bytes = Buffer.alloc(opened.size);
-    const result = await handle.read(bytes, 0, bytes.byteLength, 0);
-    if (result.bytesRead !== bytes.byteLength) {
-      throw new HoneyBeeCoreError("editor.receipt-invalid", "Containment receipt is incomplete.");
-    }
-  } finally {
-    await handle.close();
+    throw error;
   }
   const digest = createHash("sha256").update(bytes).digest("hex");
   if (expectedDigest !== undefined && digest !== expectedDigest) {

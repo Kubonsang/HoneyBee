@@ -2,6 +2,7 @@
   "name": "honey-bee",
   "version": "0.6.0",
   "private": true,
+  "type": "module",
   "description": "CLI-first runtime for handing work between real AI agent processes.",
   "license": "MIT",
   "repository": {

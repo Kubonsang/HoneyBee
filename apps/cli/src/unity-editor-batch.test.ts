@@ -11,7 +11,7 @@ import {
   FileRunControl,
   FileRunRepository,
   RunIdSchema,
-  UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
   type UnityWorkConfigV2,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -34,8 +34,8 @@ const temporaryRoot = async () => {
 };
 
 const config = () =>
-  UnityBatchConfigV3Schema.parse({
-    schemaVersion: 3,
+  UnityBatchConfigV4Schema.parse({
+    schemaVersion: 4,
     mode: "unity-batch",
     resourceScope: "global-editor-pool-v2",
     maxParallelWorks: 2,
@@ -93,12 +93,14 @@ const config = () =>
         task: "A",
         priority: "interactive",
         capabilities: [{ id: "compile-a", kind: "compile" }],
+        agent: { command: { command: "agent-a" }, harness: "stdio-framed-v2" },
       },
       {
         id: "work-b",
         task: "B",
         priority: "background",
         capabilities: [{ id: "test-b", kind: "warm-test", filter: "Smoke" }],
+        agent: { command: { command: "agent-b" }, harness: "stdio-framed-v2" },
       },
     ],
   });
@@ -114,6 +116,10 @@ describe("UnityEditorBatchWorkflow", () => {
     const controls = new FileRunControl(root);
     let active = 0;
     let maximum = 0;
+    let releaseBarrier: () => void = () => undefined;
+    const bothStarted = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
     const observed: Array<
       Readonly<{ config: UnityWorkConfigV2; execution: UnityWorkV5Execution }>
     > = [];
@@ -122,7 +128,8 @@ describe("UnityEditorBatchWorkflow", () => {
         active += 1;
         maximum = Math.max(maximum, active);
         observed.push({ config: childConfig, execution });
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        if (active === 2) releaseBarrier();
+        await bothStarted;
         active -= 1;
         return {
           runId: childRunId,
@@ -162,6 +169,10 @@ describe("UnityEditorBatchWorkflow", () => {
     expect(observed.map((value) => value.config.capabilities[0]?.kind).sort()).toEqual([
       "compile",
       "warm-test",
+    ]);
+    expect(observed.map((value) => value.config.agent.command.command).sort()).toEqual([
+      "agent-a",
+      "agent-b",
     ]);
     expect((await journal.replay(runId)).status).toBe("terminal");
   });

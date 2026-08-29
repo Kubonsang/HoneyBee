@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdtemp, mkdir, readFile, rm, symlink } from "node:fs/promises";
+import { access, link, lstat, mkdtemp, mkdir, readFile, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -85,6 +85,35 @@ describe("SystemUnityEditorLauncher", () => {
     expect(order).toEqual(["receipt", "activated", "owned"]);
     expect(handle.containment.launchId).toBe(intent.launchId);
     await handle.stop();
+  }, 240_000);
+
+  it("recovers a receipt left hard-linked to its private publish temporary", async () => {
+    const { intent } = await fixture();
+    const launcher = new SystemUnityEditorLauncher();
+    const handle = await launcher.launch(
+      intent,
+      {
+        command: process.execPath,
+        args: ["-e", "setInterval(() => {}, 1000)"],
+        cwd: intent.projectPath,
+      },
+      {
+        onContainmentReady: async () => undefined,
+        onActivated: async () => undefined,
+        onEditorStarted: async () => undefined,
+      },
+    );
+    try {
+      const temporaryPath = `${intent.containmentReceiptPath}.${randomUUID()}.tmp`;
+      await link(intent.containmentReceiptPath, temporaryPath);
+      expect((await lstat(intent.containmentReceiptPath)).nlink).toBe(2);
+
+      expect(await launcher.recoverPublishedReceipt(intent)).toEqual(handle.containment);
+      expect((await lstat(intent.containmentReceiptPath)).nlink).toBe(1);
+      await expect(access(temporaryPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await handle.stop();
+    }
   }, 240_000);
 
   it("rejects a command whose binary digest differs from the durable intent", async () => {

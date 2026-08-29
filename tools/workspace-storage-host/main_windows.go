@@ -1,0 +1,795 @@
+//go:build windows
+
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"time"
+
+	"github.com/Kubonsang/unity-workspace-storage/workspace"
+	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/svc"
+	"golang.org/x/sys/windows/svc/mgr"
+)
+
+const (
+	receiptSchema           = 2
+	serviceConflictExitCode = 23
+)
+
+type hostError struct {
+	code     string
+	message  string
+	exitCode int
+}
+
+func (err hostError) Error() string { return err.message }
+
+type installReceipt struct {
+	SchemaVersion    int    `json:"schemaVersion"`
+	ServiceName      string `json:"serviceName"`
+	PipeName         string `json:"pipeName"`
+	ComponentVersion string `json:"componentVersion"`
+	StoreRoot        string `json:"storeRoot"`
+	WorkspaceRoot    string `json:"workspaceRoot"`
+	ConfigPath       string `json:"configPath"`
+	UserSID          string `json:"userSid"`
+	Executable       string `json:"executable"`
+	ExecutableSHA256 string `json:"executableSha256"`
+}
+
+func main() {
+	result, err := execute(os.Args[1:])
+	if err != nil {
+		code := "workspace-storage.install-failed"
+		exitCode := 1
+		var typed hostError
+		if errors.As(err, &typed) {
+			code = typed.code
+			exitCode = typed.exitCode
+		}
+		writeJSON(map[string]any{
+			"schemaVersion": 1,
+			"ok":            false,
+			"error":         map[string]string{"code": code},
+		})
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(exitCode)
+	}
+	writeJSON(result)
+}
+
+func execute(args []string) (any, error) {
+	if len(args) == 0 {
+		return nil, errors.New("usage: install|broker-run|version")
+	}
+	switch args[0] {
+	case "version":
+		return map[string]any{"schemaVersion": 1, "ok": true, "component": "honeybee-workspace-storage-host"}, nil
+	case "broker-run":
+		flags := flag.NewFlagSet("broker-run", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		configPath := flags.String("service-config", "", "absolute broker config path")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || !filepath.IsAbs(*configPath) {
+			return nil, errors.New("broker-run requires --service-config")
+		}
+		return nil, workspace.RunWindowsService(*configPath)
+	case "install":
+		flags := flag.NewFlagSet("install", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		workspaceRoot := flags.String("workspace-root", "", "absolute workspace root")
+		userSID := flags.String("user-sid", "", "installed user SID")
+		componentVersion := flags.String("component-version", "", "pinned component version")
+		replace := flags.Bool("replace", false, "replace the existing HoneyBee service binary")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return nil, errors.New("invalid install arguments")
+		}
+		return install(*workspaceRoot, *userSID, *componentVersion, *replace)
+	default:
+		return nil, fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func install(workspaceRootValue, userSID, componentVersion string, replace bool) (any, error) {
+	if !workspace.IsElevated() {
+		return nil, errors.New("workspace storage installation requires elevation")
+	}
+	releaseInstaller, err := acquireInstallerMutex()
+	if err != nil {
+		return nil, err
+	}
+	defer releaseInstaller()
+	workspaceRoot := filepath.Clean(workspaceRootValue)
+	if !filepath.IsAbs(workspaceRoot) || userSID == "" || componentVersion == "" {
+		return nil, errors.New("workspace root, installed user SID, and component version are required")
+	}
+	if _, err := windows.StringToSid(userSID); err != nil {
+		return nil, errors.New("installed user SID is invalid")
+	}
+	programData := os.Getenv("ProgramData")
+	if !filepath.IsAbs(programData) {
+		return nil, errors.New("ProgramData is unavailable")
+	}
+	storeRoot := filepath.Join(programData, "UnityWorkspaceStorage")
+	configPath := filepath.Join(storeRoot, "broker-config.json")
+	installedExecutable := filepath.Join(storeRoot, "broker", "unity-workspace-storage-host.exe")
+	receiptPath := filepath.Join(storeRoot, "install-receipt.json")
+	if err := reconcileReceiptFile(receiptPath); err != nil {
+		return nil, err
+	}
+	source, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	executableSHA256, err := hashFileHex(source)
+	if err != nil {
+		return nil, err
+	}
+	receipt := installReceipt{
+		SchemaVersion:    receiptSchema,
+		ServiceName:      workspace.WindowsServiceName,
+		PipeName:         workspace.DefaultPipeName,
+		ComponentVersion: componentVersion,
+		StoreRoot:        storeRoot,
+		WorkspaceRoot:    workspaceRoot,
+		ConfigPath:       configPath,
+		UserSID:          userSID,
+		Executable:       installedExecutable,
+		ExecutableSHA256: executableSHA256,
+	}
+
+	manager, err := mgr.Connect()
+	if err != nil {
+		return nil, err
+	}
+	defer manager.Disconnect()
+	if existing, openErr := manager.OpenService(workspace.WindowsServiceName); openErr == nil {
+		defer existing.Close()
+		if _, receiptErr := os.Stat(receiptPath); os.IsNotExist(receiptErr) {
+			return nil, serviceWithoutReceiptError()
+		}
+		return verifyExisting(receiptPath, receipt, existing, replace)
+	}
+
+	if existingReceipt, receiptErr := loadReceipt(receiptPath); receiptErr == nil {
+		if err := sameReceipt(existingReceipt, receipt); err != nil {
+			return nil, err
+		}
+		receipt = existingReceipt
+	} else if !os.IsNotExist(receiptErr) {
+		return nil, receiptErr
+	} else {
+		if err := requireNewOrEmptyDirectory(storeRoot); err != nil {
+			return nil, err
+		}
+		if err := os.MkdirAll(filepath.Dir(receiptPath), 0700); err != nil {
+			return nil, err
+		}
+		if err := writeExclusiveJSON(receiptPath, receipt); err != nil {
+			return nil, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(installedExecutable), 0700); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(workspaceRoot, 0700); err != nil {
+		return nil, err
+	}
+	if err := rejectReparse(storeRoot); err != nil {
+		return nil, err
+	}
+	if err := rejectReparse(workspaceRoot); err != nil {
+		return nil, err
+	}
+	if err := copyOrVerify(source, installedExecutable); err != nil {
+		return nil, err
+	}
+	if err := applyACL(storeRoot, userSID, false); err != nil {
+		return nil, err
+	}
+	if err := applyACL(workspaceRoot, userSID, true); err != nil {
+		return nil, err
+	}
+	config := workspace.ServiceConfig{
+		SchemaVersion:     workspace.ServiceConfigSchemaVersion,
+		StoreRoot:         storeRoot,
+		WorkspaceRoot:     workspaceRoot,
+		UserSID:           userSID,
+		QuotaBytes:        workspace.DefaultQuotaBytes,
+		HostFloorBytes:    workspace.DefaultHostFloor,
+		ChildReserveBytes: workspace.DefaultChildReserve,
+		PipeName:          workspace.DefaultPipeName,
+	}
+	if err := ensureServiceConfig(configPath, config); err != nil {
+		return nil, err
+	}
+	service, err := manager.CreateService(
+		workspace.WindowsServiceName,
+		installedExecutable,
+		mgr.Config{
+			DisplayName: "Unity Workspace Storage",
+			Description: "Owns isolated Unity workspace lifecycle",
+			StartType:   mgr.StartAutomatic,
+		},
+		"broker-run", "--service-config", configPath,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer service.Close()
+	if err := service.Start(); err != nil {
+		_ = service.Delete()
+		return nil, err
+	}
+	return map[string]any{
+		"schemaVersion":    1,
+		"ok":               true,
+		"status":           "INSTALLED",
+		"service":          workspace.WindowsServiceName,
+		"pipeName":         workspace.DefaultPipeName,
+		"componentVersion": componentVersion,
+		"executableSha256": executableSHA256,
+		"workspaceRoot":    workspaceRoot,
+	}, nil
+}
+
+func serviceWithoutReceiptError() error {
+	return hostError{
+		code:     "workspace-storage.service-conflict",
+		message:  "the UnityWorkspaceStorage service exists without a matching HoneyBee installation receipt",
+		exitCode: serviceConflictExitCode,
+	}
+}
+
+func acquireInstallerMutex() (func(), error) {
+	name, err := windows.UTF16PtrFromString(`Global\UnityWorkspaceStorageInstallerV1`)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := windows.CreateMutex(nil, false, name)
+	if err != nil {
+		return nil, err
+	}
+	result, err := windows.WaitForSingleObject(handle, uint32((10*time.Minute)/time.Millisecond))
+	if err != nil || (result != windows.WAIT_OBJECT_0 && result != windows.WAIT_ABANDONED) {
+		windows.CloseHandle(handle)
+		if err != nil {
+			return nil, err
+		}
+		return nil, errors.New("workspace storage installer mutex timed out")
+	}
+	return func() {
+		_ = windows.ReleaseMutex(handle)
+		_ = windows.CloseHandle(handle)
+	}, nil
+}
+
+func verifyExisting(receiptPath string, expected installReceipt, service *mgr.Service, replace bool) (any, error) {
+	receipt, err := loadReceipt(receiptPath)
+	if err != nil {
+		return nil, err
+	}
+	receiptChanged := sameReceipt(receipt, expected) != nil
+	if receiptChanged && (!replace || sameMachineIdentity(receipt, expected) != nil) {
+		return nil, errors.New("workspace storage install receipt does not match this user or root")
+	}
+	source, err := os.Executable()
+	if err != nil {
+		return nil, err
+	}
+	if err := reconcileServiceExecutable(receipt.Executable, service); err != nil {
+		return nil, err
+	}
+	matches, err := sameFileContent(source, receipt.Executable)
+	if err != nil {
+		return nil, err
+	}
+	switched := false
+	if !matches {
+		if !replace {
+			return nil, errors.New("workspace storage service uses a different version; explicit replacement is required")
+		}
+		if err := replaceServiceExecutable(source, receipt.Executable, service); err != nil {
+			return nil, err
+		}
+		switched = true
+	}
+	installedSHA256, err := hashFileHex(receipt.Executable)
+	if err != nil || installedSHA256 != expected.ExecutableSHA256 {
+		return nil, errors.New("workspace storage installed executable digest does not match its receipt")
+	}
+	if receiptChanged {
+		if err := replaceReceiptFile(receiptPath, expected); err != nil {
+			return nil, err
+		}
+		receipt = expected
+	}
+	status, err := service.Query()
+	if err != nil {
+		return nil, err
+	}
+	if status.State == svc.Stopped {
+		if err := service.Start(); err != nil {
+			return nil, err
+		}
+	}
+	resultStatus := "ALREADY_INSTALLED"
+	if switched {
+		resultStatus = "SWITCHED"
+	}
+	return map[string]any{
+		"schemaVersion":    1,
+		"ok":               true,
+		"status":           resultStatus,
+		"service":          receipt.ServiceName,
+		"pipeName":         receipt.PipeName,
+		"componentVersion": receipt.ComponentVersion,
+		"executableSha256": receipt.ExecutableSHA256,
+		"workspaceRoot":    receipt.WorkspaceRoot,
+	}, nil
+}
+
+func hashFileHex(target string) (string, error) {
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("%x", digest[:]), nil
+}
+
+func sameFileContent(left, right string) (bool, error) {
+	leftBytes, err := os.ReadFile(left)
+	if err != nil {
+		return false, err
+	}
+	rightBytes, err := os.ReadFile(right)
+	if err != nil {
+		return false, err
+	}
+	return sha256.Sum256(leftBytes) == sha256.Sum256(rightBytes), nil
+}
+
+func waitForServiceState(service *mgr.Service, expected svc.State, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		status, err := service.Query()
+		if err != nil {
+			return err
+		}
+		if status.State == expected {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return errors.New("workspace storage service state transition timed out")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+}
+
+func replaceServiceExecutable(source, destination string, service *mgr.Service) error {
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State != svc.Stopped {
+		if _, err := service.Control(svc.Stop); err != nil {
+			return err
+		}
+		if err := waitForServiceState(service, svc.Stopped, 30*time.Second); err != nil {
+			return err
+		}
+	}
+	next, previous := replacementPaths(destination)
+	_ = os.Remove(next)
+	if _, err := os.Stat(previous); err == nil {
+		return errors.New("workspace storage replacement backup was not reconciled")
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if err := copyExclusiveVerified(source, next); err != nil {
+		return err
+	}
+	if err := os.Rename(destination, previous); err != nil {
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Rename(next, destination); err != nil {
+		_ = os.Rename(previous, destination)
+		_ = os.Remove(next)
+		return err
+	}
+	rollback := func() {
+		_ = os.Remove(destination)
+		_ = os.Rename(previous, destination)
+		_ = service.Start()
+	}
+	if err := service.Start(); err != nil {
+		rollback()
+		return err
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		_, _ = service.Control(svc.Stop)
+		_ = waitForServiceState(service, svc.Stopped, 30*time.Second)
+		rollback()
+		return err
+	}
+	matches, err := sameFileContent(source, destination)
+	if err != nil || !matches {
+		_, _ = service.Control(svc.Stop)
+		_ = waitForServiceState(service, svc.Stopped, 30*time.Second)
+		rollback()
+		return errors.New("workspace storage service replacement did not preserve the approved binary")
+	}
+	if err := os.Remove(previous); err != nil {
+		return err
+	}
+	return nil
+}
+
+func replacementPaths(destination string) (string, string) {
+	directory := filepath.Dir(destination)
+	return filepath.Join(directory, ".replacement-next.exe"), filepath.Join(directory, ".replacement-previous.exe")
+}
+
+func fileExists(target string) (bool, error) {
+	_, err := os.Stat(target)
+	if err == nil {
+		return true, nil
+	}
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	return false, err
+}
+
+func reconcileServiceExecutable(destination string, service *mgr.Service) error {
+	next, previous := replacementPaths(destination)
+	destinationExists, err := fileExists(destination)
+	if err != nil {
+		return err
+	}
+	previousExists, err := fileExists(previous)
+	if err != nil {
+		return err
+	}
+	nextExists, err := fileExists(next)
+	if err != nil {
+		return err
+	}
+	if !destinationExists {
+		if !previousExists {
+			return errors.New("workspace storage service executable is missing without a recoverable backup")
+		}
+		if err := os.Rename(previous, destination); err != nil {
+			return err
+		}
+		previousExists = false
+		if nextExists {
+			if err := os.Remove(next); err != nil {
+				return err
+			}
+			nextExists = false
+		}
+	}
+	if nextExists {
+		if err := os.Remove(next); err != nil {
+			return err
+		}
+	}
+	if !previousExists {
+		return nil
+	}
+	status, err := service.Query()
+	if err != nil {
+		return err
+	}
+	if status.State == svc.Stopped {
+		if err := service.Start(); err != nil {
+			return restorePreviousServiceExecutable(destination, previous, service, err)
+		}
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		return restorePreviousServiceExecutable(destination, previous, service, err)
+	}
+	return os.Remove(previous)
+}
+
+func restorePreviousServiceExecutable(destination, previous string, service *mgr.Service, cause error) error {
+	status, queryErr := service.Query()
+	if queryErr == nil && status.State != svc.Stopped {
+		_, _ = service.Control(svc.Stop)
+		queryErr = waitForServiceState(service, svc.Stopped, 30*time.Second)
+	}
+	if queryErr != nil {
+		return errors.Join(cause, queryErr)
+	}
+	if err := os.Remove(destination); err != nil && !os.IsNotExist(err) {
+		return errors.Join(cause, err)
+	}
+	if err := os.Rename(previous, destination); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := service.Start(); err != nil {
+		return errors.Join(cause, err)
+	}
+	if err := waitForServiceState(service, svc.Running, 30*time.Second); err != nil {
+		return errors.Join(cause, err)
+	}
+	return nil
+}
+
+func loadReceipt(target string) (installReceipt, error) {
+	data, err := os.ReadFile(target)
+	if err != nil {
+		return installReceipt{}, err
+	}
+	var receipt installReceipt
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return installReceipt{}, err
+	}
+	if receipt.SchemaVersion != receiptSchema ||
+		receipt.ServiceName != workspace.WindowsServiceName ||
+		receipt.PipeName != workspace.DefaultPipeName ||
+		receipt.ComponentVersion == "" ||
+		!filepath.IsAbs(receipt.StoreRoot) ||
+		!filepath.IsAbs(receipt.WorkspaceRoot) ||
+		!filepath.IsAbs(receipt.ConfigPath) ||
+		!filepath.IsAbs(receipt.Executable) ||
+		receipt.UserSID == "" ||
+		len(receipt.ExecutableSHA256) != 64 {
+		return installReceipt{}, errors.New("invalid workspace storage install receipt")
+	}
+	return receipt, nil
+}
+
+func sameReceipt(left, right installReceipt) error {
+	if err := sameMachineIdentity(left, right); err != nil ||
+		left.ComponentVersion != right.ComponentVersion ||
+		left.ExecutableSHA256 != right.ExecutableSHA256 {
+		return errors.New("workspace storage install receipt identity mismatch")
+	}
+	return nil
+}
+
+func sameMachineIdentity(left, right installReceipt) error {
+	if left.SchemaVersion != right.SchemaVersion ||
+		left.ServiceName != right.ServiceName ||
+		left.PipeName != right.PipeName ||
+		!strings.EqualFold(filepath.Clean(left.StoreRoot), filepath.Clean(right.StoreRoot)) ||
+		!strings.EqualFold(filepath.Clean(left.WorkspaceRoot), filepath.Clean(right.WorkspaceRoot)) ||
+		!strings.EqualFold(filepath.Clean(left.ConfigPath), filepath.Clean(right.ConfigPath)) ||
+		!strings.EqualFold(filepath.Clean(left.Executable), filepath.Clean(right.Executable)) ||
+		left.UserSID != right.UserSID {
+		return errors.New("workspace storage install receipt identity mismatch")
+	}
+	return nil
+}
+
+func receiptReplacementPaths(target string) (string, string) {
+	directory := filepath.Dir(target)
+	return filepath.Join(directory, ".install-receipt-next.json"), filepath.Join(directory, ".install-receipt-previous.json")
+}
+
+func reconcileReceiptFile(target string) error {
+	next, previous := receiptReplacementPaths(target)
+	targetExists, err := fileExists(target)
+	if err != nil {
+		return err
+	}
+	previousExists, err := fileExists(previous)
+	if err != nil {
+		return err
+	}
+	if !targetExists && previousExists {
+		if err := os.Rename(previous, target); err != nil {
+			return err
+		}
+		targetExists = true
+		previousExists = false
+	}
+	if !targetExists {
+		if err := os.Remove(next); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	if _, err := loadReceipt(target); err != nil {
+		if !previousExists {
+			return err
+		}
+		if removeErr := os.Remove(target); removeErr != nil {
+			return errors.Join(err, removeErr)
+		}
+		if renameErr := os.Rename(previous, target); renameErr != nil {
+			return errors.Join(err, renameErr)
+		}
+		previousExists = false
+	}
+	if previousExists {
+		if err := os.Remove(previous); err != nil {
+			return err
+		}
+	}
+	if err := os.Remove(next); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func replaceReceiptFile(target string, value installReceipt) error {
+	if err := reconcileReceiptFile(target); err != nil {
+		return err
+	}
+	next, previous := receiptReplacementPaths(target)
+	if err := writeExclusiveJSON(next, value); err != nil {
+		return err
+	}
+	if err := os.Rename(target, previous); err != nil {
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Rename(next, target); err != nil {
+		_ = os.Rename(previous, target)
+		_ = os.Remove(next)
+		return err
+	}
+	if err := os.Remove(previous); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureServiceConfig(target string, expected workspace.ServiceConfig) error {
+	existing, err := workspace.LoadServiceConfig(target)
+	if err == nil {
+		if existing != expected {
+			return errors.New("workspace storage service config identity mismatch")
+		}
+		return nil
+	}
+	if !os.IsNotExist(err) {
+		return err
+	}
+	return workspace.SaveServiceConfig(target, expected)
+}
+
+func requireNewOrEmptyDirectory(target string) error {
+	entries, err := os.ReadDir(target)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("storage root already exists and is not empty: %s", target)
+	}
+	return nil
+}
+
+func rejectReparse(target string) error {
+	info, err := os.Lstat(target)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("storage path is not a real directory: %s", target)
+	}
+	pointer, err := windows.UTF16PtrFromString(target)
+	if err != nil {
+		return err
+	}
+	attributes, err := windows.GetFileAttributes(pointer)
+	if err != nil {
+		return err
+	}
+	if attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("storage path is a reparse point: %s", target)
+	}
+	return nil
+}
+
+func applyACL(target, userSID string, modify bool) error {
+	permission := "(OI)(CI)RX"
+	if modify {
+		permission = "(OI)(CI)M"
+	}
+	output, err := exec.Command(
+		"icacls.exe",
+		target,
+		"/inheritance:r",
+		"/grant:r",
+		"*S-1-5-18:(OI)(CI)F",
+		"*S-1-5-32-544:(OI)(CI)F",
+		"*"+userSID+":"+permission,
+	).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("set storage ACL: %w: %s", err, output)
+	}
+	return nil
+}
+
+func copyExclusiveVerified(source, destination string) error {
+	input, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer input.Close()
+	output, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0700)
+	if err != nil {
+		return err
+	}
+	sourceHash := sha256.New()
+	_, copyErr := io.Copy(io.MultiWriter(output, sourceHash), input)
+	syncErr := output.Sync()
+	closeErr := output.Close()
+	if err := errors.Join(copyErr, syncErr, closeErr); err != nil {
+		_ = os.Remove(destination)
+		return err
+	}
+	installed, err := os.Open(destination)
+	if err != nil {
+		return err
+	}
+	destinationHash := sha256.New()
+	_, hashErr := io.Copy(destinationHash, installed)
+	closeErr = installed.Close()
+	if err := errors.Join(hashErr, closeErr); err != nil {
+		return err
+	}
+	if !bytes.Equal(sourceHash.Sum(nil), destinationHash.Sum(nil)) {
+		return errors.New("installed workspace storage host hash mismatch")
+	}
+	return nil
+}
+
+func copyOrVerify(source, destination string) error {
+	if err := copyExclusiveVerified(source, destination); err == nil {
+		return nil
+	} else if !os.IsExist(err) {
+		return err
+	}
+	sourceBytes, err := os.ReadFile(source)
+	if err != nil {
+		return err
+	}
+	destinationBytes, err := os.ReadFile(destination)
+	if err != nil {
+		return err
+	}
+	if sha256.Sum256(sourceBytes) != sha256.Sum256(destinationBytes) {
+		return errors.New("installed workspace storage host differs from this HoneyBee package")
+	}
+	return nil
+}
+
+func writeExclusiveJSON(target string, value any) error {
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		return err
+	}
+	handle, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	_, writeErr := handle.Write(append(data, '\n'))
+	syncErr := handle.Sync()
+	closeErr := handle.Close()
+	return errors.Join(writeErr, syncErr, closeErr)
+}
+
+func writeJSON(value any) {
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(value)
+}

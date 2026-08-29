@@ -234,7 +234,7 @@ export class UnityBatchWorkflow {
   ): Promise<UnityBatchRunResult> {
     const runId = RunIdSchema.parse(runIdValue);
     const parsed = UnityBatchConfigSchema.parse(configValue);
-    if (parsed.schemaVersion === 3) {
+    if (parsed.schemaVersion === 3 || parsed.schemaVersion === 4) {
       throw new HoneyBeeCoreError(
         "validation.invalid-workflow",
         "UnityBatchWorkflow handles only v0.5 configs.",
@@ -283,7 +283,7 @@ export class UnityBatchWorkflow {
     const parsedConfig = UnityBatchConfigSchema.parse(
       JSON.parse(await this.artifacts.get({ runId, artifact: start.payload.config })) as unknown,
     );
-    if (parsedConfig.schemaVersion === 3) {
+    if (parsedConfig.schemaVersion === 3 || parsedConfig.schemaVersion === 4) {
       throw new HoneyBeeCoreError("run.indeterminate", "A v0.5 Journal references a v0.6 config.");
     }
     const config = parsedConfig;

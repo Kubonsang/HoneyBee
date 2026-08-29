@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, rm, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readFile, readdir, rm, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -12,6 +12,7 @@ import {
   OrchestrationEventV3Schema,
   OrchestrationEventV4Schema,
   OrchestrationEventV5Schema,
+  OrchestrationEventV6Schema,
   OrchestrationEventV1Schema,
   RunIdSchema,
   TERMINAL_WORKFLOW_EVENT_TYPES,
@@ -19,6 +20,7 @@ import {
   TERMINAL_WORKFLOW_EVENT_V3_TYPES,
   TERMINAL_WORKFLOW_EVENT_V4_TYPES,
   TERMINAL_WORKFLOW_EVENT_V5_TYPES,
+  TERMINAL_WORKFLOW_EVENT_V6_TYPES,
   type AnyOrchestrationEvent,
   type ArtifactRef,
   type FailureMetadata,
@@ -27,12 +29,14 @@ import {
   type OrchestrationEventV3,
   type OrchestrationEventV4,
   type OrchestrationEventV5,
+  type OrchestrationEventV6,
   type RunId,
   type TerminalWorkflowEvent,
   type TerminalWorkflowEventV2,
   type TerminalWorkflowEventV3,
   type TerminalWorkflowEventV4,
   type TerminalWorkflowEventV5,
+  type TerminalWorkflowEventV6,
 } from "@honeybee/orchestration-contracts";
 
 import { HoneyBeeCoreError } from "./errors.js";
@@ -121,6 +125,37 @@ export class FileRunRepository extends FileRunScopedStore implements RunReposito
   public async open(runId: RunId): Promise<RunRecord> {
     await this.requireRunDirectory(runId);
     return { runId: RunIdSchema.parse(runId) };
+  }
+
+  public async list(): Promise<readonly RunRecord[]> {
+    let entries;
+    try {
+      const root = await lstat(this.rootDirectory);
+      if (!root.isDirectory() || root.isSymbolicLink()) {
+        throw new HoneyBeeCoreError(
+          "run.invalid-path",
+          "Run repository root is not a real directory.",
+        );
+      }
+      entries = await readdir(this.rootDirectory, { withFileTypes: true });
+    } catch (error) {
+      if (errorCode(error) === "ENOENT") return [];
+      if (error instanceof HoneyBeeCoreError) throw error;
+      throw new HoneyBeeCoreError("run.invalid-path", "Run repository could not be enumerated.");
+    }
+    const records: RunRecord[] = [];
+    for (const entry of entries) {
+      const parsed = RunIdSchema.safeParse(entry.name);
+      if (!parsed.success) continue;
+      if (!entry.isDirectory() || entry.isSymbolicLink()) {
+        throw new HoneyBeeCoreError(
+          "run.invalid-path",
+          `Run ${entry.name} is not a real directory.`,
+        );
+      }
+      records.push({ runId: parsed.data });
+    }
+    return records.sort((left, right) => left.runId.localeCompare(right.runId));
   }
 
   public async delete(runId: RunId): Promise<void> {
@@ -252,7 +287,9 @@ const parseEvent = (value: unknown): AnyOrchestrationEvent | undefined => {
             ? OrchestrationEventV4Schema.safeParse(value)
             : version === 5
               ? OrchestrationEventV5Schema.safeParse(value)
-              : undefined;
+              : version === 6
+                ? OrchestrationEventV6Schema.safeParse(value)
+                : undefined;
   return parsed?.success === true ? parsed.data : undefined;
 };
 
@@ -265,7 +302,9 @@ const isTerminal = (event: AnyOrchestrationEvent): boolean =>
         ? TERMINAL_WORKFLOW_EVENT_V3_TYPES.has(event.type as TerminalWorkflowEventV3["type"])
         : event.schemaVersion === 4
           ? TERMINAL_WORKFLOW_EVENT_V4_TYPES.has(event.type as TerminalWorkflowEventV4["type"])
-          : TERMINAL_WORKFLOW_EVENT_V5_TYPES.has(event.type as TerminalWorkflowEventV5["type"]);
+          : event.schemaVersion === 5
+            ? TERMINAL_WORKFLOW_EVENT_V5_TYPES.has(event.type as TerminalWorkflowEventV5["type"])
+            : TERMINAL_WORKFLOW_EVENT_V6_TYPES.has(event.type as TerminalWorkflowEventV6["type"]);
 
 const sameArtifactRef = (left: ArtifactRef | undefined, right: ArtifactRef | undefined): boolean =>
   left === undefined || right === undefined
@@ -1394,7 +1433,7 @@ const validV5ChildTransitions = (events: readonly OrchestrationEventV5[]): boole
         if (
           !sourceUnchanged ||
           sourceAfter === undefined ||
-          poolPhase !== "released" ||
+          (linkage.capabilityCount === 0 ? poolPhase !== "none" : poolPhase !== "released") ||
           nextCapability !== linkage.capabilityCount ||
           capabilityFailed ||
           patch !== undefined ||
@@ -1447,9 +1486,10 @@ const validV5ChildTransitions = (events: readonly OrchestrationEventV5[]): boole
           !("patch" in event.payload) ||
           decision?.outcome !== "completed" ||
           workspacePhase !== "released" ||
-          evidence.length === 0 ||
+          (linkage.capabilityCount === 0
+            ? event.payload.evidence !== undefined || evidence.length !== 0
+            : evidence.length === 0 || !sameArtifactRef(event.payload.evidence, evidence.at(-1))) ||
           patch === undefined ||
-          !sameArtifactRef(event.payload.evidence, evidence.at(-1)) ||
           !sameArtifactRef(event.payload.patch, patch.patch) ||
           !sameArtifactRef(event.payload.resultManifest, patch.resultManifest) ||
           !sameArtifactRef(event.payload.release, workspaceRelease) ||
@@ -1497,6 +1537,124 @@ const validV5Transitions = (events: readonly OrchestrationEventV5[]): boolean =>
   return start.payload.mode === "unity-batch-v2"
     ? validV5BatchTransitions(events)
     : validV5ChildTransitions(events);
+};
+
+const SESSION_V6_TYPES = new Set([
+  "work.admission-queued",
+  "work.admission-entered",
+  "agent.session-opened",
+  "agent.turn-started",
+  "agent.approval-requested",
+  "agent.approval-resolved",
+  "agent.approval-delivered",
+  "agent.turn-completed",
+  "agent.session-closed",
+]);
+
+const validV6Transitions = (events: readonly OrchestrationEventV6[]): boolean => {
+  const legacy: OrchestrationEventV5[] = [];
+  for (const event of events) {
+    if (SESSION_V6_TYPES.has(event.type)) continue;
+    const parsed = OrchestrationEventV5Schema.safeParse({ ...event, schemaVersion: 5 });
+    if (!parsed.success) return false;
+    legacy.push(parsed.data);
+  }
+  if (!validV5Transitions(legacy)) return false;
+
+  const stored = new Set<string>();
+  const approvals = new Map<string, "requested" | "resolved" | "delivered">();
+  let admission: "none" | "queued" | "entered" = "none";
+  let process: "none" | "started" | "registered" | "exited" = "none";
+  let session: "none" | "opened" | "turn" | "completed" | "closed" = "none";
+  let turnDigest: string | undefined;
+  let turnStatus: "completed" | "failed" | "interrupted" | undefined;
+  for (const event of events) {
+    switch (event.type) {
+      case "artifact.stored":
+        stored.add(event.payload.artifact.artifactId);
+        break;
+      case "work.admission-queued":
+        if (admission !== "none" || process !== "none" || session !== "none") return false;
+        admission = "queued";
+        break;
+      case "work.admission-entered":
+        if (admission !== "queued" || process !== "none") return false;
+        admission = "entered";
+        break;
+      case "agent.started":
+        if (process !== "none" || (admission !== "none" && admission !== "entered")) return false;
+        process = "started";
+        break;
+      case "process.containment-registered":
+        if (event.payload.process === "agent") {
+          if (process !== "started") return false;
+          process = "registered";
+        }
+        break;
+      case "agent.session-opened":
+        if (
+          process !== "registered" ||
+          session !== "none" ||
+          event.payload.adapter !== event.payload.capabilities.adapter
+        )
+          return false;
+        session = "opened";
+        break;
+      case "agent.turn-started":
+        if (session !== "opened") return false;
+        turnDigest = event.payload.turnIdDigest;
+        session = "turn";
+        break;
+      case "agent.approval-requested":
+        if (
+          session !== "turn" ||
+          approvals.has(event.payload.approvalId) ||
+          !stored.has(event.payload.request.artifactId)
+        )
+          return false;
+        approvals.set(event.payload.approvalId, "requested");
+        break;
+      case "agent.approval-resolved":
+        if (
+          session !== "turn" ||
+          approvals.get(event.payload.approvalId) !== "requested" ||
+          !stored.has(event.payload.receipt.artifactId)
+        )
+          return false;
+        approvals.set(event.payload.approvalId, "resolved");
+        break;
+      case "agent.approval-delivered":
+        if (session !== "turn" || approvals.get(event.payload.approvalId) !== "resolved")
+          return false;
+        approvals.set(event.payload.approvalId, "delivered");
+        break;
+      case "agent.turn-completed":
+        if (
+          session !== "turn" ||
+          event.payload.turnIdDigest !== turnDigest ||
+          (event.payload.status !== "interrupted" &&
+            [...approvals.values()].some((state) => state !== "delivered"))
+        )
+          return false;
+        turnStatus = event.payload.status;
+        session = "completed";
+        break;
+      case "agent.session-closed":
+        if (
+          session !== "completed" ||
+          event.payload.reason !== turnStatus ||
+          !stored.has(event.payload.transcript.artifactId)
+        )
+          return false;
+        session = "closed";
+        break;
+      case "agent.exited":
+        if (session !== "closed" || !["started", "registered"].includes(process)) return false;
+        process = "exited";
+        break;
+    }
+  }
+  return true;
 };
 
 const validV2Transitions = (events: readonly OrchestrationEventV2[]): boolean => {
@@ -1738,6 +1896,15 @@ export class FileOrchestrationJournal
           "Unity v0.6 Journal transition invariants failed.",
         );
       }
+      if (
+        validatedEvent.schemaVersion === 6 &&
+        !validV6Transitions([...(existing as OrchestrationEventV6[]), validatedEvent])
+      ) {
+        throw new HoneyBeeCoreError(
+          "journal.write-failed",
+          "Unity Agent session Journal transition invariants failed.",
+        );
+      }
       const handle = await open(journalPath, "a");
       try {
         await handle.writeFile(`${JSON.stringify(validatedEvent)}\n`, "utf8");
@@ -1833,14 +2000,25 @@ export class FileOrchestrationJournal
         terminal: terminal as TerminalWorkflowEventV4,
       };
     }
-    if (!validV5Transitions(events as OrchestrationEventV5[])) return indeterminate();
+    if (events[0].schemaVersion === 5) {
+      if (!validV5Transitions(events as OrchestrationEventV5[])) return indeterminate();
+      if (terminal === undefined) {
+        return { status: "active", events: events as OrchestrationEventV5[] };
+      }
+      return {
+        status: "terminal",
+        events: events as OrchestrationEventV5[],
+        terminal: terminal as TerminalWorkflowEventV5,
+      };
+    }
+    if (!validV6Transitions(events as OrchestrationEventV6[])) return indeterminate();
     if (terminal === undefined) {
-      return { status: "active", events: events as OrchestrationEventV5[] };
+      return { status: "active", events: events as OrchestrationEventV6[] };
     }
     return {
       status: "terminal",
-      events: events as OrchestrationEventV5[],
-      terminal: terminal as TerminalWorkflowEventV5,
+      events: events as OrchestrationEventV6[],
+      terminal: terminal as TerminalWorkflowEventV6,
     };
   }
 

@@ -8,26 +8,10 @@ module.exports = {
       to: { circular: true },
     },
     {
-      name: "domain-is-framework-free",
+      name: "contracts-do-not-depend-on-apps-or-core",
       severity: "error",
-      from: { path: "^packages/domain/" },
-      to: {
-        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
-      },
-    },
-    {
-      name: "contracts-do-not-depend-on-implementations",
-      severity: "error",
-      from: { path: "^packages/(event|orchestration)-contracts/" },
-      to: {
-        path: "^(apps/|packages/(session-runtime|agent-adapters|persistence|workspace|tool-profiles)/)",
-      },
-    },
-    {
-      name: "runtime-does-not-depend-on-ui-or-extension",
-      severity: "error",
-      from: { path: "^packages/session-runtime/" },
-      to: { path: "^apps/" },
+      from: { path: "^packages/(control-plane|orchestration)-contracts/" },
+      to: { path: "^(apps/|packages/core/)" },
     },
     {
       name: "packages-do-not-import-apps",
@@ -36,10 +20,10 @@ module.exports = {
       to: { path: "^apps/" },
     },
     {
-      name: "core-does-not-depend-on-presentation-or-runtime-adapters",
+      name: "core-does-not-depend-on-presentation",
       severity: "error",
       from: { path: "^packages/core/" },
-      to: { path: "^(apps/|packages/session-runtime/)" },
+      to: { path: "^apps/" },
     },
   ],
   options: {

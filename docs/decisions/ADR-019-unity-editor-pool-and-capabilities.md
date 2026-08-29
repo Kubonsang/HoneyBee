@@ -46,7 +46,7 @@ v0.5는 여러 Unity Work의 Agent 단계를 병렬로 실행하고 TestPlay 같
 - Bridge는 binding과 identity만 담당하며 scheduling, lease, Editor lifecycle을 소유하지 않는다.
 - Agent는 Unity lifecycle이나 capability를 선택하지 않는다. HoneyBee config가 compile과 warm-test의 strict ordered list를 선언한다.
 - 각 capability 전후에 Bridge identity를 재검증한다. capability process lifecycle과 bounded Evidence는 schema 5 Journal metadata 및 content-addressed Artifact에 남긴다.
-- warm-test 성공은 exit code 0뿐 아니라 실행된 test total이 1 이상이어야 한다.
+- capability Evidence는 TestPlay protocol 3 응답의 capability, Editor/workspace/session binding, process exit, artifact root가 durable summary/manifest와 일치할 때만 승인한다. warm-test 성공은 exit code 0뿐 아니라 실행된 test total이 1 이상이어야 한다.
 
 ### 복구와 cleanup
 

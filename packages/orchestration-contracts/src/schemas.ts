@@ -45,6 +45,62 @@ export const AgentCommandSchema = z
   .strict();
 export type AgentCommand = z.infer<typeof AgentCommandSchema>;
 
+const AgentTrustSha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
+
+export const AgentLaunchTrustFileV1Schema = z
+  .object({
+    role: z.enum(["entrypoint", "interpreter", "payload"]),
+    path: z.string().min(1),
+    byteLength: z.number().int().nonnegative(),
+    sha256: AgentTrustSha256Schema,
+  })
+  .strict();
+export type AgentLaunchTrustFileV1 = z.infer<typeof AgentLaunchTrustFileV1Schema>;
+
+export const AgentLaunchTrustV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    files: z.array(AgentLaunchTrustFileV1Schema).min(1).max(16),
+    trustDigest: AgentTrustSha256Schema,
+  })
+  .strict()
+  .superRefine((trust, context) => {
+    if (trust.files.filter((file) => file.role === "entrypoint").length !== 1) {
+      context.addIssue({
+        code: "custom",
+        path: ["files"],
+        message: "Agent trust must contain exactly one entrypoint.",
+      });
+    }
+    const paths = new Set<string>();
+    for (const [index, file] of trust.files.entries()) {
+      const key = file.path.toLocaleLowerCase("en-US");
+      if (paths.has(key)) {
+        context.addIssue({
+          code: "custom",
+          path: ["files", index, "path"],
+          message: "Agent trust paths must be unique.",
+        });
+      }
+      paths.add(key);
+    }
+  });
+export type AgentLaunchTrustV1 = z.infer<typeof AgentLaunchTrustV1Schema>;
+
+export const UnityAgentConfigSchema = z
+  .object({
+    command: AgentCommandSchema,
+    trust: AgentLaunchTrustV1Schema.optional(),
+    harness: z.literal("stdio-framed-v2"),
+    adapter: z
+      .enum(["stdio-framed-v2", "codex-app-server-v1", "opencode-acp-v1"])
+      .default("stdio-framed-v2"),
+    timeoutMs: z.number().int().positive().optional(),
+    maxOutputBytes: z.number().int().positive().optional(),
+  })
+  .strict();
+export type UnityAgentConfig = z.infer<typeof UnityAgentConfigSchema>;
+
 export const WorkflowStepSchema = z
   .object({ id: StepIdSchema, agent: AgentCommandSchema })
   .strict();
@@ -96,6 +152,10 @@ export const ArtifactKindSchema = z.enum([
   "editor-ownership-receipt",
   "warm-bridge-binding",
   "unity-capability-evidence",
+  "agent-session-transcript",
+  "agent-approval-request",
+  "agent-skill-manifest",
+  "agent-context-content",
 ]);
 export type ArtifactKind = z.infer<typeof ArtifactKindSchema>;
 
@@ -741,44 +801,66 @@ export const UnityWorkspaceParentKeySchema = z
   .strict();
 export type UnityWorkspaceParentKey = z.infer<typeof UnityWorkspaceParentKeySchema>;
 
+const WorkspaceStorageCommandSchema = AgentCommandSchema.superRefine((command, context) => {
+  if ((command.args?.length ?? 0) > 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["args"],
+      message: "Workspace storage must be one pinned executable without arguments.",
+    });
+  }
+  if (command.env !== undefined) {
+    context.addIssue({
+      code: "custom",
+      path: ["env"],
+      message: "Workspace storage cannot inject an unpinned execution environment.",
+    });
+  }
+});
+
+export const UnityWorkspaceStorageV1Schema = z
+  .object({
+    command: WorkspaceStorageCommandSchema,
+    contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
+    binarySha256: Sha256HexSchema,
+    workspaceRoot: z.string().min(1),
+    parentKey: UnityWorkspaceParentKeySchema,
+    storeMaxAllocatedBytes: z.number().int().positive().optional(),
+    minimumHostFreeBytes: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type UnityWorkspaceStorageV1 = z.infer<typeof UnityWorkspaceStorageV1Schema>;
+
+export const UnityWorkspaceStorageV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    command: WorkspaceStorageCommandSchema,
+    binarySha256: Sha256HexSchema,
+    workspaceRoot: z.string().min(1),
+    compatibilityKey: Sha256HexSchema,
+    parentId: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u),
+    provider: z.string().trim().min(1).max(64),
+    storeMaxAllocatedBytes: z.number().int().positive().optional(),
+    minimumHostFreeBytes: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type UnityWorkspaceStorageV2 = z.infer<typeof UnityWorkspaceStorageV2Schema>;
+
+export const UnityBridgeOverlaySchema = z
+  .object({
+    packageName: z.literal("com.testplay.bridge"),
+    sourcePath: z.string().min(1),
+    digest: Sha256HexSchema,
+  })
+  .strict();
+export type UnityBridgeOverlay = z.infer<typeof UnityBridgeOverlaySchema>;
+
 export const UnityWorkConfigV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     sourceProjectPath: z.string().min(1),
-    workspaceStorage: z
-      .object({
-        command: AgentCommandSchema.superRefine((command, context) => {
-          if ((command.args?.length ?? 0) > 0) {
-            context.addIssue({
-              code: "custom",
-              path: ["args"],
-              message: "Workspace storage must be one pinned executable without arguments.",
-            });
-          }
-          if (command.env !== undefined) {
-            context.addIssue({
-              code: "custom",
-              path: ["env"],
-              message: "Workspace storage cannot inject an unpinned execution environment.",
-            });
-          }
-        }),
-        contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
-        binarySha256: Sha256HexSchema,
-        workspaceRoot: z.string().min(1),
-        parentKey: UnityWorkspaceParentKeySchema,
-        storeMaxAllocatedBytes: z.number().int().positive().optional(),
-        minimumHostFreeBytes: z.number().int().nonnegative().optional(),
-      })
-      .strict(),
-    agent: z
-      .object({
-        command: AgentCommandSchema,
-        harness: z.literal("stdio-framed-v2"),
-        timeoutMs: z.number().int().positive().optional(),
-        maxOutputBytes: z.number().int().positive().optional(),
-      })
-      .strict(),
+    workspaceStorage: UnityWorkspaceStorageV1Schema,
+    agent: UnityAgentConfigSchema,
     testplay: z
       .object({
         command: AgentCommandSchema,
@@ -819,7 +901,6 @@ export type UnityCapability = z.infer<typeof UnityCapabilitySchema>;
 
 const UnityCapabilityListSchema = z
   .array(UnityCapabilitySchema)
-  .min(1)
   .max(16)
   .superRefine((capabilities, context) => {
     const ids = new Set<string>();
@@ -852,40 +933,8 @@ const UnityWorkConfigV2BaseSchema = z
   .object({
     schemaVersion: z.literal(2),
     sourceProjectPath: z.string().min(1),
-    workspaceStorage: z
-      .object({
-        command: AgentCommandSchema.superRefine((command, context) => {
-          if ((command.args?.length ?? 0) > 0) {
-            context.addIssue({
-              code: "custom",
-              path: ["args"],
-              message: "Workspace storage must be one pinned executable without arguments.",
-            });
-          }
-          if (command.env !== undefined) {
-            context.addIssue({
-              code: "custom",
-              path: ["env"],
-              message: "Workspace storage cannot inject an unpinned execution environment.",
-            });
-          }
-        }),
-        contractCommit: z.literal("575c3b37896cd3dfa37a4705477837cc52ec6132"),
-        binarySha256: Sha256HexSchema,
-        workspaceRoot: z.string().min(1),
-        parentKey: UnityWorkspaceParentKeySchema,
-        storeMaxAllocatedBytes: z.number().int().positive().optional(),
-        minimumHostFreeBytes: z.number().int().nonnegative().optional(),
-      })
-      .strict(),
-    agent: z
-      .object({
-        command: AgentCommandSchema,
-        harness: z.literal("stdio-framed-v2"),
-        timeoutMs: z.number().int().positive().optional(),
-        maxOutputBytes: z.number().int().positive().optional(),
-      })
-      .strict(),
+    workspaceStorage: z.union([UnityWorkspaceStorageV1Schema, UnityWorkspaceStorageV2Schema]),
+    agent: UnityAgentConfigSchema,
     testplay: z
       .object({
         command: AgentCommandSchema,
@@ -894,20 +943,32 @@ const UnityWorkConfigV2BaseSchema = z
         timeoutMs: z.number().int().positive(),
         bridgeProtocolVersion: z.literal(3),
       })
-      .strict(),
+      .strict()
+      .optional(),
     editorPool: UnityEditorPoolConfigSchema,
     priority: UnityWorkPrioritySchema.default("validation"),
     capabilities: UnityCapabilityListSchema,
+    bridgeOverlay: UnityBridgeOverlaySchema.optional(),
   })
   .strict();
 
 export const UnityWorkConfigV2Schema = UnityWorkConfigV2BaseSchema.superRefine(
   (config, context) => {
-    if (config.workspaceStorage.parentKey.localPackagesDigest !== undefined) {
+    if (
+      !("schemaVersion" in config.workspaceStorage) &&
+      config.workspaceStorage.parentKey.localPackagesDigest !== undefined
+    ) {
       context.addIssue({
         code: "custom",
         path: ["workspaceStorage", "parentKey", "localPackagesDigest"],
         message: "Unity work v0.6 does not stage external local packages.",
+      });
+    }
+    if (config.capabilities.length > 0 && config.testplay === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["testplay"],
+        message: "TestPlay is required when compile or warm-test capabilities are selected.",
       });
     }
   },
@@ -1026,15 +1087,42 @@ const UnityBatchWorksV3Schema = z
   )
   .min(2);
 
+export const UnityBatchTransactionV3Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sourceProjectPath: z.string().min(1),
+    workspaceStorage: z.union([UnityWorkspaceStorageV1Schema, UnityWorkspaceStorageV2Schema]),
+    agent: z
+      .object({
+        command: AgentCommandSchema,
+        harness: z.literal("stdio-framed-v2"),
+        timeoutMs: z.number().int().positive().optional(),
+        maxOutputBytes: z.number().int().positive().optional(),
+      })
+      .strict(),
+    testplay: z
+      .object({
+        command: AgentCommandSchema,
+        unityPath: z.string().min(1),
+        platform: z.literal("edit_mode"),
+        timeoutMs: z.number().int().positive(),
+      })
+      .strict()
+      .optional(),
+    bridgeOverlay: UnityBridgeOverlaySchema.optional(),
+  })
+  .strict();
+export type UnityBatchTransactionV3 = z.infer<typeof UnityBatchTransactionV3Schema>;
+
 export const UnityBatchConfigV3Schema = z
   .object({
     schemaVersion: z.literal(3),
     mode: z.literal("unity-batch"),
     resourceScope: z.literal("global-editor-pool-v2"),
     maxParallelWorks: z.number().int().positive(),
-    transaction: UnityWorkConfigV1Schema,
+    transaction: UnityBatchTransactionV3Schema,
     editorPool: UnityEditorPoolConfigSchema,
-    bridgeProtocolVersion: z.literal(3),
+    bridgeProtocolVersion: z.literal(3).optional(),
     works: UnityBatchWorksV3Schema,
   })
   .strict()
@@ -1071,26 +1159,126 @@ export const UnityBatchConfigV3Schema = z
         message: "Workspace storage cannot inject an unpinned execution environment.",
       });
     }
-    if (config.transaction.testplay.platform !== "edit_mode") {
+    const requiresValidation = config.works.some((work) => work.capabilities.length > 0);
+    if (requiresValidation && config.transaction.testplay === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay"],
+        message: "TestPlay is required when compile or warm-test capabilities are selected.",
+      });
+    }
+    if (requiresValidation && config.bridgeProtocolVersion !== 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["bridgeProtocolVersion"],
+        message: "TestPlay capabilities require Bridge protocol 3.",
+      });
+    }
+    if (
+      config.transaction.testplay !== undefined &&
+      config.transaction.testplay.platform !== "edit_mode"
+    ) {
       context.addIssue({
         code: "custom",
         path: ["transaction", "testplay", "platform"],
         message: "Unity v0.6 batches require edit-mode TestPlay.",
       });
     }
-    if (config.transaction.testplay.filter !== undefined) {
+  });
+export type UnityBatchConfigV3 = z.infer<typeof UnityBatchConfigV3Schema>;
+
+const UnityBatchWorksV4Schema = z
+  .array(
+    z
+      .object({
+        id: StepIdSchema,
+        task: z.string().trim().min(1),
+        priority: UnityWorkPrioritySchema.default("validation"),
+        capabilities: UnityCapabilityListSchema,
+        agent: UnityAgentConfigSchema,
+      })
+      .strict(),
+  )
+  .min(2);
+
+export const UnityBatchConfigV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    mode: z.literal("unity-batch"),
+    resourceScope: z.literal("global-editor-pool-v2"),
+    maxParallelWorks: z.number().int().positive(),
+    transaction: UnityBatchTransactionV3Schema,
+    editorPool: UnityEditorPoolConfigSchema,
+    bridgeProtocolVersion: z.literal(3).optional(),
+    works: UnityBatchWorksV4Schema,
+  })
+  .strict()
+  .superRefine((config, context) => {
+    if (config.maxParallelWorks > config.works.length) {
       context.addIssue({
         code: "custom",
-        path: ["transaction", "testplay", "filter"],
-        message: "Unity v0.6 batches configure filters through capabilities.",
+        path: ["maxParallelWorks"],
+        message: "maxParallelWorks cannot exceed the number of Works.",
+      });
+    }
+    const works = new Set<string>();
+    for (const [index, work] of config.works.entries()) {
+      if (works.has(work.id)) {
+        context.addIssue({
+          code: "custom",
+          path: ["works", index, "id"],
+          message: `Duplicate Work id: ${work.id}`,
+        });
+      }
+      works.add(work.id);
+    }
+    if ((config.transaction.workspaceStorage.command.args?.length ?? 0) > 0) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "args"],
+        message: "Workspace storage must be one pinned executable without arguments.",
+      });
+    }
+    if (config.transaction.workspaceStorage.command.env !== undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "workspaceStorage", "command", "env"],
+        message: "Workspace storage cannot inject an unpinned execution environment.",
+      });
+    }
+    const requiresValidation = config.works.some((work) => work.capabilities.length > 0);
+    if (requiresValidation && config.transaction.testplay === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay"],
+        message: "TestPlay is required when compile or warm-test capabilities are selected.",
+      });
+    }
+    if (requiresValidation && config.bridgeProtocolVersion !== 3) {
+      context.addIssue({
+        code: "custom",
+        path: ["bridgeProtocolVersion"],
+        message: "TestPlay capabilities require Bridge protocol 3.",
+      });
+    }
+    if (
+      config.transaction.testplay !== undefined &&
+      config.transaction.testplay.platform !== "edit_mode"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["transaction", "testplay", "platform"],
+        message: "Unity v0.6 batches require edit-mode TestPlay.",
       });
     }
   });
-export type UnityBatchConfigV3 = z.infer<typeof UnityBatchConfigV3Schema>;
+export type UnityBatchConfigV4 = z.infer<typeof UnityBatchConfigV4Schema>;
+
 export const UnityBatchConfigSchema = z.discriminatedUnion("schemaVersion", [
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
 ]);
 export type UnityBatchConfig = z.infer<typeof UnityBatchConfigSchema>;
 
@@ -1421,6 +1609,189 @@ export const UnityPatchManifestV1Schema = z
     }
   });
 export type UnityPatchManifestV1 = z.infer<typeof UnityPatchManifestV1Schema>;
+
+const OptionalUnityPatchContentRefSchema = UnityPatchContentRefSchema.optional();
+
+export const UnityPatchManifestV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    baseManifest: ArtifactRefSchema,
+    baseTreeManifest: ArtifactRefSchema,
+    resultManifest: ArtifactRefSchema,
+    entries: z.array(
+      z.discriminatedUnion("operation", [
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("add"),
+            after: UnityPatchContentRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("modify"),
+            baseContentDigest: ContentDigestSchema,
+            before: OptionalUnityPatchContentRefSchema,
+            after: UnityPatchContentRefSchema,
+          })
+          .strict(),
+        z
+          .object({
+            path: UnityPatchPathSchema,
+            operation: z.literal("delete"),
+            baseContentDigest: ContentDigestSchema,
+            before: OptionalUnityPatchContentRefSchema,
+          })
+          .strict(),
+      ]),
+    ),
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    if (
+      manifest.baseManifest.kind !== "unity-source-manifest" ||
+      manifest.baseManifest.mediaType !== "application/json"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["baseManifest"],
+        message: "Patch base must be a JSON Unity source manifest.",
+      });
+    }
+    for (const key of ["baseTreeManifest", "resultManifest"] as const) {
+      if (
+        manifest[key].kind !== "unity-workspace-manifest" ||
+        manifest[key].mediaType !== "application/json"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Patch tree manifests must be JSON Unity workspace manifests.",
+        });
+      }
+    }
+    let previous: string | undefined;
+    const caseInsensitive = new Set<string>();
+    for (const [index, entry] of manifest.entries.entries()) {
+      if (
+        previous !== undefined &&
+        Buffer.compare(Buffer.from(previous), Buffer.from(entry.path)) >= 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch entries must be unique and sorted by UTF-8 path bytes.",
+        });
+      }
+      const folded = entry.path.toLocaleLowerCase("en-US");
+      if (caseInsensitive.has(folded)) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch paths cannot collide case-insensitively.",
+        });
+      }
+      if (
+        entry.operation !== "add" &&
+        entry.before !== undefined &&
+        entry.before.contentDigest !== entry.baseContentDigest
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "before", "contentDigest"],
+          message: "Before content must match the declared base digest.",
+        });
+      }
+      previous = entry.path;
+      caseInsensitive.add(folded);
+    }
+  });
+export type UnityPatchManifestV2 = z.infer<typeof UnityPatchManifestV2Schema>;
+
+export const PatchVerificationV1Schema = z
+  .object({
+    workspaceIntegrity: z.literal("verified"),
+    compile: z.enum(["passed", "not-run"]),
+    warmTest: z.enum(["passed", "not-run"]),
+  })
+  .strict();
+export type PatchVerificationV1 = z.infer<typeof PatchVerificationV1Schema>;
+
+export const UnityPatchManifestV3Schema = z
+  .object({
+    ...UnityPatchManifestV2Schema.shape,
+    schemaVersion: z.literal(3),
+    verification: PatchVerificationV1Schema,
+  })
+  .strict()
+  .superRefine((manifest, context) => {
+    if (
+      manifest.baseManifest.kind !== "unity-source-manifest" ||
+      manifest.baseManifest.mediaType !== "application/json"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["baseManifest"],
+        message: "Patch base must be a JSON Unity source manifest.",
+      });
+    }
+    for (const key of ["baseTreeManifest", "resultManifest"] as const) {
+      if (
+        manifest[key].kind !== "unity-workspace-manifest" ||
+        manifest[key].mediaType !== "application/json"
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: [key],
+          message: "Patch tree manifests must be JSON Unity workspace manifests.",
+        });
+      }
+    }
+    let previous: string | undefined;
+    const caseInsensitive = new Set<string>();
+    for (const [index, entry] of manifest.entries.entries()) {
+      if (
+        previous !== undefined &&
+        Buffer.compare(Buffer.from(previous), Buffer.from(entry.path)) >= 0
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch entries must be unique and sorted by UTF-8 path bytes.",
+        });
+      }
+      const folded = entry.path.toLocaleLowerCase("en-US");
+      if (caseInsensitive.has(folded)) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "path"],
+          message: "Patch paths cannot collide case-insensitively.",
+        });
+      }
+      if (
+        entry.operation !== "add" &&
+        entry.before !== undefined &&
+        entry.before.contentDigest !== entry.baseContentDigest
+      ) {
+        context.addIssue({
+          code: "custom",
+          path: ["entries", index, "before", "contentDigest"],
+          message: "Before content must match the declared base digest.",
+        });
+      }
+      previous = entry.path;
+      caseInsensitive.add(folded);
+    }
+  });
+export type UnityPatchManifestV3 = z.infer<typeof UnityPatchManifestV3Schema>;
+
+export const UnityPatchManifestSchema = z.discriminatedUnion("schemaVersion", [
+  UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
+]);
+export type UnityPatchManifest = z.infer<typeof UnityPatchManifestSchema>;
 
 export const AgentInputEnvelopeV2Schema = z
   .object({
@@ -2363,7 +2734,7 @@ export const OrchestrationEventV5Schema = z
                 workId: StepIdSchema,
                 poolId: ResourceIdSchema,
                 priority: UnityWorkPrioritySchema,
-                capabilityCount: z.number().int().positive(),
+                capabilityCount: z.number().int().nonnegative(),
               })
               .strict(),
           })
@@ -2576,7 +2947,7 @@ export const OrchestrationEventV5Schema = z
           workId: StepIdSchema,
           childRunId: RunIdSchema,
           priority: UnityWorkPrioritySchema,
-          capabilityCount: z.number().int().positive(),
+          capabilityCount: z.number().int().nonnegative(),
         })
         .strict(),
     ),
@@ -2615,7 +2986,7 @@ export const OrchestrationEventV5Schema = z
       z.union([
         z
           .object({
-            evidence: ArtifactRefSchema,
+            evidence: ArtifactRefSchema.optional(),
             patch: ArtifactRefSchema,
             resultManifest: ArtifactRefSchema,
             release: ArtifactRefSchema,
@@ -2755,9 +3126,160 @@ export const TERMINAL_WORKFLOW_EVENT_V5_TYPES = new Set<TerminalWorkflowEventV5[
   "workflow.cancelled",
 ]);
 
+const EventV6BaseSchema = EventV5BaseSchema.omit({ schemaVersion: true }).extend({
+  schemaVersion: z.literal(6),
+});
+const eventV6 = <Type extends string, Payload extends z.ZodType>(type: Type, payload: Payload) =>
+  EventV6BaseSchema.extend({ type: z.literal(type), payload }).strict();
+const AgentCapabilitiesJournalV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    adapter: z.enum(["codex-app-server-v1", "opencode-acp-v1"]),
+    toolApproval: z.literal("root-only"),
+    skills: z.enum(["exact-isolation", "observe-only"]),
+    plan: z.literal("unsupported"),
+    resume: z.literal("unsupported"),
+    steer: z.literal("unsupported"),
+    userInput: z.literal("unsupported"),
+    subagentApproval: z.literal("unsupported"),
+    plugins: z.literal("disabled"),
+  })
+  .strict();
+const SessionEventV6Schema = z.discriminatedUnion("type", [
+  eventV6("work.admission-queued", z.object({ priority: UnityWorkPrioritySchema }).strict()),
+  eventV6(
+    "work.admission-entered",
+    z
+      .object({ priority: UnityWorkPrioritySchema, waitMs: z.number().int().nonnegative() })
+      .strict(),
+  ),
+  eventV6(
+    "agent.session-opened",
+    z
+      .object({
+        adapter: z.enum(["codex-app-server-v1", "opencode-acp-v1"]),
+        sessionIdDigest: ContentDigestSchema,
+        capabilities: AgentCapabilitiesJournalV1Schema,
+      })
+      .strict(),
+  ),
+  eventV6("agent.turn-started", z.object({ turnIdDigest: ContentDigestSchema }).strict()),
+  eventV6(
+    "agent.approval-requested",
+    z
+      .object({
+        approvalId: EventIdSchema,
+        kind: z.enum(["command", "file-change", "permissions", "unknown"]),
+        request: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+  eventV6(
+    "agent.approval-resolved",
+    z
+      .object({
+        approvalId: EventIdSchema,
+        decision: z.enum(["allow-once", "deny"]),
+        source: z.enum(["policy", "user"]),
+        receipt: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+  eventV6("agent.approval-delivered", z.object({ approvalId: EventIdSchema }).strict()),
+  eventV6(
+    "agent.turn-completed",
+    z
+      .object({
+        turnIdDigest: ContentDigestSchema,
+        status: z.enum(["completed", "failed", "interrupted"]),
+        outputBytes: z.number().int().nonnegative(),
+      })
+      .strict(),
+  ),
+  eventV6(
+    "agent.session-closed",
+    z
+      .object({
+        reason: z.enum(["completed", "failed", "interrupted"]),
+        transcript: ArtifactRefSchema,
+      })
+      .strict(),
+  ),
+]);
+
+const V5EventAsV6Schema = z
+  .preprocess(
+    (value) =>
+      typeof value === "object" &&
+      value !== null &&
+      "schemaVersion" in value &&
+      value.schemaVersion === 6
+        ? { ...value, schemaVersion: 5 }
+        : value,
+    OrchestrationEventV5Schema,
+  )
+  .transform((event) => ({ ...event, schemaVersion: 6 as const }));
+
+export const OrchestrationEventV6Schema = z
+  .union([SessionEventV6Schema, V5EventAsV6Schema])
+  .superRefine((event, context) => {
+    if (
+      (event.type.startsWith("agent.") || event.type.startsWith("work.admission-")) &&
+      event.stepId === undefined
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["stepId"],
+        message: "Session event needs stepId.",
+      });
+    }
+    if (
+      event.type === "agent.approval-requested" &&
+      event.payload.request.kind !== "agent-approval-request"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "request", "kind"],
+        message: "Approval requests need an agent-approval-request Artifact.",
+      });
+    }
+    if (
+      event.type === "agent.approval-resolved" &&
+      event.payload.receipt.kind !== "approval-decision"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "receipt", "kind"],
+        message: "Approval decisions need an approval-decision Artifact.",
+      });
+    }
+    if (
+      event.type === "agent.session-closed" &&
+      event.payload.transcript.kind !== "agent-session-transcript"
+    ) {
+      context.addIssue({
+        code: "custom",
+        path: ["payload", "transcript", "kind"],
+        message: "Closed sessions need an agent-session-transcript Artifact.",
+      });
+    }
+  });
+export type OrchestrationEventV6 = z.infer<typeof OrchestrationEventV6Schema>;
+
+export type TerminalWorkflowEventV6 = Extract<
+  OrchestrationEventV6,
+  { type: "workflow.completed" | "workflow.failed" | "workflow.cancelled" }
+>;
+export const TERMINAL_WORKFLOW_EVENT_V6_TYPES = new Set<TerminalWorkflowEventV6["type"]>([
+  "workflow.completed",
+  "workflow.failed",
+  "workflow.cancelled",
+]);
+
 export type AnyOrchestrationEvent =
   | OrchestrationEventV1
   | OrchestrationEventV2
   | OrchestrationEventV3
   | OrchestrationEventV4
-  | OrchestrationEventV5;
+  | OrchestrationEventV5
+  | OrchestrationEventV6;

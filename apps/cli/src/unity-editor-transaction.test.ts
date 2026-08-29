@@ -15,7 +15,7 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityEditorObservationV1Schema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestV3Schema,
   UnityWorkConfigV2Schema,
   WarmBridgeBindingV1Schema,
   type AgentProcessResult,
@@ -42,7 +42,10 @@ import type {
   UnityEditorLaunchHandle,
   UnityEditorLauncher,
 } from "./unity-editor-launcher.js";
-import { FileUnityEditorPoolCoordinator } from "./unity-editor-pool.js";
+import {
+  FileUnityEditorPoolCoordinator,
+  type UnityEditorPoolCoordinator,
+} from "./unity-editor-pool.js";
 import type { UnityEditorRegistry } from "./unity-editor-registry.js";
 import {
   UnityEditorWorkTransaction,
@@ -165,12 +168,14 @@ class MemoryWorkspaceStorage extends UnityWorkspaceStorageCliAdapter {
 
 class MemoryEditorLauncher implements UnityEditorLauncher {
   public stopped = 0;
+  public command: Parameters<UnityEditorLauncher["launch"]>[1] | undefined;
 
   public async launch(
     intent: EditorLaunchIntentV1,
-    _command: Parameters<UnityEditorLauncher["launch"]>[1],
+    command: Parameters<UnityEditorLauncher["launch"]>[1],
     lifecycle: Parameters<UnityEditorLauncher["launch"]>[2],
   ): Promise<UnityEditorLaunchHandle> {
+    this.command = command;
     const containment = EditorContainmentReceiptV1Schema.parse({
       schemaVersion: 1,
       launchId: intent.launchId,
@@ -208,6 +213,25 @@ class MemoryEditorLauncher implements UnityEditorLauncher {
 
   public async drainContainment(_receipt: EditorContainmentReceiptV1): Promise<void> {
     this.stopped += 1;
+  }
+}
+
+class NoReceiptFailingEditorLauncher extends MemoryEditorLauncher {
+  public recoveries = 0;
+
+  public override async launch(
+    _intent: EditorLaunchIntentV1,
+    _command: Parameters<UnityEditorLauncher["launch"]>[1],
+    _lifecycle: Parameters<UnityEditorLauncher["launch"]>[2],
+  ): Promise<UnityEditorLaunchHandle> {
+    throw new HoneyBeeCoreError("editor.launch-failed", "Simulated Editor launch failure.");
+  }
+
+  public override async recoverPublishedReceipt(
+    _intent: EditorLaunchIntentV1,
+  ): Promise<EditorContainmentReceiptV1 | undefined> {
+    this.recoveries += 1;
+    return undefined;
   }
 }
 
@@ -286,7 +310,27 @@ class CompletedCapabilities implements UnityCapabilityRunner {
     return {
       capability,
       command,
-      response: capability.kind === "warm-test" ? { total: 1, passed: 1 } : { compiled: true },
+      response: {
+        schema_version: "1",
+        capability: capability.kind,
+        run_id: "memory-capability-run",
+        artifact_root: path.join(_workspacePath, ".testplay", "runs", "memory-capability-run"),
+        exit_code: 0,
+        backend: "bridge",
+        bridge: {
+          protocol_version: 3,
+          workspace_id: _binding.workspaceId,
+          editor_pid: _binding.editorPid,
+          bridge_session_id: _binding.bridgeSessionId,
+        },
+        compile_errors: 0,
+        total: capability.kind === "warm-test" ? 1 : 0,
+        passed: capability.kind === "warm-test" ? 1 : 0,
+        failed: 0,
+        skipped: 0,
+        fallback_used: false,
+        cleanup_state: "released",
+      },
       evidence: [
         {
           name: capability.id + ".json",
@@ -326,7 +370,6 @@ class FailedCapabilities implements UnityCapabilityRunner {
     return {
       capability,
       command,
-      response: { compiled: false },
       evidence: [],
     };
   }
@@ -364,10 +407,44 @@ class CrashAfterEventJournal implements VersionedOrchestrationJournal {
   }
 }
 
+const lastPoolRequestId = (
+  replay: Awaited<ReturnType<VersionedOrchestrationJournal["replay"]>>,
+): ReturnType<typeof EventIdSchema.parse> => {
+  if (replay.status === "indeterminate") throw new Error(replay.message);
+  const requested = [...replay.events]
+    .reverse()
+    .find((event) => event.schemaVersion === 5 && event.type === "editor.pool-requested");
+  if (requested?.schemaVersion !== 5 || requested.type !== "editor.pool-requested") {
+    throw new Error("missing Editor pool request");
+  }
+  return requested.payload.requestId;
+};
+
 const processControl: UnityProcessControl = {
   captureIdentity: async (pid) => "test:process:" + pid,
   drain: async () => "drained",
 };
+
+const acquireFailingPool = (
+  delegate: UnityEditorPoolCoordinator,
+  options: Readonly<{ grantBeforeFailure?: boolean; cancelFailure?: boolean }> = {},
+): UnityEditorPoolCoordinator => ({
+  declare: (definition) => delegate.declare(definition),
+  enqueue: (request) => delegate.enqueue(request),
+  acquire: async (locator, signal) => {
+    if (options.grantBeforeFailure === true) await delegate.acquire(locator, signal);
+    throw new HoneyBeeCoreError("resource.acquire-failed", "Simulated pool acquire failure.");
+  },
+  status: (locator) => delegate.status(locator),
+  inspect: (poolId) => delegate.inspect(poolId),
+  cancel:
+    options.cancelFailure === true
+      ? async () => {
+          throw new HoneyBeeCoreError("run.lease-failed", "Simulated pool cancel failure.");
+        }
+      : (locator) => delegate.cancel(locator),
+  release: (lease) => delegate.release(lease),
+});
 
 const testConfig = async (source: string, workspaceRoot: string) => {
   const executableDigest = createHash("sha256")
@@ -433,6 +510,8 @@ const transactionFixture = async (
     capabilities?: UnityCapabilityRunner;
     bridge?: WarmBridgeBindingResolver;
     registry?: MemoryEditorRegistry;
+    launcher?: UnityEditorLauncher;
+    createPool?: (root: string) => UnityEditorPoolCoordinator;
     wrapJournal?: (journal: VersionedOrchestrationJournal) => VersionedOrchestrationJournal;
   }> = {},
 ) => {
@@ -462,10 +541,10 @@ const transactionFixture = async (
   const bootstrap = new UnityProjectBootstrap();
   const storage = new MemoryWorkspaceStorage();
   const capabilities = options.capabilities ?? new CompletedCapabilities();
-  const launcher = new MemoryEditorLauncher();
+  const launcher = options.launcher ?? new MemoryEditorLauncher();
   const registry = options.registry ?? new MemoryEditorRegistry();
   const bridge = options.bridge ?? new MemoryBridge();
-  const pool = new FileUnityEditorPoolCoordinator(root);
+  const pool = options.createPool?.(root) ?? new FileUnityEditorPoolCoordinator(root);
   const patchBuilder = new UnityPatchBuilder(
     artifacts,
     bootstrap,
@@ -508,6 +587,36 @@ const transactionFixture = async (
 };
 
 describe("UnityEditorWorkTransaction", () => {
+  it("runs Agent-only Work without TestPlay, Editor, Bridge, or pool lifecycle", async () => {
+    const fixture = await transactionFixture();
+    const config = UnityWorkConfigV2Schema.parse({
+      ...fixture.config,
+      testplay: undefined,
+      capabilities: [],
+    });
+    const result = await fixture.transaction.run(
+      fixture.runId,
+      "change the isolated project without validation",
+      config,
+      { ...fixture.execution, capabilities: [] },
+    );
+
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    expect(replay.events.at(-1)?.type).toBe("workflow.completed");
+    expect(result.failure).toBeUndefined();
+    expect(result).toMatchObject({ status: "completed" });
+    expect(fixture.storage.released).toBe(1);
+    expect(replay.status).toBe("terminal");
+    const types = replay.events.map((event) => event.type);
+    expect(types).not.toContain("editor.pool-requested");
+    expect(types).not.toContain("editor.launch-intended");
+    expect(types).not.toContain("editor.bridge-bound");
+    expect(types).not.toContain("capability.started");
+    expect(types).toContain("patch.verified");
+    expect(types.at(-1)).toBe("workflow.completed");
+  });
+
   it("runs config-owned capabilities sequentially and leaves workspace/editor/pool residual zero", async () => {
     const root = await temporaryRoot();
     const source = path.join(root, "source");
@@ -630,6 +739,14 @@ describe("UnityEditorWorkTransaction", () => {
     expect(bridge.verifies).toBe(4);
     expect(storage.released).toBe(1);
     expect(launcher.stopped).toBe(1);
+    expect(launcher.command?.args).toEqual([
+      "-batchmode",
+      "-nographics",
+      "-projectPath",
+      path.join(workspaceRoot, "hb-" + runId),
+      "-logFile",
+      path.join(root, runId, "unity-editor.log"),
+    ]);
     expect(registry.owned?.ownership).toBe("honeybee");
     expect(registry.exited).toBe(registry.owned?.editorId);
     await expect(access(path.join(workspaceRoot, "hb-" + runId))).rejects.toMatchObject({
@@ -662,16 +779,21 @@ describe("UnityEditorWorkTransaction", () => {
     if (result.status !== "completed" || result.patch === undefined) {
       throw new Error("unexpected result");
     }
-    const patch = UnityPatchManifestV1Schema.parse(
+    const patch = UnityPatchManifestV3Schema.parse(
       JSON.parse(await artifacts.get({ runId, artifact: result.patch })) as unknown,
     );
+    expect(patch.verification).toEqual({
+      workspaceIntegrity: "verified",
+      compile: "passed",
+      warmTest: "passed",
+    });
     expect(patch.entries).toHaveLength(1);
     expect(patch.entries[0]).toMatchObject({
       path: "Assets/agent-created.txt",
-      operation: "add-or-modify",
+      operation: "add",
     });
     expect(JSON.stringify(patch)).not.toContain("contentBase64");
-    expect(patch.entries[0]?.operation === "add-or-modify" && patch.entries[0].content.kind).toBe(
+    expect(patch.entries[0]?.operation === "add" && patch.entries[0].after.kind).toBe(
       "unity-patch-content",
     );
   }, 30_000);
@@ -803,6 +925,113 @@ describe("UnityEditorWorkTransaction", () => {
     const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
     expect(resumed.status).toBe("cancelled");
     expect(fixture.storage.released).toBe(1);
+  });
+
+  it("keeps a failed pool cancellation cleanup-pending until resume reconciles it", async () => {
+    let durablePool: FileUnityEditorPoolCoordinator | undefined;
+    const fixture = await transactionFixture({
+      createPool: (root) => {
+        durablePool = new FileUnityEditorPoolCoordinator(root);
+        return acquireFailingPool(durablePool, { cancelFailure: true });
+      },
+    });
+    const interrupted = await fixture.transaction.run(
+      fixture.runId,
+      "fail while cancelling the pool request",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(interrupted).toMatchObject({
+      status: "cleanup-pending",
+      failure: { errorCode: "run.lease-failed" },
+    });
+    expect(fixture.storage.released).toBe(0);
+    if (durablePool === undefined) throw new Error("missing durable pool");
+    expect(
+      await durablePool.status({
+        poolId: fixture.execution.poolId,
+        requestId: lastPoolRequestId(await fixture.baseJournal.replay(fixture.runId)),
+      }),
+    ).toMatchObject({ state: "queued" });
+
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, {
+      ...fixture.execution,
+      pool: durablePool,
+    });
+    expect(resumed.status).toBe("failed");
+    expect(fixture.storage.released).toBe(1);
+  });
+
+  it("releases a durable grant when acquire throws before returning its lease", async () => {
+    let durablePool: FileUnityEditorPoolCoordinator | undefined;
+    const fixture = await transactionFixture({
+      createPool: (root) => {
+        durablePool = new FileUnityEditorPoolCoordinator(root);
+        return acquireFailingPool(durablePool, { grantBeforeFailure: true });
+      },
+    });
+    const result = await fixture.transaction.run(
+      fixture.runId,
+      "fail after a durable pool grant",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(result.status).toBe("failed");
+    expect(fixture.storage.released).toBe(1);
+    if (durablePool === undefined) throw new Error("missing durable pool");
+    expect(
+      await durablePool.status({
+        poolId: fixture.execution.poolId,
+        requestId: lastPoolRequestId(await fixture.baseJournal.replay(fixture.runId)),
+      }),
+    ).toMatchObject({ state: "released" });
+  });
+
+  it("does not replay a durable pool-acquire-failed event", async () => {
+    const fixture = await transactionFixture({
+      createPool: (root) => acquireFailingPool(new FileUnityEditorPoolCoordinator(root)),
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "editor.pool-acquire-failed"),
+    });
+    const interrupted = await fixture.transaction.run(
+      fixture.runId,
+      "crash after pool failure",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(interrupted.status).toBe("cleanup-pending");
+
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("failed");
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    expect(
+      replay.events.filter((event) => event.type === "editor.pool-acquire-failed"),
+    ).toHaveLength(1);
+  });
+
+  it("does not emit launch-abandoned again while resuming cleanup", async () => {
+    const launcher = new NoReceiptFailingEditorLauncher();
+    const fixture = await transactionFixture({
+      launcher,
+      wrapJournal: (journal) => new CrashAfterEventJournal(journal, "editor.launch-abandoned"),
+    });
+    const interrupted = await fixture.transaction.run(
+      fixture.runId,
+      "crash after abandoning an Editor launch",
+      fixture.config,
+      fixture.execution,
+    );
+    expect(interrupted.status).toBe("cleanup-pending");
+    expect(launcher.recoveries).toBe(1);
+
+    const resumed = await fixture.resumer.resume(fixture.runId, fixture.config, fixture.execution);
+    expect(resumed.status).toBe("failed");
+    expect(launcher.recoveries).toBe(1);
+    const replay = await fixture.baseJournal.replay(fixture.runId);
+    if (replay.status === "indeterminate") throw new Error(replay.message);
+    expect(replay.events.filter((event) => event.type === "editor.launch-abandoned")).toHaveLength(
+      1,
+    );
   });
 
   it("reconciles the Registry tombstone when resuming after editor.exited", async () => {

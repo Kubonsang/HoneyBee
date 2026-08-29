@@ -13,9 +13,12 @@ import {
   RunIdSchema,
   StepIdSchema,
   UnityPatchManifestV1Schema,
+  UnityPatchManifestV2Schema,
+  UnityPatchManifestV3Schema,
   UnityBatchConfigV1Schema,
   UnityBatchConfigV2Schema,
   UnityBatchConfigV3Schema,
+  UnityBatchConfigV4Schema,
   UnityEditorObservationV1Schema,
   UnityWorkConfigV2Schema,
   UnityGlobalResourceEventV1Schema,
@@ -333,6 +336,57 @@ describe("orchestration contracts", () => {
         entries: [{ ...valid.entries[0], path: "Assets/file.txt:stream" }],
       }).success,
     ).toBe(false);
+
+    const v2 = {
+      schemaVersion: 2,
+      baseManifest: base,
+      baseTreeManifest: result,
+      resultManifest: result,
+      entries: [
+        { path: "Assets/added.bin", operation: "add", after: content },
+        {
+          path: "ProjectSettings/removed.asset",
+          operation: "delete",
+          baseContentDigest: content.contentDigest,
+          before: content,
+        },
+      ],
+    } as const;
+    expect(UnityPatchManifestV2Schema.safeParse(v2).success).toBe(true);
+    expect(
+      UnityPatchManifestV2Schema.safeParse({
+        ...v2,
+        entries: [
+          {
+            ...v2.entries[1],
+            baseContentDigest: "sha256:" + "d".repeat(64),
+          },
+        ],
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityPatchManifestV2Schema.safeParse({
+        ...v2,
+        entries: [{ ...v2.entries[0], contentBase64: "AA==" }],
+      }).success,
+    ).toBe(false);
+
+    const v3 = {
+      ...v2,
+      schemaVersion: 3,
+      verification: {
+        workspaceIntegrity: "verified",
+        compile: "not-run",
+        warmTest: "not-run",
+      },
+    } as const;
+    expect(UnityPatchManifestV3Schema.safeParse(v3).success).toBe(true);
+    expect(
+      UnityPatchManifestV3Schema.safeParse({
+        ...v3,
+        verification: { ...v3.verification, testCount: 0 },
+      }).success,
+    ).toBe(false);
   });
 
   it("uses schema v4 for both batch parents and resource-managed children", () => {
@@ -547,6 +601,24 @@ describe("orchestration contracts", () => {
       ],
     } as const;
     expect(UnityBatchConfigV3Schema.safeParse(config).success).toBe(true);
+    const perWorkAgents = {
+      ...config,
+      schemaVersion: 4,
+      works: config.works.map((work, index) => ({
+        ...work,
+        agent: {
+          command: { command: index === 0 ? "codex" : "opencode" },
+          harness: "stdio-framed-v2",
+        },
+      })),
+    } as const;
+    expect(UnityBatchConfigV4Schema.safeParse(perWorkAgents).success).toBe(true);
+    expect(
+      UnityBatchConfigV4Schema.safeParse({
+        ...perWorkAgents,
+        works: perWorkAgents.works.map(({ agent: _agent, ...work }) => work),
+      }).success,
+    ).toBe(false);
     expect(UnityBatchConfigV3Schema.safeParse({ ...config, typo: true }).success).toBe(false);
     expect(
       UnityBatchConfigV3Schema.safeParse({
@@ -575,6 +647,61 @@ describe("orchestration contracts", () => {
         transaction: {
           ...transaction,
           testplay: { ...transaction.testplay, filter: "Smoke" },
+        },
+      }).success,
+    ).toBe(false);
+
+    const managedConfig = {
+      ...config,
+      transaction: {
+        ...transaction,
+        workspaceStorage: {
+          schemaVersion: 2,
+          command: { command: "C:\\Tools\\unity-workspace-storage.exe" },
+          binarySha256: "a".repeat(64),
+          workspaceRoot: "C:\\Workspaces",
+          compatibilityKey: "b".repeat(64),
+          parentId: "parent-managed",
+          provider: "vhdx-differencing",
+        },
+        bridgeOverlay: {
+          packageName: "com.testplay.bridge",
+          sourcePath: "C:\\Tools\\com.testplay.bridge",
+          digest: "c".repeat(64),
+        },
+      },
+    } as const;
+    expect(UnityBatchConfigV3Schema.safeParse(managedConfig).success).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          testplay: undefined,
+          bridgeOverlay: undefined,
+        },
+        bridgeProtocolVersion: undefined,
+        works: managedConfig.works.map((work) => ({ ...work, capabilities: [] })),
+      }).success,
+    ).toBe(true);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          testplay: undefined,
+        },
+      }).success,
+    ).toBe(false);
+    expect(
+      UnityBatchConfigV3Schema.safeParse({
+        ...managedConfig,
+        transaction: {
+          ...managedConfig.transaction,
+          workspaceStorage: {
+            ...managedConfig.transaction.workspaceStorage,
+            parentPath: "C:\\untrusted",
+          },
         },
       }).success,
     ).toBe(false);

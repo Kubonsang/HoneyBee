@@ -3,6 +3,11 @@ node_modules/
 dist/
 coverage/
 *.tsbuildinfo
+/apps/desktop/release/
+/dogfood/evidence/
+/dogfood/state/
+__pycache__/
+*.py[cod]
 
 # Local package-manager and registry credentials
 .npmrc
@@ -70,3 +75,4 @@ Thumbs.db
 *.orig
 *.rej
 .idea/
+apps/desktop/.tools/

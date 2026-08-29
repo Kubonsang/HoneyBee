@@ -14,7 +14,7 @@ import {
   ResourceIdSchema,
   RunIdSchema,
   StepIdSchema,
-  UnityPatchManifestV1Schema,
+  UnityPatchManifestV3Schema,
   UnityWorkConfigV1Schema,
 } from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
@@ -332,11 +332,16 @@ describe("UnityWorkTransaction", () => {
       expect(child.resultManifest?.kind).toBe("unity-workspace-manifest");
       if (child.patch === undefined) throw new Error("missing patch");
       durableChildPatch = child.patch;
-      const patch = UnityPatchManifestV1Schema.parse(
+      const patch = UnityPatchManifestV3Schema.parse(
         JSON.parse(
           await childArtifacts.get({ runId: childRunId, artifact: child.patch }),
         ) as unknown,
       );
+      expect(patch.verification).toEqual({
+        workspaceIntegrity: "verified",
+        compile: "not-run",
+        warmTest: "not-run",
+      });
       expect(patch.entries.map((entry) => entry.path)).toContain("Assets/agent-created.txt");
       expect(JSON.stringify(patch)).not.toContain("contentBase64");
     } finally {

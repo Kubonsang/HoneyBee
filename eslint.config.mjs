@@ -9,6 +9,8 @@ export default tseslint.config(
       "**/node_modules/**",
       "**/.vscode-test/**",
       "**/.honeybee/**",
+      "dogfood/evidence/**",
+      "dogfood/state/**",
       "**/*.d.ts",
     ],
   },

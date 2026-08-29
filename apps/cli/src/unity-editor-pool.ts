@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, readFile, readdir, unlink } from "node:fs/promises";
+import { link, lstat, mkdir, open, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -18,6 +18,11 @@ import {
   type UnityWorkPriority,
 } from "@honeybee/orchestration-contracts";
 import { FileRunControl, HoneyBeeCoreError } from "@honeybee/core";
+
+import {
+  readRecoveredImmutableFile,
+  UnsafeImmutablePublicationError,
+} from "./immutable-publication.js";
 
 const POLL_MS = 50;
 const LOCK_POLL_MS = 25;
@@ -68,11 +73,19 @@ export type UnityEditorPoolStatus =
   | Readonly<{ state: "cancelled"; ticket: UnityEditorPoolTicket }>
   | Readonly<{ state: "released"; lease: UnityEditorPoolLease }>;
 
+export interface UnityEditorPoolSnapshot {
+  readonly poolId: ResourceId;
+  readonly capacity: number;
+  readonly active: readonly UnityEditorPoolLease[];
+  readonly queued: readonly UnityEditorPoolTicket[];
+}
+
 export interface UnityEditorPoolCoordinator {
   declare(definition: UnityEditorPoolDefinition): Promise<void>;
   enqueue(request: UnityEditorPoolRequest): Promise<UnityEditorPoolTicket>;
   acquire(locator: UnityEditorPoolLocator, signal?: AbortSignal): Promise<UnityEditorPoolLease>;
   status(locator: UnityEditorPoolLocator): Promise<UnityEditorPoolStatus>;
+  inspect(poolId: ResourceId): Promise<UnityEditorPoolSnapshot>;
   cancel(locator: UnityEditorPoolLocator): Promise<void>;
   release(lease: UnityEditorPoolLease): Promise<void>;
 }
@@ -344,6 +357,36 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
     return snapshot.requests.get(requestId) ?? { state: "missing" };
   }
 
+  public async inspect(poolIdValue: ResourceId): Promise<UnityEditorPoolSnapshot> {
+    const inspected = await this.inspectOptional(poolIdValue);
+    if (inspected === undefined) {
+      throw new HoneyBeeCoreError("validation.invalid-workflow", "Editor pool is not declared.");
+    }
+    return inspected;
+  }
+
+  public async inspectOptional(
+    poolIdValue: ResourceId,
+  ): Promise<UnityEditorPoolSnapshot | undefined> {
+    const poolId = ResourceIdSchema.parse(poolIdValue);
+    if ((await this.#readEvents(poolId)).length === 0) return undefined;
+    const snapshot = await this.#snapshot(poolId);
+    const active = [...snapshot.activeBySlot.values()].sort((left, right) =>
+      left.slotId.localeCompare(right.slotId),
+    );
+    const queued = [...snapshot.requests.values()]
+      .filter(
+        (status): status is Extract<UnityEditorPoolStatus, { state: "queued" }> =>
+          status.state === "queued",
+      )
+      .map((status) => status.ticket)
+      .sort(
+        (left, right) =>
+          PRIORITY[left.priority] - PRIORITY[right.priority] || left.ticket - right.ticket,
+      );
+    return { poolId, capacity: snapshot.capacity, active, queued };
+  }
+
   public async cancel(locatorValue: UnityEditorPoolLocator): Promise<void> {
     const poolId = ResourceIdSchema.parse(locatorValue.poolId);
     const requestId = EventIdSchema.parse(locatorValue.requestId);
@@ -535,16 +578,25 @@ export class FileUnityEditorPoolCoordinator implements UnityEditorPoolCoordinato
         );
       }
       const filePath = path.join(directory, name);
-      const entry = await lstat(filePath);
-      if (!entry.isFile() || entry.isSymbolicLink() || entry.nlink !== 1) {
-        throw new HoneyBeeCoreError(
-          "run.indeterminate",
-          "Editor pool event is not a private file.",
-        );
+      let bytes: Buffer;
+      try {
+        ({ bytes } = await readRecoveredImmutableFile(
+          filePath,
+          (candidate) => /^\.[0-9a-f-]{36}\.tmp$/iu.test(candidate),
+          64 * 1024,
+        ));
+      } catch (error) {
+        if (error instanceof UnsafeImmutablePublicationError) {
+          throw new HoneyBeeCoreError(
+            "run.indeterminate",
+            "Editor pool event has an unrecognized hard link.",
+          );
+        }
+        throw error;
       }
       let parsed: unknown;
       try {
-        parsed = JSON.parse(await readFile(filePath, "utf8")) as unknown;
+        parsed = JSON.parse(bytes.toString("utf8")) as unknown;
       } catch {
         throw new HoneyBeeCoreError("run.indeterminate", "Editor pool event is malformed.");
       }

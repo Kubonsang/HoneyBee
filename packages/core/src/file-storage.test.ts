@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { appendFile, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -102,6 +102,18 @@ const eventV5 = (
   });
 
 describe("filesystem run persistence", () => {
+  it("lists only validated real Run directories in stable order", async () => {
+    const root = await temporaryRoot();
+    const repository = new FileRunRepository(root);
+    const first = RunIdSchema.parse("00000000-0000-4000-8000-000000000002");
+    const second = RunIdSchema.parse("00000000-0000-4000-8000-000000000001");
+    await repository.create(first);
+    await repository.create(second);
+    await mkdir(path.join(root, ".unity-editor-pools"));
+
+    expect(await repository.list()).toEqual([{ runId: second }, { runId: first }]);
+  });
+
   it("replays a typed pre-acquire v0.6 failure conclusively and seals the terminal", async () => {
     const root = await temporaryRoot();
     const runId = RunIdSchema.parse(randomUUID());
