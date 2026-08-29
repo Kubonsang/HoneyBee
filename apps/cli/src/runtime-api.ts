@@ -164,6 +164,18 @@ export class RuntimeProcessContainment {
 export { AgentSessionProcessRunner } from "./agent-session-adapters.js";
 export type { AgentApprovalPort } from "./agent-session-adapters.js";
 export { DesktopWorkScheduler } from "./desktop-work-scheduler.js";
+export {
+  NativeAgentCapacityIndex,
+  SystemNativeAgentHost,
+  newNativeAgentLaunchIdentity,
+  waitForNativeHostReconciliation,
+} from "./native-agent-host.js";
+export type {
+  NativeAgentAdmissionCandidate,
+  NativeAgentHostHandle,
+  NativeAgentHostLifecycle,
+  NativeAgentLaunchInspection,
+} from "./native-agent-host.js";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);

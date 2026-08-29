@@ -9,6 +9,7 @@ import { z } from "zod";
 import {
   ContentDigestSchema,
   HoneyBeeCoreError,
+  trustedAgentInvocation,
   verifyAgentLaunchTrust,
   type AgentCommand,
   type AgentExitObservation,
@@ -652,10 +653,11 @@ export class UnityAgentProcessRunner implements AgentProcessRunner {
       );
     }
     await verifyAgentLaunchTrust(request.command, request.trust);
+    const invocation = await trustedAgentInvocation(request.command, request.trust);
     let result: CommandResult;
     try {
-      result = await runCommand(request.command, [], {
-        cwd: request.command.cwd ?? process.cwd(),
+      result = await runCommand(invocation, [], {
+        cwd: invocation.cwd ?? process.cwd(),
         input: request.prompt,
         timeoutMs: request.timeoutMs,
         maxOutputBytes: request.maxOutputBytes,

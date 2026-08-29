@@ -1354,7 +1354,13 @@ def collect_metrics(
         ]
         for work in works
     )
-    compile_and_test_observed = {"compile", "warm-test"}.issubset(capability_kinds)
+    requested_capability_kinds = {
+        str(capability.get("kind"))
+        for work in works
+        for capability in work.get("requestedCapabilities", [])
+        if isinstance(capability, dict)
+    }
+    compile_and_test_observed = requested_capability_kinds.issubset(capability_kinds)
     dispositions_ok = sum(dispositions.values()) == len(works) and all(
         phase in {"applied", "rejected"} for phase in dispositions
     )

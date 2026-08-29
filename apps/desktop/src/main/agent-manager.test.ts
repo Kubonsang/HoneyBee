@@ -1,7 +1,12 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
+import {
+  captureAgentLaunchTrust,
+  trustedAgentInvocation,
+  verifyAgentLaunchTrust,
+} from "@honeybee/core";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { DesktopAgentManager } from "./agent-manager.js";
@@ -112,4 +117,121 @@ describe("DesktopAgentManager", () => {
       ]),
     );
   });
+
+  it.runIf(process.platform === "win32")(
+    "rejects command shims whose fixed arguments cannot survive direct invocation",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.exe");
+      await writeFile(payload, "fixture payload", "utf8");
+      await writeFile(shim, '@echo off\r\n"%dp0%\\fixture.exe" --mode native %*\r\n', "utf8");
+
+      await expect(
+        new DesktopAgentManager(settings).upsert({
+          schemaVersion: 1,
+          displayName: "Unsupported shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          enabled: true,
+        }),
+      ).rejects.toMatchObject({ code: "agent.trust-invalid" });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "rejects command shims whose environment setup cannot survive direct invocation",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.exe");
+      await writeFile(payload, "fixture payload", "utf8");
+      await writeFile(
+        shim,
+        '@echo off\r\nset HONEYBEE_MODE=native\r\n"%dp0%\\fixture.exe" %*\r\n',
+        "utf8",
+      );
+
+      await expect(
+        new DesktopAgentManager(settings).upsert({
+          schemaVersion: 1,
+          displayName: "Unsupported setup shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          enabled: true,
+        }),
+      ).rejects.toMatchObject({ code: "agent.trust-invalid" });
+    },
+  );
+
+  it.runIf(process.platform === "win32")(
+    "probes a pinned npm-style command shim without invoking cmd.exe",
+    async () => {
+      const settings = await store();
+      const directory = latestRoot();
+      const shim = path.join(directory, "fixture.cmd");
+      const payload = path.join(directory, "fixture.js");
+      const extra = path.join(directory, "extra-payload.js");
+      await writeFile(
+        payload,
+        "if (process.argv.includes('--version')) process.stdout.write('fixture 1.0.0\\n');\n",
+        "utf8",
+      );
+      await writeFile(extra, "export {};\n", "utf8");
+      await writeFile(shim, '@echo off\r\nnode "%dp0%\\fixture.js" %*\r\n', "utf8");
+      const shadowDirectory = path.join(directory, "shadow-bin");
+      const trustedDirectory = path.join(directory, "trusted-bin");
+      const decoyDirectory = path.join(directory, "decoy-bin");
+      await mkdir(shadowDirectory);
+      await mkdir(trustedDirectory);
+      await mkdir(decoyDirectory);
+      await writeFile(path.join(shadowDirectory, "node.cmd"), "@exit /b 1\r\n", "utf8");
+      const trustedNode = path.join(trustedDirectory, "node.exe");
+      await copyFile(process.execPath, trustedNode);
+      await writeFile(path.join(decoyDirectory, "node.exe"), "not an executable", "utf8");
+      const previousPath = process.env.PATH;
+      try {
+        process.env.PATH = [shadowDirectory, trustedDirectory, previousPath ?? ""].join(
+          path.delimiter,
+        );
+        const manager = new DesktopAgentManager(settings);
+        const profile = await manager.upsert({
+          schemaVersion: 1,
+          displayName: "Runnable shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          payloadPaths: [extra],
+          enabled: true,
+        });
+        expect(profile.trust?.files).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "interpreter",
+              path: await realpath(trustedNode),
+            }),
+          ]),
+        );
+        process.env.PATH = `${decoyDirectory}${path.delimiter}${previousPath ?? ""}`;
+        const trust = profile.trust;
+        if (trust === undefined) throw new Error("Expected the shim launch to be trusted.");
+        const observedTrust = await captureAgentLaunchTrust(
+          trust.files.map((file) => ({ role: file.role, path: file.path })),
+        );
+        expect(observedTrust).toEqual(trust);
+        await verifyAgentLaunchTrust(profile.command, trust);
+        const invocation = await trustedAgentInvocation(profile.command, trust, ["--version"]);
+        expect(invocation.command).toBe(await realpath(trustedNode));
+        await expect(manager.probe(profile)).resolves.toMatchObject({
+          status: "ready",
+          version: "fixture 1.0.0",
+        });
+        expect(profile.command.command).toBe(path.resolve(shim));
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+      }
+    },
+  );
 });

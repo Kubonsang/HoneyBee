@@ -5,6 +5,7 @@ import path from "node:path";
 import { z } from "zod";
 
 import {
+  DesktopDeveloperSettingsV1Schema,
   DesktopAgentProfileV1Schema,
   DesktopAgentUpsertRequestV1Schema,
   DesktopProjectProfileSchema,
@@ -15,6 +16,17 @@ import {
   type DesktopProjectProfile,
   type SetupCommand,
 } from "../shared/ipc.js";
+
+const DesktopSettingsV4Schema = z
+  .object({
+    schemaVersion: z.literal(4),
+    profiles: z.array(DesktopProjectProfileSchema).max(50),
+    agents: z.array(DesktopAgentProfileV1Schema).max(50),
+    preferredAgentIds: z.record(z.string().uuid(), z.string().uuid()),
+    lastUsedAgentId: z.string().uuid().optional(),
+    developer: DesktopDeveloperSettingsV1Schema,
+  })
+  .strict();
 
 const DesktopSettingsV3Schema = z
   .object({
@@ -40,16 +52,19 @@ const DesktopSettingsV1Schema = z
   })
   .strict();
 
-type DesktopSettingsV3 = z.infer<typeof DesktopSettingsV3Schema>;
-export type DesktopSettingsSnapshot = Readonly<DesktopSettingsV3>;
+type DesktopSettingsV4 = z.infer<typeof DesktopSettingsV4Schema>;
+export type DesktopSettingsSnapshot = Readonly<DesktopSettingsV4>;
 
-const emptySettings = (): DesktopSettingsV3 =>
-  DesktopSettingsV3Schema.parse({
-    schemaVersion: 3,
+const emptySettings = (): DesktopSettingsV4 =>
+  DesktopSettingsV4Schema.parse({
+    schemaVersion: 4,
     profiles: [],
     agents: [],
     preferredAgentIds: {},
+    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
   });
+
+const operationTails = new Map<string, Promise<void>>();
 
 const errorCode = (error: unknown): string | undefined =>
   typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
@@ -97,7 +112,7 @@ const embeddedAgent = (profile: DesktopProjectProfile): SetupCommand | undefined
     ? SetupCommandSchema.parse(profile.environment.agent)
     : undefined;
 
-const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV3 => {
+const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV4 => {
   const now = new Date().toISOString();
   const agents = new Map<string, DesktopAgentProfileV1>();
   const preferredAgentIds: Record<string, string> = {};
@@ -124,14 +139,22 @@ const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV3 
     preferredAgentIds[profile.profileId] = agent.agentId;
   }
   const values = [...agents.values()];
-  return DesktopSettingsV3Schema.parse({
-    schemaVersion: 3,
+  return DesktopSettingsV4Schema.parse({
+    schemaVersion: 4,
     profiles,
     agents: values,
     preferredAgentIds,
     ...(values[0] === undefined ? {} : { lastUsedAgentId: values[0].agentId }),
+    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
   });
 };
+
+const migrateV3 = (settings: z.infer<typeof DesktopSettingsV3Schema>): DesktopSettingsV4 =>
+  DesktopSettingsV4Schema.parse({
+    ...settings,
+    schemaVersion: 4,
+    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
+  });
 
 export class DesktopSettingsStore {
   readonly #directory: string;
@@ -139,171 +162,226 @@ export class DesktopSettingsStore {
 
   public constructor(userDataDirectory: string) {
     this.#directory = path.resolve(userDataDirectory);
-    this.#filePath = path.join(this.#directory, "settings-v3.json");
+    this.#filePath = path.join(this.#directory, "settings-v4.json");
   }
 
   public async snapshot(): Promise<DesktopSettingsSnapshot> {
-    return this.#read();
+    return this.#serialized(() => this.#read());
   }
 
   public async listProfiles(): Promise<readonly DesktopProjectProfile[]> {
-    const settings = await this.#read();
-    return [...settings.profiles].sort((left, right) =>
-      right.lastOpenedAt.localeCompare(left.lastOpenedAt),
-    );
+    return this.#serialized(async () => {
+      const settings = await this.#read();
+      return [...settings.profiles].sort((left, right) =>
+        right.lastOpenedAt.localeCompare(left.lastOpenedAt),
+      );
+    });
   }
 
   public async listAgents(): Promise<readonly DesktopAgentProfileV1[]> {
-    return (await this.#read()).agents;
+    return this.#serialized(async () => (await this.#read()).agents);
+  }
+
+  public async developerSettings() {
+    return this.#serialized(async () => (await this.#read()).developer);
+  }
+
+  public async updateDeveloperSettings(value: unknown) {
+    return this.#serialized(async () => {
+      const developer = DesktopDeveloperSettingsV1Schema.parse(value);
+      const settings = await this.#read();
+      await this.#write({ ...settings, developer });
+      return developer;
+    });
   }
 
   public async agent(agentId: string): Promise<DesktopAgentProfileV1 | undefined> {
-    return (await this.#read()).agents.find((agent) => agent.agentId === agentId);
+    return this.#serialized(async () =>
+      (await this.#read()).agents.find((agent) => agent.agentId === agentId),
+    );
   }
 
   public async upsertAgent(
     requestValue: DesktopAgentUpsertRequestV1,
     trust?: AgentLaunchTrustV1,
   ): Promise<DesktopAgentProfileV1> {
-    const request = DesktopAgentUpsertRequestV1Schema.parse(requestValue);
-    const settings = await this.#read();
-    const existing =
-      request.agentId === undefined
-        ? undefined
-        : settings.agents.find((agent) => agent.agentId === request.agentId);
-    const now = new Date().toISOString();
-    const profile = DesktopAgentProfileV1Schema.parse({
-      schemaVersion: 1,
-      agentId: request.agentId ?? randomUUID(),
-      displayName: request.displayName,
-      provider: request.provider,
-      command: request.command,
-      ...(trust === undefined ? {} : { trust }),
-      adapter: request.adapter,
-      enabled: request.enabled,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
+    return this.#serialized(async () => {
+      const request = DesktopAgentUpsertRequestV1Schema.parse(requestValue);
+      const settings = await this.#read();
+      const existing =
+        request.agentId === undefined
+          ? undefined
+          : settings.agents.find((agent) => agent.agentId === request.agentId);
+      const now = new Date().toISOString();
+      const profile = DesktopAgentProfileV1Schema.parse({
+        schemaVersion: 1,
+        agentId: request.agentId ?? randomUUID(),
+        displayName: request.displayName,
+        provider: request.provider,
+        command: request.command,
+        ...(trust === undefined ? {} : { trust }),
+        adapter: request.adapter,
+        enabled: request.enabled,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      });
+      const agents = [
+        profile,
+        ...settings.agents.filter((agent) => agent.agentId !== profile.agentId),
+      ];
+      await this.#write({
+        ...settings,
+        agents,
+        lastUsedAgentId: settings.lastUsedAgentId ?? profile.agentId,
+      });
+      return profile;
     });
-    const agents = [
-      profile,
-      ...settings.agents.filter((agent) => agent.agentId !== profile.agentId),
-    ];
-    await this.#write({
-      ...settings,
-      agents,
-      lastUsedAgentId: settings.lastUsedAgentId ?? profile.agentId,
-    });
-    return profile;
   }
 
   public async removeAgent(agentId: string): Promise<void> {
-    const settings = await this.#read();
-    const preferredAgentIds = Object.fromEntries(
-      Object.entries(settings.preferredAgentIds).filter(([, value]) => value !== agentId),
-    );
-    const agents = settings.agents.filter((agent) => agent.agentId !== agentId);
-    await this.#write({
-      ...settings,
-      agents,
-      preferredAgentIds,
-      ...(settings.lastUsedAgentId === agentId
-        ? agents[0] === undefined
-          ? { lastUsedAgentId: undefined }
-          : { lastUsedAgentId: agents[0].agentId }
-        : {}),
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      const preferredAgentIds = Object.fromEntries(
+        Object.entries(settings.preferredAgentIds).filter(([, value]) => value !== agentId),
+      );
+      const agents = settings.agents.filter((agent) => agent.agentId !== agentId);
+      await this.#write({
+        ...settings,
+        agents,
+        preferredAgentIds,
+        ...(settings.lastUsedAgentId === agentId
+          ? agents[0] === undefined
+            ? { lastUsedAgentId: undefined }
+            : { lastUsedAgentId: agents[0].agentId }
+          : {}),
+      });
     });
   }
 
   public async setPreferredAgent(profileId: string, agentId: string): Promise<void> {
-    const settings = await this.#read();
-    if (!settings.profiles.some((profile) => profile.profileId === profileId))
-      throw new Error("Project profile was not found.");
-    if (!settings.agents.some((agent) => agent.agentId === agentId && agent.enabled))
-      throw new Error("Agent profile was not found or is disabled.");
-    await this.#write({
-      ...settings,
-      preferredAgentIds: { ...settings.preferredAgentIds, [profileId]: agentId },
-      lastUsedAgentId: agentId,
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      if (!settings.profiles.some((profile) => profile.profileId === profileId))
+        throw new Error("Project profile was not found.");
+      if (!settings.agents.some((agent) => agent.agentId === agentId && agent.enabled))
+        throw new Error("Agent profile was not found or is disabled.");
+      await this.#write({
+        ...settings,
+        preferredAgentIds: { ...settings.preferredAgentIds, [profileId]: agentId },
+        lastUsedAgentId: agentId,
+      });
     });
   }
 
   public async markAgentUsed(agentId: string): Promise<void> {
-    const settings = await this.#read();
-    if (!settings.agents.some((agent) => agent.agentId === agentId)) return;
-    await this.#write({ ...settings, lastUsedAgentId: agentId });
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      if (!settings.agents.some((agent) => agent.agentId === agentId)) return;
+      await this.#write({ ...settings, lastUsedAgentId: agentId });
+    });
   }
 
   public async upsertProfile(profileValue: DesktopProjectProfile): Promise<void> {
-    const profile = DesktopProjectProfileSchema.parse(profileValue);
-    const settings = await this.#read();
-    const projectKey = (value: string): string => {
-      const resolved = path.resolve(value);
-      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    };
-    const replacedIds = settings.profiles
-      .filter(
+    await this.#serialized(async () => {
+      const profile = DesktopProjectProfileSchema.parse(profileValue);
+      const settings = await this.#read();
+      const projectKey = (value: string): string => {
+        const resolved = path.resolve(value);
+        return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+      };
+      const replacedIds = settings.profiles
+        .filter(
+          (candidate) =>
+            candidate.profileId !== profile.profileId &&
+            profile.schemaVersion !== 1 &&
+            candidate.schemaVersion !== 1 &&
+            projectKey(candidate.projectPath) === projectKey(profile.projectPath),
+        )
+        .map((candidate) => candidate.profileId);
+      const profiles = settings.profiles.filter(
         (candidate) =>
           candidate.profileId !== profile.profileId &&
-          profile.schemaVersion !== 1 &&
-          candidate.schemaVersion !== 1 &&
-          projectKey(candidate.projectPath) === projectKey(profile.projectPath),
-      )
-      .map((candidate) => candidate.profileId);
-    const profiles = settings.profiles.filter(
-      (candidate) =>
-        candidate.profileId !== profile.profileId &&
-        !(
-          profile.schemaVersion !== 1 &&
-          candidate.schemaVersion !== 1 &&
-          projectKey(candidate.projectPath) === projectKey(profile.projectPath)
-        ) &&
-        !(
-          candidate.projectPath === profile.projectPath &&
-          candidate.batchConfigPath === profile.batchConfigPath
+          !(
+            profile.schemaVersion !== 1 &&
+            candidate.schemaVersion !== 1 &&
+            projectKey(candidate.projectPath) === projectKey(profile.projectPath)
+          ) &&
+          !(
+            candidate.projectPath === profile.projectPath &&
+            candidate.batchConfigPath === profile.batchConfigPath
+          ),
+      );
+      const replacementPreference = replacedIds
+        .map((id) => settings.preferredAgentIds[id])
+        .find((value) => value !== undefined);
+      const preferredAgentIds = {
+        ...Object.fromEntries(
+          Object.entries(settings.preferredAgentIds).filter(
+            ([profileId]) => !replacedIds.includes(profileId),
+          ),
         ),
-    );
-    const replacementPreference = replacedIds
-      .map((id) => settings.preferredAgentIds[id])
-      .find((value) => value !== undefined);
-    const preferredAgentIds = {
-      ...Object.fromEntries(
-        Object.entries(settings.preferredAgentIds).filter(
-          ([profileId]) => !replacedIds.includes(profileId),
-        ),
-      ),
-      ...(replacementPreference === undefined
-        ? {}
-        : { [profile.profileId]: replacementPreference }),
-    };
-    await this.#write({
-      ...settings,
-      profiles: [profile, ...profiles].slice(0, 50),
-      preferredAgentIds,
+        ...(replacementPreference === undefined
+          ? {}
+          : { [profile.profileId]: replacementPreference }),
+      };
+      await this.#write({
+        ...settings,
+        profiles: [profile, ...profiles].slice(0, 50),
+        preferredAgentIds,
+      });
     });
   }
 
   public async removeProfile(profileId: string): Promise<void> {
-    const settings = await this.#read();
-    const preferredAgentIds = Object.fromEntries(
-      Object.entries(settings.preferredAgentIds).filter(([candidate]) => candidate !== profileId),
-    );
-    await this.#write({
-      ...settings,
-      profiles: settings.profiles.filter((profile) => profile.profileId !== profileId),
-      preferredAgentIds,
+    await this.#serialized(async () => {
+      const settings = await this.#read();
+      const preferredAgentIds = Object.fromEntries(
+        Object.entries(settings.preferredAgentIds).filter(([candidate]) => candidate !== profileId),
+      );
+      await this.#write({
+        ...settings,
+        profiles: settings.profiles.filter((profile) => profile.profileId !== profileId),
+        preferredAgentIds,
+      });
     });
   }
 
-  async #read(): Promise<DesktopSettingsV3> {
+  #serialized<T>(operation: () => Promise<T>): Promise<T> {
+    const key = process.platform === "win32" ? this.#filePath.toLowerCase() : this.#filePath;
+    const previous = operationTails.get(key) ?? Promise.resolve();
+    const result = previous.then(operation, operation);
+    const tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    operationTails.set(key, tail);
+    void tail.then(() => {
+      if (operationTails.get(key) === tail) operationTails.delete(key);
+    });
+    return result;
+  }
+
+  async #read(): Promise<DesktopSettingsV4> {
     try {
       const entry = await lstat(this.#filePath);
       if (!entry.isFile() || entry.isSymbolicLink() || entry.size > 1024 * 1024) {
         throw new Error("invalid settings file");
       }
-      return DesktopSettingsV3Schema.parse(JSON.parse(await readFile(this.#filePath, "utf8")));
+      return DesktopSettingsV4Schema.parse(JSON.parse(await readFile(this.#filePath, "utf8")));
     } catch (error) {
       if (errorCode(error) !== "ENOENT")
         throw new Error("Desktop settings are invalid or unreadable.", { cause: error });
+      try {
+        const legacy = DesktopSettingsV3Schema.parse(
+          JSON.parse(await readFile(path.join(this.#directory, "settings-v3.json"), "utf8")),
+        );
+        const migrated = migrateV3(legacy);
+        await this.#write(migrated);
+        return migrated;
+      } catch (legacyError) {
+        if (errorCode(legacyError) !== "ENOENT")
+          throw new Error("Desktop settings are invalid or unreadable.", { cause: legacyError });
+      }
       for (const [fileName, schema] of [
         ["settings-v2.json", DesktopSettingsV2Schema],
         ["settings-v1.json", DesktopSettingsV1Schema],
@@ -325,7 +403,7 @@ export class DesktopSettingsStore {
   }
 
   async #write(value: unknown): Promise<void> {
-    const settings = DesktopSettingsV3Schema.parse(value);
+    const settings = DesktopSettingsV4Schema.parse(value);
     await mkdir(this.#directory, { recursive: true });
     const directory = await lstat(this.#directory);
     if (!directory.isDirectory() || directory.isSymbolicLink()) {

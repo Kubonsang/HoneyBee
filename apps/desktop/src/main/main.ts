@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import {
   AgentSessionProcessRunner,
   DesktopWorkScheduler,
@@ -20,6 +20,10 @@ import {
   DesktopBootstrapV2Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
+  DesktopDeveloperSettingsUpdateV1Schema,
+  DesktopDogfoodFinalizeRequestV1Schema,
+  DesktopDogfoodOpenEvidenceRequestV1Schema,
+  DesktopDogfoodStartRequestV1Schema,
   DesktopIpcChannels,
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
@@ -40,6 +44,7 @@ import {
 import { DesktopComponentManager, readCompatibilityManifest } from "./component-manager.js";
 import { DesktopAgentManager } from "./agent-manager.js";
 import { DesktopAgentApprovalBroker } from "./agent-approval-broker.js";
+import { DesktopDogfoodController } from "./desktop-dogfood.js";
 import { DesktopSettingsStore } from "./settings.js";
 import {
   DesktopSetupCoordinator,
@@ -96,6 +101,7 @@ const runtime = new HoneyBeeRuntimeFacade({
     approval: agentApprovalBroker,
   }),
 });
+const dogfood = new DesktopDogfoodController(userData, runtime.info().stateRoot);
 const components = new DesktopComponentManager(
   path.join(userData, "components"),
   bundledToolsRoot,
@@ -318,6 +324,12 @@ const safeHandler =
           ? error.code
           : "desktop.operation-failed";
       const publicMessages: Readonly<Record<string, string>> = {
+        "dogfood.disabled": "Enable Dogfood Metrics in Settings before recording.",
+        "dogfood.doctor-failed": "Doctor and the selected Agent must be ready before recording.",
+        "dogfood.evidence-path-unsafe": "The recorded Evidence path is outside HoneyBee user data.",
+        "dogfood.recording-active": "Stop and finalize the active dogfood recording first.",
+        "dogfood.session-not-found": "The dogfood recording could not be found.",
+        "dogfood.state-invalid": "The local dogfood session descriptor is invalid or unreadable.",
         "workspace-storage.service-conflict":
           "Another Unity Workspace Storage service exists without HoneyBee's machine receipt.",
         "workspace-storage.install-failed":
@@ -340,6 +352,89 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.bootstrap,
     safeHandler(async () => bootstrap()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.developerSettingsGet,
+    safeHandler(async () => settings.developerSettings()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.developerSettingsUpdate,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopDeveloperSettingsUpdateV1Schema.parse(requestValue);
+      const status = await dogfood.status(true);
+      if (!request.dogfoodMetricsEnabled && status.state === "recording") {
+        throw Object.assign(
+          new Error("Stop and finalize the active dogfood recording before disabling it."),
+          { code: "dogfood.recording-active" },
+        );
+      }
+      return settings.updateDeveloperSettings(request);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.dogfoodStatus,
+    safeHandler(async () =>
+      dogfood.status((await settings.developerSettings()).dogfoodMetricsEnabled),
+    ),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.dogfoodStart,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopDogfoodStartRequestV1Schema.parse(requestValue);
+      const developer = await settings.developerSettings();
+      if (!developer.dogfoodMetricsEnabled)
+        throw Object.assign(new Error("Dogfood Metrics is disabled."), {
+          code: "dogfood.disabled",
+        });
+      const profile = await validateProfile(await profileFor(request.profileId));
+      const report = await runtime.doctor({
+        schemaVersion: 1,
+        projectPath: profile.projectPath,
+        batchConfigPath: profile.batchConfigPath,
+      });
+      const snapshot = await settings.snapshot();
+      const preferredAgentId =
+        snapshot.preferredAgentIds[profile.profileId] ?? snapshot.lastUsedAgentId;
+      const agentReady =
+        preferredAgentId !== undefined &&
+        (await agentManager.probe(await agentFor(preferredAgentId))).status === "ready";
+      return dogfood.start({
+        profileId: profile.profileId,
+        projectLabel: profile.label,
+        projectPath: profile.projectPath,
+        configPath: profile.batchConfigPath,
+        doctorPassed: report.ok && agentReady,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.dogfoodFinalize,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopDogfoodFinalizeRequestV1Schema.parse(requestValue);
+      const status = await dogfood.status(true);
+      if (status.session?.sessionId !== request.sessionId)
+        throw Object.assign(new Error("Dogfood session was not found."), {
+          code: "dogfood.session-not-found",
+        });
+      const target = await dogfood.finalizationTarget(request.sessionId);
+      const [runs, editors, pool] = await Promise.all([
+        runtime.listRuns({ projectPath: target.projectPath }),
+        runtime.listEditors(),
+        runtime.inspectEditorPoolForConfig(target.configPath),
+      ]);
+      return dogfood.finalize({
+        sessionId: request.sessionId,
+        observation: { runs, editors: editors.editors, pool },
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.dogfoodOpenEvidence,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopDogfoodOpenEvidenceRequestV1Schema.parse(requestValue);
+      const target = await dogfood.evidencePath(request.sessionId);
+      return (await shell.openPath(target)) === "";
+    }),
   );
   ipcMain.handle(
     DesktopIpcChannels.chooseProfile,
@@ -698,7 +793,7 @@ const registerIpc = (): void => {
       }
       await settings.setPreferredAgent(profile.profileId, request.defaultAgentId);
       await settings.markAgentUsed(request.defaultAgentId);
-      return runtime.startUnityWorks({
+      const result = await runtime.startUnityWorks({
         schemaVersion: 2,
         projectPath: profile.projectPath,
         batchConfigPath: profile.batchConfigPath,
@@ -718,6 +813,10 @@ const registerIpc = (): void => {
           };
         }),
       });
+      await dogfood
+        .recordParentRun(profile.profileId, result.runId, request.works.length)
+        .catch(() => undefined);
+      return result;
     }),
   );
   ipcMain.handle(
@@ -886,8 +985,15 @@ const createWindow = async (): Promise<void> => {
         "      const ready = document.body.textContent?.includes('Your Unity projects') === true;",
         "      if (api !== undefined && ready) {",
         "        const components = await api.components();",
+        "        const developerBefore = await api.developerSettings();",
+        "        const developerEnabled = await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true });",
+        "        const dogfood = await api.dogfoodStatus();",
+        "        await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: false });",
         "        resolve({",
         "          componentSchemaVersion: components.schemaVersion,",
+        "          developerDefaultOff: developerBefore.dogfoodMetricsEnabled === false,",
+        "          developerToggleOn: developerEnabled.dogfoodMetricsEnabled === true,",
+        "          dogfoodIdle: dogfood.enabled === true && dogfood.state === 'idle',",
         "          rendererReady: ready",
         "        });",
         "        return;",
@@ -910,7 +1016,13 @@ const createWindow = async (): Promise<void> => {
         "componentSchemaVersion" in result &&
         result.componentSchemaVersion === 1 &&
         "rendererReady" in result &&
-        result.rendererReady === true;
+        result.rendererReady === true &&
+        "developerDefaultOff" in result &&
+        result.developerDefaultOff === true &&
+        "developerToggleOn" in result &&
+        result.developerToggleOn === true &&
+        "dogfoodIdle" in result &&
+        result.dogfoodIdle === true;
       if (!valid) throw new Error("invalid smoke result");
       await writeSmokeStage("passed");
       process.stdout.write("HONEYBEE_DESKTOP_SMOKE_OK\n");

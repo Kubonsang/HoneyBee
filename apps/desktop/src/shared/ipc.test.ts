@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 
 import {
   DesktopArtifactRequestV1Schema,
+  DesktopDeveloperSettingsV1Schema,
+  DesktopDogfoodFinalizeRequestV1Schema,
+  DesktopDogfoodStartRequestV1Schema,
   DesktopPatchControlRequestV1Schema,
   DesktopProjectAddRequestV1Schema,
   DesktopProjectAddRequestV2Schema,
@@ -208,6 +211,37 @@ describe("Desktop IPC contracts", () => {
       HoneyBeeCompatibilityManifestV1Schema.safeParse({
         ...manifest,
         marketplace: "https://untrusted.example",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps Developer and dogfood session controls strict", () => {
+    const profileId = "00000000-0000-4000-8000-000000000001";
+    const sessionId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      DesktopDeveloperSettingsV1Schema.safeParse({
+        schemaVersion: 1,
+        dogfoodMetricsEnabled: true,
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopDeveloperSettingsV1Schema.safeParse({
+        schemaVersion: 1,
+        dogfoodMetricsEnabled: true,
+        automaticUpload: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      DesktopDogfoodStartRequestV1Schema.safeParse({ schemaVersion: 1, profileId }).success,
+    ).toBe(true);
+    expect(
+      DesktopDogfoodFinalizeRequestV1Schema.safeParse({ schemaVersion: 1, sessionId }).success,
+    ).toBe(true);
+    expect(
+      DesktopDogfoodFinalizeRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        sessionId,
+        evidencePath: "C:\\outside",
       }).success,
     ).toBe(false);
   });

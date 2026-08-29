@@ -247,6 +247,20 @@ const api: HoneyBeeDesktopApi = {
   listAgentApprovals: async () => ({ schemaVersion: 1, approvals: [] }),
   respondAgentApproval: unsupported,
   setProjectAgentPreference: unsupported,
+  developerSettings: async () => ({
+    schemaVersion: 1,
+    dogfoodMetricsEnabled: false,
+  }),
+  updateDeveloperSettings: unsupported,
+  dogfoodStatus: async () => ({
+    schemaVersion: 1,
+    enabled: false,
+    state: "idle",
+    observedAt: timestamp(0),
+  }),
+  startDogfood: unsupported,
+  finalizeDogfood: unsupported,
+  openDogfoodEvidence: unsupported,
 };
 
 Object.defineProperty(window, "honeybee", { configurable: false, value: api });

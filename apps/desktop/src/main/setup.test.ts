@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { lstat, mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -99,6 +99,64 @@ const storageResult = (value: Record<string, unknown>) => {
 };
 
 describe("managed Unity compatibility", () => {
+  it("single-flights concurrent Resume requests before setup I/O", async () => {
+    const paths = await fixture();
+    const setupId = randomUUID();
+    const directory = path.join(paths.setupRoot, setupId);
+    await mkdir(directory, { recursive: true });
+    await writeFile(
+      path.join(directory, "request.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        label: "Resume game",
+        projectPath: paths.project,
+        unityPath: paths.unity,
+        workspaceStoragePath: paths.storage,
+        workspaceRoot: paths.workspace,
+        agent: { command: paths.agent },
+        editorCapacity: 1,
+      }),
+      "utf8",
+    );
+    await writeFile(
+      path.join(directory, "events.jsonl"),
+      JSON.stringify({
+        schemaVersion: 1,
+        eventId: randomUUID(),
+        sequence: 1,
+        timestamp: new Date().toISOString(),
+        type: "setup.started",
+        payload: { setupId },
+      }) + "\n",
+      "utf8",
+    );
+    let calls = 0;
+    let notifyCall!: () => void;
+    const called = new Promise<void>((resolve) => {
+      notifyCall = resolve;
+    });
+    let releaseCall!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseCall = resolve;
+    });
+    const coordinator = new DesktopSetupCoordinator(
+      paths.setupRoot,
+      async () => undefined,
+      undefined,
+      async () => {
+        calls += 1;
+        notifyCall();
+        await gate;
+        throw new Error("expected fixture stop");
+      },
+    );
+    await Promise.all([coordinator.resume(setupId), coordinator.resume(setupId)]);
+    await called;
+    expect(calls).toBe(1);
+    releaseCall();
+    await waitForTerminal(coordinator, setupId);
+  });
+
   it("reuses a parent across ordinary Assets changes", async () => {
     const { project, overlay, unity } = await fixture();
     const before = await computeUnityCompatibility(project, unity, overlay);

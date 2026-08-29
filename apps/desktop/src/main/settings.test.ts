@@ -40,11 +40,12 @@ describe("DesktopSettingsStore", () => {
     await store.upsertProfile(older);
     await store.upsertProfile(newer);
     expect(await store.listProfiles()).toEqual([newer, older]);
-    expect(JSON.parse(await readFile(path.join(root, "settings-v3.json"), "utf8"))).toEqual({
-      schemaVersion: 3,
+    expect(JSON.parse(await readFile(path.join(root, "settings-v4.json"), "utf8"))).toEqual({
+      schemaVersion: 4,
       profiles: [newer, older],
       agents: [],
       preferredAgentIds: {},
+      developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
     });
 
     await store.removeProfile(newer.profileId);
@@ -76,6 +77,33 @@ describe("DesktopSettingsStore", () => {
       schemaVersion: 1,
       profiles: [legacy],
     });
+  });
+
+  it("migrates settings v3 and persists the developer toggle in settings v4", async () => {
+    const root = await temporaryRoot();
+    const legacy = profile(new Date(3).toISOString(), "V3");
+    await writeFile(
+      path.join(root, "settings-v3.json"),
+      JSON.stringify({
+        schemaVersion: 3,
+        profiles: [legacy],
+        agents: [],
+        preferredAgentIds: {},
+      }),
+      "utf8",
+    );
+    const store = new DesktopSettingsStore(root);
+    expect(await store.developerSettings()).toEqual({
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: false,
+    });
+    await store.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true });
+    const persisted = JSON.parse(await readFile(path.join(root, "settings-v4.json"), "utf8"));
+    expect(persisted.developer).toEqual({
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: true,
+    });
+    expect(await store.listProfiles()).toEqual([legacy]);
   });
 
   it("keeps one managed environment per Unity project when Project Settings is reapplied", async () => {
@@ -156,5 +184,38 @@ describe("DesktopSettingsStore", () => {
       command: { command: "opencode" },
     });
     expect(migrated.preferredAgentIds[second.profileId]).toBe(migrated.agents[0]?.agentId);
+  });
+
+  it("serializes concurrent mutations across stores for the same settings path", async () => {
+    const root = await temporaryRoot();
+    const profiles = new DesktopSettingsStore(root);
+    const agents = new DesktopSettingsStore(root);
+    const project = profile(new Date(6).toISOString(), "Concurrent");
+    await Promise.all([
+      profiles.upsertProfile(project),
+      agents.upsertAgent({
+        schemaVersion: 1,
+        displayName: "Concurrent Agent",
+        provider: "custom",
+        command: { command: process.execPath },
+        adapter: "stdio-framed-v2",
+        enabled: true,
+      }),
+    ]);
+    const snapshot = await new DesktopSettingsStore(root).snapshot();
+    expect(snapshot.profiles).toEqual([project]);
+    expect(snapshot.agents).toHaveLength(1);
+    expect(snapshot.agents[0]?.displayName).toBe("Concurrent Agent");
+  });
+
+  it("continues processing settings mutations after a rejected operation", async () => {
+    const root = await temporaryRoot();
+    const store = new DesktopSettingsStore(root);
+    await expect(store.setPreferredAgent(randomUUID(), randomUUID())).rejects.toThrow(
+      "Project profile was not found",
+    );
+    const next = profile(new Date(7).toISOString(), "AfterFailure");
+    await store.upsertProfile(next);
+    await expect(store.listProfiles()).resolves.toEqual([next]);
   });
 });

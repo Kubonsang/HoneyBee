@@ -15,6 +15,8 @@ interface Ticket<T> {
   readonly resolve: (value: T | PromiseLike<T>) => void;
   readonly reject: (reason?: unknown) => void;
   abort?: () => void;
+  ready: boolean;
+  settled: boolean;
 }
 
 const rank = (priority: UnityWorkPriority): number =>
@@ -54,11 +56,15 @@ export class DesktopWorkScheduler {
         body,
         resolve,
         reject,
+        ready: false,
+        settled: false,
       };
       const abort = (): void => {
+        if (ticket.settled) return;
         const index = this.#queued.indexOf(ticket as Ticket<unknown>);
         if (index < 0) return;
         this.#queued.splice(index, 1);
+        ticket.settled = true;
         request.signal?.removeEventListener("abort", abort);
         reject(request.signal?.reason ?? new Error("Aborted"));
       };
@@ -70,22 +76,39 @@ export class DesktopWorkScheduler {
           rank(left.request.priority) - rank(right.request.priority) ||
           left.sequence - right.sequence,
       );
-      void Promise.resolve(request.onQueued?.())
-        .then(() => this.#drain())
-        .catch((error: unknown) => {
-          const index = this.#queued.indexOf(ticket as Ticket<unknown>);
-          if (index >= 0) this.#queued.splice(index, 1);
-          request.signal?.removeEventListener("abort", abort);
-          reject(error);
+      const rejectQueued = (error: unknown): void => {
+        if (ticket.settled) return;
+        const index = this.#queued.indexOf(ticket as Ticket<unknown>);
+        if (index >= 0) this.#queued.splice(index, 1);
+        ticket.settled = true;
+        request.signal?.removeEventListener("abort", abort);
+        reject(error);
+        this.#drain();
+      };
+      let queuedHook: Promise<void> | undefined;
+      try {
+        queuedHook = request.onQueued?.();
+      } catch (error) {
+        rejectQueued(error);
+        return;
+      }
+      void Promise.resolve(queuedHook)
+        .then(() => {
+          if (ticket.settled) return;
+          ticket.ready = true;
           this.#drain();
-        });
+        })
+        .catch(rejectQueued);
     });
   }
 
   #drain(): void {
     while (this.#active < this.#capacity) {
-      const ticket = this.#queued.shift();
+      const index = this.#queued.findIndex((candidate) => candidate.ready);
+      if (index < 0) return;
+      const ticket = this.#queued.splice(index, 1)[0];
       if (ticket === undefined) return;
+      ticket.settled = true;
       ticket.request.signal?.removeEventListener("abort", ticket.abort as () => void);
       if (ticket.request.signal?.aborted === true) {
         ticket.reject(ticket.request.signal.reason ?? new Error("Aborted"));

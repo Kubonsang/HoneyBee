@@ -11,6 +11,7 @@ import {
   FileRunControl,
   FileRunRepository,
   ArtifactIdSchema,
+  captureAgentLaunchTrust,
   ResourceIdSchema,
   RunIdSchema,
   StepIdSchema,
@@ -201,6 +202,10 @@ describe("UnityWorkTransaction", () => {
       "process.stdout.write(JSON.stringify({ schema_version: '1', run_id: runId, status: 'passed', total }) + '\\n');",
     ]);
 
+    const agentTrust = await captureAgentLaunchTrust([
+      { role: "entrypoint", path: process.execPath },
+      { role: "payload", path: agentScript },
+    ]);
     const config = UnityWorkConfigV1Schema.parse({
       schemaVersion: 1,
       sourceProjectPath: source,
@@ -215,6 +220,7 @@ describe("UnityWorkTransaction", () => {
       },
       agent: {
         command: { command: process.execPath, args: [agentScript] },
+        trust: agentTrust,
         harness: "stdio-framed-v2",
         timeoutMs: 10_000,
       },
@@ -230,9 +236,16 @@ describe("UnityWorkTransaction", () => {
     const controls = new FileRunControl(runRoot);
     const executorLease = await controls.acquire(runId);
     const journal = new FileOrchestrationJournal(runRoot);
+    const childRunner = new ChildProcessAgentRunner();
+    let propagatedTrust = false;
     try {
       const result = await new UnityWorkTransaction(
-        new ChildProcessAgentRunner(),
+        {
+          run: async (request, lifecycle) => {
+            propagatedTrust = request.trust?.trustDigest === agentTrust.trustDigest;
+            return childRunner.run(request, lifecycle);
+          },
+        },
         new FileArtifactStore(runRoot),
         journal,
         controls,
@@ -248,6 +261,7 @@ describe("UnityWorkTransaction", () => {
       expect(result.status).toBe("completed");
       expect(result.evidence?.kind).toBe("testplay-evidence");
       expect(result.release?.kind).toBe("workspace-release-receipt");
+      expect(propagatedTrust).toBe(true);
     } finally {
       await executorLease.release();
     }

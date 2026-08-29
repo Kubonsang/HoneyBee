@@ -7,6 +7,10 @@ import {
   DesktopAgentApprovalResponseV1Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
+  DesktopDeveloperSettingsUpdateV1Schema,
+  DesktopDogfoodFinalizeRequestV1Schema,
+  DesktopDogfoodOpenEvidenceRequestV1Schema,
+  DesktopDogfoodStartRequestV1Schema,
   DesktopIpcChannels,
   DesktopIpcResponseSchemas,
   DesktopPatchControlRequestV1Schema,
@@ -209,6 +213,42 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.projectAgentPreference,
         DesktopProjectAgentPreferenceRequestV1Schema.parse(request),
+      ),
+    ),
+  developerSettings: async () =>
+    DesktopIpcResponseSchemas.developerSettingsGet.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.developerSettingsGet),
+    ),
+  updateDeveloperSettings: async (request) =>
+    DesktopIpcResponseSchemas.developerSettingsUpdate.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.developerSettingsUpdate,
+        DesktopDeveloperSettingsUpdateV1Schema.parse(request),
+      ),
+    ),
+  dogfoodStatus: async () =>
+    DesktopIpcResponseSchemas.dogfoodStatus.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.dogfoodStatus),
+    ),
+  startDogfood: async (request) =>
+    DesktopIpcResponseSchemas.dogfoodStart.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.dogfoodStart,
+        DesktopDogfoodStartRequestV1Schema.parse(request),
+      ),
+    ),
+  finalizeDogfood: async (request) =>
+    DesktopIpcResponseSchemas.dogfoodFinalize.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.dogfoodFinalize,
+        DesktopDogfoodFinalizeRequestV1Schema.parse(request),
+      ),
+    ),
+  openDogfoodEvidence: async (request) =>
+    DesktopIpcResponseSchemas.dogfoodOpenEvidence.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.dogfoodOpenEvidence,
+        DesktopDogfoodOpenEvidenceRequestV1Schema.parse(request),
       ),
     ),
 };

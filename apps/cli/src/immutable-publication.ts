@@ -1,5 +1,6 @@
 import type { Stats } from "node:fs";
-import { lstat, open, readdir, unlink } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { link, lstat, open, readdir, unlink } from "node:fs/promises";
 import path from "node:path";
 
 const errorCode = (error: unknown): string | undefined =>
@@ -67,6 +68,30 @@ export interface RecoveredImmutableFile {
   readonly bytes: Buffer;
   readonly metadata: Stats;
 }
+
+/**
+ * Publishes bytes without ever replacing an existing final name. A crash after
+ * link and before unlink is recovered by readRecoveredImmutableFile.
+ */
+export const publishImmutableFile = async (finalPath: string, bytes: Uint8Array): Promise<void> => {
+  const directory = path.dirname(finalPath);
+  const temporaryPath = path.join(directory, `.${randomUUID()}.tmp`);
+  const handle = await open(temporaryPath, "wx");
+  try {
+    await handle.writeFile(bytes);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+  try {
+    await link(temporaryPath, finalPath);
+  } finally {
+    await unlink(temporaryPath).catch(() => undefined);
+  }
+};
+
+export const publishImmutableJson = (finalPath: string, value: unknown): Promise<void> =>
+  publishImmutableFile(finalPath, Buffer.from(`${JSON.stringify(value)}\n`, "utf8"));
 
 export const readRecoveredImmutableFile = async (
   finalPath: string,

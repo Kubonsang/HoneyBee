@@ -1095,6 +1095,7 @@ export const UnityBatchTransactionV3Schema = z
     agent: z
       .object({
         command: AgentCommandSchema,
+        trust: AgentLaunchTrustV1Schema.optional(),
         harness: z.literal("stdio-framed-v2"),
         timeoutMs: z.number().int().positive().optional(),
         maxOutputBytes: z.number().int().positive().optional(),

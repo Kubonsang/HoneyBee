@@ -71,4 +71,70 @@ describe("DesktopWorkScheduler", () => {
     await active;
     expect(scheduler.snapshot()).toEqual({ capacity: 1, active: 0, queued: 0 });
   });
+
+  it("does not admit a ticket before its own queued hook is durable", async () => {
+    const scheduler = new DesktopWorkScheduler(2);
+    const firstQueued = deferred();
+    const bodies: string[] = [];
+    const first = scheduler.withSlot(
+      { priority: "interactive", onQueued: () => firstQueued.promise },
+      async () => {
+        bodies.push("first");
+      },
+    );
+    const second = scheduler.withSlot(
+      { priority: "background", onQueued: async () => undefined },
+      async () => {
+        bodies.push("second");
+      },
+    );
+    await second;
+    expect(bodies).toEqual(["second"]);
+    expect(scheduler.snapshot()).toEqual({ capacity: 2, active: 0, queued: 1 });
+    firstQueued.resolve();
+    await first;
+    expect(bodies).toEqual(["second", "first"]);
+  });
+
+  it("never starts a ticket whose queued hook rejects", async () => {
+    const scheduler = new DesktopWorkScheduler(2);
+    let rejectQueued!: (error: Error) => void;
+    const queued = new Promise<void>((_resolve, reject) => {
+      rejectQueued = reject;
+    });
+    let started = false;
+    const rejected = scheduler.withSlot(
+      { priority: "interactive", onQueued: () => queued },
+      async () => {
+        started = true;
+      },
+    );
+    await scheduler.withSlot(
+      { priority: "background", onQueued: async () => undefined },
+      async () => undefined,
+    );
+    rejectQueued(new Error("journal failed"));
+    await expect(rejected).rejects.toThrow("journal failed");
+    expect(started).toBe(false);
+  });
+
+  it("removes a ticket whose queued hook throws synchronously", async () => {
+    const scheduler = new DesktopWorkScheduler(1);
+    let ran = false;
+    await expect(
+      scheduler.withSlot(
+        {
+          priority: "interactive",
+          onQueued: () => {
+            throw new Error("journal failed");
+          },
+        },
+        async () => {
+          ran = true;
+        },
+      ),
+    ).rejects.toThrow("journal failed");
+    expect(ran).toBe(false);
+    expect(scheduler.snapshot()).toEqual({ capacity: 1, active: 0, queued: 0 });
+  });
 });

@@ -777,6 +777,7 @@ const storageResponse = (serialized: string, requestId: string): StorageResponse
 
 export class DesktopSetupCoordinator {
   readonly #active = new Map<string, Readonly<{ aborter: AbortController; task: Promise<void> }>>();
+  readonly #resuming = new Map<string, Promise<DesktopSetupStatusV1>>();
 
   public constructor(
     private readonly root: string,
@@ -833,6 +834,16 @@ export class DesktopSetupCoordinator {
   }
 
   public async resume(setupId: string): Promise<DesktopSetupStatusV1> {
+    const existing = this.#resuming.get(setupId);
+    if (existing !== undefined) return existing;
+    const task = this.#resumeOnce(setupId).finally(() => {
+      if (this.#resuming.get(setupId) === task) this.#resuming.delete(setupId);
+    });
+    this.#resuming.set(setupId, task);
+    return task;
+  }
+
+  async #resumeOnce(setupId: string): Promise<DesktopSetupStatusV1> {
     if (this.#active.has(setupId)) return this.status(setupId);
     const directory = this.#directory(setupId);
     const draft = InternalSetupDraftSchema.parse(
@@ -860,6 +871,7 @@ export class DesktopSetupCoordinator {
   }
 
   #launch(setupId: string, draft: InternalSetupDraft, journal: SetupJournal): void {
+    if (this.#active.has(setupId)) throw new Error("Setup is already running.");
     const aborter = new AbortController();
     const task = this.#run(setupId, draft, journal, aborter.signal).finally(() => {
       this.#active.delete(setupId);
