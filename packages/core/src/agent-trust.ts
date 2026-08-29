@@ -154,7 +154,13 @@ const commandShimPayload = async (
     if (match[1] === undefined) continue;
     const candidate = path.resolve(path.dirname(commandPath), match[1]);
     const entry = await lstat(candidate).catch(() => undefined);
-    if (entry?.isFile() === true && !entry.isSymbolicLink()) referenced.add(candidate);
+    if (entry?.isFile() !== true || entry.isSymbolicLink()) continue;
+    const canonical = await realpath(candidate).catch(() => undefined);
+    if (canonical === undefined) continue;
+    const canonicalEntry = await lstat(canonical).catch(() => undefined);
+    if (canonicalEntry?.isFile() === true && !canonicalEntry.isSymbolicLink()) {
+      referenced.add(path.resolve(canonical));
+    }
   }
   const scripts = [...referenced].filter((candidate) => /\.[cm]?js$/iu.test(candidate));
   const executables = [...referenced].filter(
