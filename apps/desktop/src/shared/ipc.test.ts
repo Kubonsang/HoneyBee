@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   DesktopArtifactRequestV1Schema,
   DesktopDeveloperSettingsV1Schema,
+  DesktopClonedRunDraftV1Schema,
+  DesktopCloneRunDraftRequestV1Schema,
   DesktopDogfoodFinalizeRequestV1Schema,
   DesktopDogfoodStartRequestV1Schema,
   DesktopPatchControlRequestV1Schema,
@@ -79,6 +81,45 @@ describe("Desktop IPC contracts", () => {
         runId,
         patchArtifactId: artifactId,
         action: "delete",
+      }).success,
+    ).toBe(false);
+    expect(DesktopCloneRunDraftRequestV1Schema.safeParse({ schemaVersion: 1, runId }).success).toBe(
+      true,
+    );
+    expect(
+      DesktopCloneRunDraftRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        runId,
+        autoStart: true,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("keeps cloned Run drafts explicit about unavailable Agents", () => {
+    const value = {
+      schemaVersion: 1,
+      sourceRunId: "00000000-0000-4000-8000-000000000001",
+      profileId: "00000000-0000-4000-8000-000000000002",
+      defaultAgentId: null,
+      maxParallelWorks: 1,
+      works: [
+        {
+          id: "work-1",
+          task: "Fix player movement jitter",
+          priority: "validation",
+          compile: true,
+          warmTest: true,
+          filter: "Smoke",
+          agentId: null,
+          agentLabel: "retired-agent.exe",
+        },
+      ],
+    };
+    expect(DesktopClonedRunDraftV1Schema.safeParse(value).success).toBe(true);
+    expect(
+      DesktopClonedRunDraftV1Schema.safeParse({
+        ...value,
+        works: [{ ...value.works[0], autoStart: true }],
       }).success,
     ).toBe(false);
   });

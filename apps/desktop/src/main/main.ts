@@ -18,6 +18,7 @@ import {
   DesktopAgentApprovalListV1Schema,
   DesktopAgentApprovalResponseV1Schema,
   DesktopBootstrapV2Schema,
+  DesktopCloneRunDraftRequestV1Schema,
   DesktopComponentInstallRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopDeveloperSettingsUpdateV1Schema,
@@ -46,6 +47,7 @@ import { DesktopAgentManager } from "./agent-manager.js";
 import { DesktopAgentApprovalBroker } from "./agent-approval-broker.js";
 import { DesktopDogfoodController } from "./desktop-dogfood.js";
 import { DesktopSettingsStore } from "./settings.js";
+import { cloneRunDraftFromConfig } from "./run-draft.js";
 import {
   DesktopSetupCoordinator,
   ResolvedDesktopSetupDraftV1Schema,
@@ -131,20 +133,35 @@ const profileFor = async (profileId: string) => {
   const profile = (await settings.listProfiles()).find(
     (candidate) => candidate.profileId === profileId,
   );
-  if (profile === undefined) throw new Error("Project profile was not found.");
+  if (profile === undefined)
+    throw Object.assign(new Error("Project profile was not found."), {
+      code: "desktop.profile-not-found",
+    });
   return profile;
 };
 
 const validateProfile = async (profile: Awaited<ReturnType<typeof profileFor>>) => {
-  if (profile.schemaVersion === 2 || profile.schemaVersion === 3) {
-    await validateManagedEnvironment(profile);
-  }
-  if (profile.schemaVersion === 3) {
-    await components.assertLock(profile.environment.storage.component);
-    await components.assertWorkspaceStorageActive(profile.environment.storage.component);
-    if (profile.environment.testplay !== undefined) {
-      await components.assertLock(profile.environment.testplay);
+  try {
+    if (profile.schemaVersion === 2 || profile.schemaVersion === 3) {
+      await validateManagedEnvironment(profile);
     }
+    if (profile.schemaVersion === 3) {
+      await components.assertLock(profile.environment.storage.component);
+      await components.assertWorkspaceStorageActive(profile.environment.storage.component);
+      if (profile.environment.testplay !== undefined) {
+        await components.assertLock(profile.environment.testplay);
+      }
+    }
+  } catch (error) {
+    throw Object.assign(
+      new Error(
+        "The managed project environment is no longer compatible with this HoneyBee build.",
+        {
+          cause: error,
+        },
+      ),
+      { code: "managed.profile-invalid" },
+    );
   }
   return profile;
 };
@@ -324,12 +341,20 @@ const safeHandler =
           ? error.code
           : "desktop.operation-failed";
       const publicMessages: Readonly<Record<string, string>> = {
+        "desktop.profile-not-found":
+          "The selected project profile was replaced or removed. Refresh the project list.",
+        "desktop.clone-profile-not-found":
+          "The original project profile is no longer available. Add the project again before cloning this Run.",
+        "desktop.clone-unavailable":
+          "This Run does not contain a supported task and configuration that can be cloned safely.",
         "dogfood.disabled": "Enable Dogfood Metrics in Settings before recording.",
         "dogfood.doctor-failed": "Doctor and the selected Agent must be ready before recording.",
         "dogfood.evidence-path-unsafe": "The recorded Evidence path is outside HoneyBee user data.",
         "dogfood.recording-active": "Stop and finalize the active dogfood recording first.",
         "dogfood.session-not-found": "The dogfood recording could not be found.",
         "dogfood.state-invalid": "The local dogfood session descriptor is invalid or unreadable.",
+        "managed.profile-invalid":
+          "This project's managed environment is outdated or changed. Add the same project again to run Setup.",
         "workspace-storage.service-conflict":
           "Another Unity Workspace Storage service exists without HoneyBee's machine receipt.",
         "workspace-storage.install-failed":
@@ -817,6 +842,62 @@ const registerIpc = (): void => {
         .recordParentRun(profile.profileId, result.runId, request.works.length)
         .catch(() => undefined);
       return result;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.cloneRunDraft,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopCloneRunDraftRequestV1Schema.parse(requestValue);
+      const [detail, settingsSnapshot] = await Promise.all([
+        runtime.getRunDetail(request.runId),
+        settings.snapshot(),
+      ]);
+      const configRef = detail.artifacts.find((artifact) => artifact.kind === "workflow-config");
+      if (configRef === undefined) {
+        throw Object.assign(new Error("The Run config Artifact is unavailable."), {
+          code: "desktop.clone-unavailable",
+        });
+      }
+      const configView = await runtime.readReferencedArtifact(request.runId, configRef.artifactId);
+      if (configView.encoding !== "utf8") {
+        throw Object.assign(new Error("The Run config Artifact is not readable JSON."), {
+          code: "desktop.clone-unavailable",
+        });
+      }
+      const taskRef = detail.artifacts.find((artifact) => artifact.kind === "task");
+      const taskView =
+        taskRef === undefined
+          ? undefined
+          : await runtime.readReferencedArtifact(request.runId, taskRef.artifactId);
+      const projectPath = detail.summary.projectPath;
+      const profile =
+        projectPath === undefined
+          ? undefined
+          : settingsSnapshot.profiles.find(
+              (candidate) => profileKey(candidate.projectPath) === profileKey(projectPath),
+            );
+      if (profile === undefined) {
+        throw Object.assign(new Error("The original project profile is unavailable."), {
+          code: "desktop.clone-profile-not-found",
+        });
+      }
+      let config: unknown;
+      try {
+        config = JSON.parse(configView.content) as unknown;
+      } catch {
+        throw Object.assign(new Error("The Run config Artifact is invalid JSON."), {
+          code: "desktop.clone-unavailable",
+        });
+      }
+      return cloneRunDraftFromConfig({
+        sourceRunId: request.runId,
+        profileId: profile.profileId,
+        preferredAgentId: settingsSnapshot.preferredAgentIds[profile.profileId],
+        agents: settingsSnapshot.agents,
+        config,
+        ...(taskView?.encoding === "utf8" ? { task: taskView.content } : {}),
+        ...(detail.summary.workId === undefined ? {} : { workId: detail.summary.workId }),
+      });
     }),
   );
   ipcMain.handle(

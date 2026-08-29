@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { RunDetailV1Schema, VerifiedPatchViewV1Schema } from "@honeybee/control-plane-contracts";
 
 import { DesktopRuntimeSnapshotV1Schema, type HoneyBeeDesktopApi } from "../shared/ipc.js";
 import { App } from "./App.js";
@@ -15,6 +16,13 @@ const runDone = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const now = new Date();
 const timestamp = (secondsAgo: number) =>
   new Date(now.getTime() - secondsAgo * 1_000).toISOString();
+const patchArtifact = {
+  artifactId: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+  kind: "unity-verified-patch" as const,
+  mediaType: "application/vnd.honeybee.unity-patch+json" as const,
+  byteLength: 2_148,
+  contentDigest: `sha256:${"a".repeat(64)}`,
+};
 
 const summaries = [
   {
@@ -79,7 +87,7 @@ const summaries = [
     terminal: true,
     executorPresent: false,
     projectPath: "C:\\Unity\\MyUnityGame",
-    workId: "action-bar-feedback",
+    workId: "fix-player-movement-jitter",
     priority: "validation" as const,
     assignedEditor: "editor-2",
     allowedActions: [],
@@ -163,6 +171,144 @@ const snapshot = DesktopRuntimeSnapshotV1Schema.parse({
   },
 });
 
+const completedDetail = RunDetailV1Schema.parse({
+  schemaVersion: 1,
+  summary: summaries[3],
+  events: [
+    {
+      sequence: 1,
+      timestamp: timestamp(3_100),
+      type: "workflow.started",
+      summary: "Work started with an isolated Unity workspace.",
+      artifacts: [],
+    },
+    {
+      sequence: 2,
+      timestamp: timestamp(2_600),
+      type: "step.completed",
+      stepId: "agent",
+      summary: "Agent prepared a three-file movement fix.",
+      artifacts: [],
+    },
+    {
+      sequence: 3,
+      timestamp: timestamp(2_100),
+      type: "step.completed",
+      stepId: "compile",
+      summary: "Compile passed with zero errors.",
+      artifacts: [],
+    },
+    {
+      sequence: 4,
+      timestamp: timestamp(1_500),
+      type: "step.completed",
+      stepId: "warm-test",
+      summary: "10 warm tests passed.",
+      artifacts: [],
+    },
+    {
+      sequence: 5,
+      timestamp: timestamp(47),
+      type: "workflow.completed",
+      summary: "Verified patch is ready for disposition.",
+      artifacts: [patchArtifact],
+    },
+  ],
+  artifacts: [patchArtifact],
+});
+
+const textContent = (
+  text: string,
+  digest: string,
+): {
+  contentDigest: string;
+  byteLength: number;
+  format: "text";
+  text: string;
+  truncated: false;
+} => ({
+  contentDigest: `sha256:${digest.repeat(64)}`,
+  byteLength: text.length,
+  format: "text",
+  text,
+  truncated: false,
+});
+
+const verifiedPatch = VerifiedPatchViewV1Schema.parse({
+  schemaVersion: 1,
+  runId: runDone,
+  patch: patchArtifact,
+  manifestVersion: 3,
+  verification: {
+    workspaceIntegrity: "verified",
+    compile: "passed",
+    warmTest: "passed",
+  },
+  sourceProjectPath: "C:\\Unity\\MyUnityGame",
+  sourceState: "clean",
+  disposition: "pending",
+  conflictPaths: [],
+  files: [
+    {
+      path: "Assets/Scripts/Player/PlayerMotor.cs",
+      operation: "modify",
+      before: textContent(
+        [
+          "using UnityEngine;",
+          "",
+          "public sealed class PlayerMotor : MonoBehaviour",
+          "{",
+          "    private Vector3 velocity;",
+          "",
+          "    void Update()",
+          "    {",
+          '        var input = new Vector3(Input.GetAxisRaw("Horizontal"), 0f, Input.GetAxisRaw("Vertical"));',
+          "        velocity = input.normalized * 6f;",
+          "        transform.position += velocity * Time.deltaTime;",
+          "    }",
+          "}",
+        ].join("\n"),
+        "b",
+      ),
+      after: textContent(
+        [
+          "using UnityEngine;",
+          "",
+          "public sealed class PlayerMotor : MonoBehaviour",
+          "{",
+          "    private Vector3 velocity;",
+          "    private Vector3 smoothedVelocity;",
+          "",
+          "    void Update()",
+          "    {",
+          '        var input = new Vector3(Input.GetAxisRaw("Horizontal"), 0f, Input.GetAxisRaw("Vertical"));',
+          "        var targetVelocity = input.normalized * 6f;",
+          "        smoothedVelocity = Vector3.Lerp(smoothedVelocity, targetVelocity, 12f * Time.deltaTime);",
+          "        transform.position += smoothedVelocity * Time.deltaTime;",
+          "    }",
+          "}",
+        ].join("\n"),
+        "c",
+      ),
+    },
+    {
+      path: "Assets/Scripts/Player/PlayerInput.cs",
+      operation: "modify",
+      before: textContent('public float Horizontal => Input.GetAxisRaw("Horizontal");', "d"),
+      after: textContent('public float Horizontal => Input.GetAxis("Horizontal");', "e"),
+    },
+    {
+      path: "Assets/Scripts/Utils/JitterDamping.cs",
+      operation: "add",
+      after: textContent(
+        "public static class JitterDamping { public const float Strength = 12f; }",
+        "f",
+      ),
+    },
+  ],
+  allowedActions: ["apply", "reject"],
+});
+
 const unsupported = async () => {
   throw new Error("This action is unavailable in the visual QA fixture.");
 };
@@ -233,12 +379,13 @@ const api: HoneyBeeDesktopApi = {
     checks: [],
   }),
   startWorks: unsupported,
+  cloneRunDraft: unsupported,
   runtimeSnapshot: async () => snapshot,
-  runDetail: unsupported,
+  runDetail: async () => completedDetail,
   readArtifact: unsupported,
   resumeRun: unsupported,
   cancelRun: unsupported,
-  getPatch: unsupported,
+  getPatch: async () => verifiedPatch,
   controlPatch: unsupported,
   upsertAgent: unsupported,
   removeAgent: unsupported,

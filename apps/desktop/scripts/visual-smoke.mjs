@@ -36,8 +36,9 @@ if (!validUrl || outputValue === undefined) {
       .then(async () => {
         const consoleErrors = [];
         const window = new BrowserWindow({
-          width: 1536,
+          width: 1440,
           height: 1024,
+          useContentSize: true,
           show: false,
           backgroundColor: "#090d10",
           webPreferences: {
@@ -59,20 +60,14 @@ if (!validUrl || outputValue === undefined) {
                 [...document.querySelectorAll("button")].find((item) =>
                   item.textContent?.trim().includes(label),
                 );
-              const title = () => document.querySelector(".page-heading h1")?.textContent?.trim();
-              if (title() === "Projects") {
-                button("Command Center")?.click();
-                await wait();
+              const title = () => document.querySelector(".section-heading h1")?.textContent?.trim();
+              if (!document.querySelector(".brand-lockup")) {
+                throw new Error("State-driven Desktop shell did not render.");
               }
-              if (title() !== "Command Center") throw new Error("Command Center did not render.");
 
-              button("New Work")?.click();
+              button("Projects")?.click();
               await wait();
-              if (title() !== "MyUnityGame") throw new Error("New Work navigation failed.");
-
-              button("Run History")?.click();
-              await wait();
-              if (title() !== "Run History") throw new Error("Run History navigation failed.");
+              if (title() !== "Projects") throw new Error("Projects navigation failed.");
 
               button("Agents")?.click();
               await wait();
@@ -81,11 +76,9 @@ if (!validUrl || outputValue === undefined) {
                 throw new Error("Agent Manager did not render a connected Agent.");
               }
 
-              button("Command Center")?.click();
+              button("New Work")?.click();
               await wait();
-              if (title() !== "Command Center") throw new Error("Command Center return failed.");
-
-              const textarea = document.querySelector(".quick-composer textarea");
+              const textarea = document.querySelector(".task-field textarea");
               if (!(textarea instanceof HTMLTextAreaElement)) throw new Error("Task input missing.");
               const setter = Object.getOwnPropertyDescriptor(
                 HTMLTextAreaElement.prototype,
@@ -96,7 +89,7 @@ if (!validUrl || outputValue === undefined) {
               await wait();
               if (textarea.value !== "Add inventory stacking") throw new Error("Task input failed.");
 
-              const compile = [...document.querySelectorAll(".capability-chip")].find((item) =>
+              const compile = [...document.querySelectorAll(".toggle-chip")].find((item) =>
                 item.textContent?.includes("Compile"),
               )?.querySelector("input");
               if (!(compile instanceof HTMLInputElement)) {
@@ -114,14 +107,62 @@ if (!validUrl || outputValue === undefined) {
                 throw new Error("Compile capability did not restore.");
               }
 
-              return { navigation: true, taskInput: true, capabilityToggle: true };
+              const utility = document.querySelector(".utility-status-bar");
+              if (!(utility instanceof HTMLButtonElement)) throw new Error("Utility drawer missing.");
+              utility.click();
+              await wait();
+              const completed = [...document.querySelectorAll(".utility-run-list button")].find(
+                (item) => item.textContent?.includes("Fix Player Movement Jitter"),
+              );
+              if (!(completed instanceof HTMLButtonElement)) {
+                throw new Error("Completed Run navigation target missing.");
+              }
+              completed.click();
+              await wait();
+              await wait();
+              if (!document.querySelector(".patch-workbench")) {
+                throw new Error("Verified patch review did not render.");
+              }
+
+              return {
+                navigation: true,
+                taskInput: true,
+                capabilityToggle: true,
+                patchReview: true,
+              };
             })()
           `);
           if (consoleErrors.length > 0) {
             throw new Error(`Renderer console errors: ${consoleErrors.join(" | ")}`);
           }
+          window.setContentSize(1024, 800);
+          await delay(100);
+          const compactLayout = await window.webContents.executeJavaScript(`
+            document.documentElement.scrollWidth <= window.innerWidth &&
+              Boolean(document.querySelector(".brand-lockup")) &&
+              Boolean(document.querySelector(".new-work-button"))
+          `);
+          if (!compactLayout) {
+            throw new Error("Desktop workspace overflowed at the 1024px compact viewport.");
+          }
+          window.setContentSize(1440, 1024);
+          await window.webContents.reload();
+          let reviewReady = false;
+          for (let attempt = 0; attempt < 40; attempt += 1) {
+            await delay(50);
+            reviewReady = await window.webContents.executeJavaScript(
+              `Boolean(document.querySelector(".patch-workbench"))`,
+            );
+            if (reviewReady) break;
+          }
+          if (!reviewReady) {
+            throw new Error("Verified patch review did not remain stable for capture.");
+          }
+          await delay(100);
           await writeFile(outputPath, (await window.webContents.capturePage()).toPNG());
-          process.stdout.write(`HONEYBEE_DESKTOP_VISUAL_SMOKE_OK ${JSON.stringify(result)}\n`);
+          process.stdout.write(
+            `HONEYBEE_DESKTOP_VISUAL_SMOKE_OK ${JSON.stringify({ ...result, compactLayout })}\n`,
+          );
           window.destroy();
           app.exit(0);
         } catch (error) {
