@@ -168,6 +168,7 @@ class JsonRpcPeer {
   #failureReject?: (error: unknown) => void;
   #failed = false;
   #finishing = false;
+  #stopping?: Promise<void>;
 
   public constructor(options: JsonRpcPeerOptions) {
     this.#request = options.request;
@@ -403,7 +404,12 @@ class JsonRpcPeer {
     }
   }
 
-  public async stop(_reason: string): Promise<void> {
+  public stop(_reason: string): Promise<void> {
+    this.#stopping ??= this.#stop();
+    return this.#stopping;
+  }
+
+  async #stop(): Promise<void> {
     const child = this.#child;
     if (child === undefined) return;
     await terminateProcessTree(this.pid).catch(() => undefined);
@@ -417,14 +423,17 @@ class JsonRpcPeer {
     this.#finishing = true;
     const child = this.#child;
     if (child === undefined) throw new Error("Agent containment process was not started.");
+    const stopped = this.#stopping !== undefined;
+    if (this.#stopping !== undefined) await this.#stopping;
     child.stdin?.end();
     const targetExited =
-      this.#exit !== undefined ||
-      (await Promise.race([
-        this.#targetExited.then(() => true),
-        new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
-      ]));
-    if (!targetExited) {
+      !stopped &&
+      (this.#exit !== undefined ||
+        (await Promise.race([
+          this.#targetExited.then(() => true),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+        ])));
+    if (!stopped && !targetExited) {
       await terminateProcessTree(this.pid);
       await this.#closed;
     }

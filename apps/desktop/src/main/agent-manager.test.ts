@@ -1,4 +1,4 @@
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -137,10 +137,20 @@ describe("DesktopAgentManager", () => {
         payloadPaths: [extra],
         enabled: true,
       });
-      await expect(manager.probe(profile)).resolves.toMatchObject({
-        status: "ready",
-        version: "fixture 1.0.0",
-      });
+      const decoyDirectory = path.join(directory, "decoy-bin");
+      await mkdir(decoyDirectory);
+      await writeFile(path.join(decoyDirectory, "node.exe"), "not an executable", "utf8");
+      const previousPath = process.env.PATH;
+      process.env.PATH = `${decoyDirectory}${path.delimiter}${previousPath ?? ""}`;
+      try {
+        await expect(manager.probe(profile)).resolves.toMatchObject({
+          status: "ready",
+          version: "fixture 1.0.0",
+        });
+      } finally {
+        if (previousPath === undefined) delete process.env.PATH;
+        else process.env.PATH = previousPath;
+      }
       expect(profile.command.command).toBe(path.resolve(shim));
     },
   );

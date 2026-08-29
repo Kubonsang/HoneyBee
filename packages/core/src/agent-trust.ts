@@ -132,7 +132,13 @@ const resolvePathExecutable = async (command: string): Promise<string | undefine
 
 const commandShimPayload = async (
   commandPath: string,
-): Promise<Readonly<{ payload: string; interpreter?: string }>> => {
+): Promise<
+  Readonly<{
+    payload: string;
+    requiresNode?: true;
+    localInterpreter?: string;
+  }>
+> => {
   const metadata = await lstat(commandPath).catch(() => undefined);
   if (
     metadata === undefined ||
@@ -161,14 +167,11 @@ const commandShimPayload = async (
     const localNode = [...referenced].find(
       (candidate) => path.basename(candidate).toLowerCase() === "node.exe",
     );
-    const interpreter = localNode ?? (await resolvePathExecutable("node"));
-    if (interpreter === undefined) {
-      throw new HoneyBeeCoreError(
-        "agent.trust-invalid",
-        "The Agent command shim requires Node, but node.exe could not be resolved.",
-      );
-    }
-    return { payload: script, interpreter };
+    return {
+      payload: script,
+      requiresNode: true,
+      ...(localNode === undefined ? {} : { localInterpreter: localNode }),
+    };
   }
   const executable = executables.length === 1 ? executables[0] : undefined;
   if (scripts.length === 0 && executable !== undefined) return { payload: executable };
@@ -197,8 +200,15 @@ export const prepareAgentLaunch = async (
   if (process.platform === "win32" && path.extname(commandPath).toLowerCase() === ".cmd") {
     const resolved = await commandShimPayload(commandPath);
     trustPaths.push({ role: "payload", path: resolved.payload });
-    if (resolved.interpreter !== undefined) {
-      trustPaths.push({ role: "interpreter", path: resolved.interpreter });
+    if (resolved.requiresNode === true) {
+      const interpreter = resolved.localInterpreter ?? (await resolvePathExecutable("node"));
+      if (interpreter === undefined) {
+        throw new HoneyBeeCoreError(
+          "agent.trust-invalid",
+          "The Agent command shim requires Node, but node.exe could not be resolved.",
+        );
+      }
+      trustPaths.push({ role: "interpreter", path: interpreter });
     }
   }
   return { command, trust: await captureAgentLaunchTrust(trustPaths) };
@@ -223,12 +233,15 @@ export const trustedAgentInvocation = async (
       "The Agent command shim target is not present in its approved trust receipt.",
     );
   }
-  const resolvedInterpreter = resolved.interpreter;
-  if (resolvedInterpreter !== undefined) {
-    const interpreter = trust.files.find(
-      (file) => file.role === "interpreter" && pathKey(file.path) === pathKey(resolvedInterpreter),
-    );
-    if (interpreter === undefined) {
+  if (resolved.requiresNode === true) {
+    const interpreters = trust.files.filter((file) => file.role === "interpreter");
+    const interpreter = interpreters.length === 1 ? interpreters[0] : undefined;
+    if (
+      interpreter === undefined ||
+      path.basename(interpreter.path).toLowerCase() !== "node.exe" ||
+      (resolved.localInterpreter !== undefined &&
+        pathKey(interpreter.path) !== pathKey(resolved.localInterpreter))
+    ) {
       throw new HoneyBeeCoreError(
         "agent.trust-changed",
         "The Agent command shim interpreter is not present in its approved trust receipt.",
