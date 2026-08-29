@@ -6,6 +6,7 @@ import {
   DesktopAgentUpsertRequestV1Schema,
   DesktopAgentApprovalResponseV1Schema,
   DesktopComponentInstallRequestV1Schema,
+  DesktopCloneRunDraftRequestV1Schema,
   DesktopDoctorRequestV1Schema,
   DesktopDeveloperSettingsUpdateV1Schema,
   DesktopDogfoodFinalizeRequestV1Schema,
@@ -118,6 +119,13 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.startWorks,
         DesktopStartRequestV2Schema.parse(request),
+      ),
+    ),
+  cloneRunDraft: async (request) =>
+    DesktopIpcResponseSchemas.cloneRunDraft.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.cloneRunDraft,
+        DesktopCloneRunDraftRequestV1Schema.parse(request),
       ),
     ),
   runtimeSnapshot: async (request) =>

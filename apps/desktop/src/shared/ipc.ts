@@ -733,6 +733,37 @@ export const DesktopStartRequestV2Schema = z
   });
 export type DesktopStartRequestV2 = z.infer<typeof DesktopStartRequestV2Schema>;
 
+export const DesktopCloneRunDraftRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), runId: z.string().uuid() })
+  .strict();
+export type DesktopCloneRunDraftRequestV1 = z.infer<typeof DesktopCloneRunDraftRequestV1Schema>;
+
+export const DesktopClonedWorkDraftV1Schema = z
+  .object({
+    id: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u),
+    task: z.string().trim().min(1),
+    priority: z.enum(["interactive", "validation", "background"]),
+    compile: z.boolean(),
+    warmTest: z.boolean(),
+    filter: z.string(),
+    agentId: z.string().uuid().nullable(),
+    agentLabel: z.string().trim().min(1).max(200),
+  })
+  .strict();
+export type DesktopClonedWorkDraftV1 = z.infer<typeof DesktopClonedWorkDraftV1Schema>;
+
+export const DesktopClonedRunDraftV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sourceRunId: z.string().uuid(),
+    profileId: z.string().uuid(),
+    defaultAgentId: z.string().uuid().nullable(),
+    maxParallelWorks: z.number().int().positive().max(32),
+    works: z.array(DesktopClonedWorkDraftV1Schema).min(1).max(32),
+  })
+  .strict();
+export type DesktopClonedRunDraftV1 = z.infer<typeof DesktopClonedRunDraftV1Schema>;
+
 export const DesktopProjectAgentPreferenceRequestV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -877,6 +908,7 @@ export const DesktopIpcChannels = {
   removeProfile: "desktop.profile.remove.v1",
   doctor: "desktop.doctor.v1",
   startWorks: "desktop.works.start.v1",
+  cloneRunDraft: "desktop.run.clone-draft.v1",
   runtimeSnapshot: "desktop.runtime.snapshot.v1",
   runDetail: "desktop.run.detail.v1",
   artifactRead: "desktop.artifact.read.v1",
@@ -925,6 +957,7 @@ export interface HoneyBeeDesktopApi {
   removeProfile(request: DesktopProfileIdRequestV1): Promise<DesktopBootstrapV2>;
   doctor(request: DesktopDoctorRequestV1): Promise<DoctorReportV1>;
   startWorks(request: DesktopStartRequestV2): Promise<StartUnityWorksResultV1>;
+  cloneRunDraft(request: DesktopCloneRunDraftRequestV1): Promise<DesktopClonedRunDraftV1>;
   runtimeSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopRuntimeSnapshotV1>;
   runDetail(request: DesktopRunRequestV1): Promise<RunDetailV1>;
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
@@ -973,6 +1006,7 @@ export const DesktopIpcResponseSchemas = {
   removeProfile: DesktopBootstrapV2Schema,
   doctor: DoctorReportV1Schema,
   startWorks: StartUnityWorksResultV1Schema,
+  cloneRunDraft: DesktopClonedRunDraftV1Schema,
   runtimeSnapshot: DesktopRuntimeSnapshotV1Schema,
   runDetail: RunDetailV1Schema,
   artifactRead: ArtifactViewV1Schema,
