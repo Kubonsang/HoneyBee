@@ -41,6 +41,7 @@ import type {
 import { buildLineDiff } from "./diff-lines.js";
 import {
   WORK_STAGES,
+  capabilityToggleDisabled,
   runEvidenceSummary,
   runNeedsAttention,
   runStage,
@@ -97,11 +98,11 @@ interface WorkspaceViewProps {
 
 function StageRail({ detail }: { readonly detail?: RunDetailV1 | undefined }) {
   const current = runStage(detail?.summary);
+  const successfulTerminal = detail?.summary.status.toLowerCase() === "completed";
   return (
     <div className="focus-stage-rail" aria-label="Work progress">
       {WORK_STAGES.map((stage, index) => {
-        const complete =
-          index < current || (index === current && detail?.summary.terminal === true);
+        const complete = index < current || (index === current && successfulTerminal);
         const active = index === current && !complete;
         return (
           <div
@@ -295,7 +296,7 @@ function WorkComposer({
                   <input
                     type="checkbox"
                     checked={work.compile}
-                    disabled={!testplayAvailable}
+                    disabled={capabilityToggleDisabled(testplayAvailable, work.compile)}
                     onChange={(event) => onUpdateWork(work.key, { compile: event.target.checked })}
                   />
                   Compile
@@ -304,7 +305,7 @@ function WorkComposer({
                   <input
                     type="checkbox"
                     checked={work.warmTest}
-                    disabled={!testplayAvailable}
+                    disabled={capabilityToggleDisabled(testplayAvailable, work.warmTest)}
                     onChange={(event) => onUpdateWork(work.key, { warmTest: event.target.checked })}
                   />
                   Warm Test
@@ -697,7 +698,7 @@ function RunWorkspace({
                 <strong>Evidence & outputs</strong>
               </header>
               <div>
-                {detail.artifacts.slice(0, 5).map((item) => (
+                {detail.artifacts.map((item) => (
                   <button
                     key={item.artifactId}
                     onClick={() => onReadArtifact(item.artifactId)}
@@ -727,15 +728,28 @@ function RunWorkspace({
 function UtilityDrawer({
   snapshot,
   selectedRunId,
+  detail,
+  artifact,
   doctor,
+  detailBusy,
   open,
   tab,
   onSelectRun,
+  onReadArtifact,
   onRunDoctor,
   onUtility,
 }: Pick<
   WorkspaceViewProps,
-  "snapshot" | "selectedRunId" | "doctor" | "onSelectRun" | "onRunDoctor" | "onUtility"
+  | "snapshot"
+  | "selectedRunId"
+  | "detail"
+  | "artifact"
+  | "doctor"
+  | "detailBusy"
+  | "onSelectRun"
+  | "onReadArtifact"
+  | "onRunDoctor"
+  | "onUtility"
 > & {
   readonly open: boolean;
   readonly tab: UtilityTab;
@@ -897,19 +911,70 @@ function UtilityDrawer({
           )}
           {tab === "activity" && (
             <div className="utility-activity">
-              {(snapshot?.runs ?? []).flatMap((run) =>
-                run.updatedAt === undefined
-                  ? []
-                  : [
-                      <article key={run.runId}>
-                        <time>{new Date(run.updatedAt).toLocaleTimeString()}</time>
-                        <Circle size={9} weight="fill" />
-                        <span>
-                          <strong>{runTitle(run)}</strong>
-                          {run.phase}
-                        </span>
-                      </article>,
-                    ],
+              {detail === undefined ? (
+                (snapshot?.runs ?? []).flatMap((run) =>
+                  run.updatedAt === undefined
+                    ? []
+                    : [
+                        <article key={run.runId}>
+                          <time>{new Date(run.updatedAt).toLocaleTimeString()}</time>
+                          <Circle size={9} weight="fill" />
+                          <span>
+                            <strong>{runTitle(run)}</strong>
+                            {run.phase}
+                          </span>
+                        </article>,
+                      ],
+                )
+              ) : (
+                <>
+                  <section className="utility-event-timeline" aria-label="Selected Run activity">
+                    {detail.events.length === 0 ? (
+                      <p className="quiet">This Run has no recorded activity yet.</p>
+                    ) : (
+                      [...detail.events].reverse().map((event) => (
+                        <article key={event.sequence}>
+                          <time>{new Date(event.timestamp).toLocaleTimeString()}</time>
+                          <Circle size={9} weight="fill" />
+                          <span>
+                            <strong>#{event.sequence}</strong>
+                            {event.summary}
+                          </span>
+                        </article>
+                      ))
+                    )}
+                  </section>
+                  <section className="evidence-strip utility-evidence">
+                    <header>
+                      <FirstAidKit size={18} />
+                      <strong>Evidence & outputs</strong>
+                    </header>
+                    {detail.artifacts.length === 0 ? (
+                      <p className="quiet">This Run has no readable Artifacts yet.</p>
+                    ) : (
+                      <div>
+                        {detail.artifacts.map((item) => (
+                          <button
+                            key={item.artifactId}
+                            onClick={() => onReadArtifact(item.artifactId)}
+                            disabled={detailBusy !== undefined}
+                          >
+                            <FileCode size={16} />
+                            <span>{item.kind}</span>
+                            <small>{item.byteLength.toLocaleString()} B</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {artifact !== undefined && (
+                      <pre className="artifact-inline">
+                        {artifact.encoding === "utf8"
+                          ? artifact.content.slice(0, 20_000)
+                          : "Binary Artifact preview is intentionally disabled."}
+                      </pre>
+                    )}
+                  </section>
+                </>
               )}
             </div>
           )}
@@ -930,10 +995,14 @@ export function WorkspaceView(props: WorkspaceViewProps) {
       <UtilityDrawer
         snapshot={props.snapshot}
         selectedRunId={props.selectedRunId}
+        detail={props.detail}
+        artifact={props.artifact}
         doctor={props.doctor}
+        detailBusy={props.detailBusy}
         open={props.utilityOpen}
         tab={props.utilityTab}
         onSelectRun={props.onSelectRun}
+        onReadArtifact={props.onReadArtifact}
         onRunDoctor={props.onRunDoctor}
         onUtility={props.onUtility}
       />

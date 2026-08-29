@@ -385,7 +385,10 @@ const api: HoneyBeeDesktopApi = {
   readArtifact: unsupported,
   resumeRun: unsupported,
   cancelRun: unsupported,
-  getPatch: async () => verifiedPatch,
+  getPatch: async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    return verifiedPatch;
+  },
   controlPatch: unsupported,
   upsertAgent: unsupported,
   removeAgent: unsupported,

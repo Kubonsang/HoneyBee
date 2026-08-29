@@ -118,10 +118,27 @@ if (!validUrl || outputValue === undefined) {
                 throw new Error("Completed Run navigation target missing.");
               }
               completed.click();
-              await wait();
-              await wait();
-              if (!document.querySelector(".patch-workbench")) {
+              let patchReview = false;
+              for (let attempt = 0; attempt < 40; attempt += 1) {
+                await wait();
+                patchReview = Boolean(document.querySelector(".patch-workbench"));
+                if (patchReview) break;
+              }
+              if (!patchReview) {
                 throw new Error("Verified patch review did not render.");
+              }
+              const evidence = button("Review evidence");
+              if (!(evidence instanceof HTMLButtonElement)) {
+                throw new Error("Review evidence action is missing.");
+              }
+              evidence.click();
+              await wait();
+              const activity = document.querySelector(".utility-drawer.open .utility-activity");
+              if (
+                !activity?.textContent?.includes("Verified patch is ready for disposition.") ||
+                !activity.textContent.includes("unity-verified-patch")
+              ) {
+                throw new Error("Selected Run evidence did not render in Activity.");
               }
 
               return {
@@ -129,6 +146,7 @@ if (!validUrl || outputValue === undefined) {
                 taskInput: true,
                 capabilityToggle: true,
                 patchReview: true,
+                evidenceReview: true,
               };
             })()
           `);

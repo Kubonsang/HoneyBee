@@ -70,6 +70,7 @@ export function App() {
   const [runDetail, setRunDetail] = useState<RunDetailV1>();
   const [artifact, setArtifact] = useState<ArtifactViewV1>();
   const [patch, setPatch] = useState<VerifiedPatchViewV1>();
+  const [patchLoading, setPatchLoading] = useState(false);
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
   const [defaultAgentId, setDefaultAgentId] = useState<string>();
@@ -207,23 +208,26 @@ export function App() {
     };
   }, [selectedRunId, snapshot?.observedAt]);
 
+  const patchArtifactId = runDetail?.artifacts.find(
+    (item) => item.kind === "unity-verified-patch",
+  )?.artifactId;
+
   useEffect(() => {
-    const patchRef = runDetail?.artifacts.find((item) => item.kind === "unity-verified-patch");
     if (
       selectedRunId === undefined ||
-      patchRef === undefined ||
-      patch?.patch.artifactId === patchRef.artifactId ||
-      detailBusy !== undefined
+      patchArtifactId === undefined ||
+      patch?.patch.artifactId === patchArtifactId
     ) {
+      setPatchLoading(false);
       return;
     }
     let stopped = false;
-    setDetailBusy("artifact");
+    setPatchLoading(true);
     void window.honeybee
       .getPatch({
         schemaVersion: 1,
         runId: selectedRunId,
-        patchArtifactId: patchRef.artifactId,
+        patchArtifactId,
       })
       .then((value) => {
         if (!stopped) setPatch(value);
@@ -232,12 +236,12 @@ export function App() {
         if (!stopped) setError(readableError(reason));
       })
       .finally(() => {
-        if (!stopped) setDetailBusy(undefined);
+        if (!stopped) setPatchLoading(false);
       });
     return () => {
       stopped = true;
     };
-  }, [detailBusy, patch?.patch.artifactId, runDetail, selectedRunId]);
+  }, [patch?.patch.artifactId, patchArtifactId, selectedRunId]);
 
   const selectedProfile = useMemo(
     () => bootstrap?.profiles.find((profile) => profile.profileId === selectedProfileId),
@@ -830,7 +834,7 @@ export function App() {
             testplayAvailable={testplayAvailable}
             canStart={validWorks && busy === undefined}
             busy={busy}
-            detailBusy={detailBusy}
+            detailBusy={detailBusy ?? (patchLoading ? "artifact" : undefined)}
             utilityOpen={utilityOpen}
             utilityTab={utilityTab}
             onUpdateWork={updateWork}
