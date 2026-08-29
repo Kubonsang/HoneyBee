@@ -1,5 +1,6 @@
 # Dependencies and build output
 node_modules/
+/.pnpm-store/
 dist/
 coverage/
 *.tsbuildinfo
@@ -68,6 +69,7 @@ docs/private/
 native/storage-helper/target/
 
 # OS/editor
+/.opencode/
 .DS_Store
 Thumbs.db
 *.swp
