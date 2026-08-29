@@ -99,6 +99,11 @@ export interface DogfoodFinalizeInput {
   readonly observation: DogfoodRuntimeObservation;
 }
 
+export interface DogfoodFinalizationTarget {
+  readonly projectPath: string;
+  readonly configPath: string;
+}
+
 interface AnalysisIssue {
   readonly code: string;
   readonly message: string;
@@ -656,12 +661,28 @@ export class DesktopDogfoodController {
     });
   }
 
+  public finalizationTarget(sessionId: string): Promise<DogfoodFinalizationTarget> {
+    return this.#serialized(async () => {
+      const descriptor = await this.#read();
+      if (descriptor === undefined || descriptor.sessionId !== sessionId)
+        throw dogfoodError("dogfood.session-not-found", "Dogfood session was not found.");
+      return {
+        projectPath: descriptor.projectPath,
+        configPath: descriptor.configPath,
+      };
+    });
+  }
+
   public async finalize(input: DogfoodFinalizeInput): Promise<DesktopDogfoodStatusV1> {
     return this.#serialized(async () => {
       const descriptor = await this.#read();
       if (descriptor === undefined || descriptor.sessionId !== input.sessionId)
         throw dogfoodError("dogfood.session-not-found", "Dogfood session was not found.");
-      const stoppedAt = descriptor.stoppedAt ?? new Date().toISOString();
+      const observedAt = new Date().toISOString();
+      const stoppedAt =
+        descriptor.state === "recording" || descriptor.state === "incomplete"
+          ? observedAt
+          : (descriptor.stoppedAt ?? observedAt);
       const analysis = await this.#analyze({ ...descriptor, stoppedAt }, input.observation);
       const state = analysis.summary.verdict;
       const updated = SessionDescriptorSchema.parse({

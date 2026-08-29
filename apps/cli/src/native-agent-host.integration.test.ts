@@ -105,4 +105,62 @@ describe.skipIf(process.platform !== "win32")("SystemNativeAgentHost integration
       occupied: false,
     });
   }, 60_000);
+
+  it("durably cancels when launch finalization fails after the provider resumes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-native-host-cleanup-e2e-"));
+    roots.push(root);
+    const hostExecutable = path.join(root, "host.exe");
+    const providerExecutable = path.join(root, "provider.exe");
+    await Promise.all([
+      build(".", hostExecutable),
+      build("./testdata/fake-provider", providerExecutable),
+    ]);
+    const controller = new SystemNativeAgentHost(path.join(root, "state"));
+    const identity = newNativeAgentLaunchIdentity();
+    const receiptDirectory = await controller.launchDirectory(identity.launchId);
+    const intent = NativeAgentHostLaunchIntentV1Schema.parse({
+      schemaVersion: 1,
+      launchId: identity.launchId,
+      nonce: identity.nonce,
+      ownerRunId: randomUUID(),
+      workspaceId: "late-activation-cleanup",
+      providerId: "codex",
+      priority: "interactive",
+      receiptDirectory,
+      hostExecutablePath: hostExecutable,
+      hostExecutableDigest: await digest(hostExecutable),
+      registrationTimeoutMs: 15_000,
+      activationTimeoutMs: 15_000,
+      shutdownTimeoutMs: 15_000,
+      createdAt: new Date().toISOString(),
+    });
+    const activation = NativeAgentHostActivationV1Schema.parse({
+      schemaVersion: 1,
+      launchId: intent.launchId,
+      nonce: intent.nonce,
+      providerId: intent.providerId,
+      command: {
+        command: providerExecutable,
+        env: {
+          HONEYBEE_FAKE_MARKER: path.join(root, "provider.started"),
+          HONEYBEE_FAKE_WAIT_MS: "30000",
+        },
+      },
+      executableDigest: await digest(providerExecutable),
+    });
+
+    await expect(
+      controller.launch(intent, activation, {
+        onHostRegistered: async () => undefined,
+        onProcessRegistered: async () => undefined,
+        onActivated: async () => {
+          throw new Error("late activation finalization failed");
+        },
+      }),
+    ).rejects.toThrow("late activation finalization failed");
+    await expect(controller.inspect(intent)).resolves.toMatchObject({
+      phase: "exited",
+      occupied: false,
+    });
+  }, 60_000);
 });

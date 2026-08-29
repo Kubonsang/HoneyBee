@@ -441,11 +441,11 @@ const registerIpc = (): void => {
         throw Object.assign(new Error("Dogfood session was not found."), {
           code: "dogfood.session-not-found",
         });
-      const profile = await profileFor(status.session.profileId);
+      const target = await dogfood.finalizationTarget(request.sessionId);
       const [runs, editors, pool] = await Promise.all([
-        runtime.listRuns({ projectPath: profile.projectPath }),
+        runtime.listRuns({ projectPath: target.projectPath }),
         runtime.listEditors(),
-        runtime.inspectEditorPoolForConfig(profile.batchConfigPath),
+        runtime.inspectEditorPoolForConfig(target.configPath),
       ]);
       return dogfood.finalize({
         sessionId: request.sessionId,
