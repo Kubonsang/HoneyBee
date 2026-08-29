@@ -1063,7 +1063,7 @@ const createWindow = async (): Promise<void> => {
         "  const inspect = async () => {",
         "    try {",
         "      const api = window.honeybee;",
-        "      const ready = document.body.textContent?.includes('Your Unity projects') === true;",
+        "      const ready = document.querySelector('.desktop-app .brand-lockup') !== null && document.querySelector('.app-main') !== null;",
         "      if (api !== undefined && ready) {",
         "        const components = await api.components();",
         "        const developerBefore = await api.developerSettings();",
