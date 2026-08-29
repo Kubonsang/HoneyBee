@@ -201,7 +201,7 @@ export const prepareAgentLaunch = async (
     const resolved = await commandShimPayload(commandPath);
     trustPaths.push({ role: "payload", path: resolved.payload });
     if (resolved.requiresNode === true) {
-      const interpreter = resolved.localInterpreter ?? (await resolvePathExecutable("node"));
+      const interpreter = resolved.localInterpreter ?? (await resolvePathExecutable("node.exe"));
       if (interpreter === undefined) {
         throw new HoneyBeeCoreError(
           "agent.trust-invalid",

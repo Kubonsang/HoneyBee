@@ -128,30 +128,42 @@ describe("DesktopAgentManager", () => {
       );
       await writeFile(extra, "export {};\n", "utf8");
       await writeFile(shim, '@echo off\r\nnode "%dp0%\\fixture.js" %*\r\n', "utf8");
-      const manager = new DesktopAgentManager(settings);
-      const profile = await manager.upsert({
-        schemaVersion: 1,
-        displayName: "Runnable shim fixture",
-        provider: "custom",
-        command: { command: shim },
-        payloadPaths: [extra],
-        enabled: true,
-      });
+      const shadowDirectory = path.join(directory, "shadow-bin");
       const decoyDirectory = path.join(directory, "decoy-bin");
+      await mkdir(shadowDirectory);
       await mkdir(decoyDirectory);
+      await writeFile(path.join(shadowDirectory, "node.cmd"), "@exit /b 1\r\n", "utf8");
       await writeFile(path.join(decoyDirectory, "node.exe"), "not an executable", "utf8");
       const previousPath = process.env.PATH;
-      process.env.PATH = `${decoyDirectory}${path.delimiter}${previousPath ?? ""}`;
       try {
+        process.env.PATH = `${shadowDirectory}${path.delimiter}${previousPath ?? ""}`;
+        const manager = new DesktopAgentManager(settings);
+        const profile = await manager.upsert({
+          schemaVersion: 1,
+          displayName: "Runnable shim fixture",
+          provider: "custom",
+          command: { command: shim },
+          payloadPaths: [extra],
+          enabled: true,
+        });
+        expect(profile.trust?.files).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              role: "interpreter",
+              path: expect.stringMatching(/node\.exe$/iu),
+            }),
+          ]),
+        );
+        process.env.PATH = `${decoyDirectory}${path.delimiter}${previousPath ?? ""}`;
         await expect(manager.probe(profile)).resolves.toMatchObject({
           status: "ready",
           version: "fixture 1.0.0",
         });
+        expect(profile.command.command).toBe(path.resolve(shim));
       } finally {
         if (previousPath === undefined) delete process.env.PATH;
         else process.env.PATH = previousPath;
       }
-      expect(profile.command.command).toBe(path.resolve(shim));
     },
   );
 });
