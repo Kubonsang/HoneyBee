@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -129,14 +129,20 @@ describe("DesktopAgentManager", () => {
       await writeFile(extra, "export {};\n", "utf8");
       await writeFile(shim, '@echo off\r\nnode "%dp0%\\fixture.js" %*\r\n', "utf8");
       const shadowDirectory = path.join(directory, "shadow-bin");
+      const trustedDirectory = path.join(directory, "trusted-bin");
       const decoyDirectory = path.join(directory, "decoy-bin");
       await mkdir(shadowDirectory);
+      await mkdir(trustedDirectory);
       await mkdir(decoyDirectory);
       await writeFile(path.join(shadowDirectory, "node.cmd"), "@exit /b 1\r\n", "utf8");
+      const trustedNode = path.join(trustedDirectory, "node.exe");
+      await copyFile(process.execPath, trustedNode);
       await writeFile(path.join(decoyDirectory, "node.exe"), "not an executable", "utf8");
       const previousPath = process.env.PATH;
       try {
-        process.env.PATH = `${shadowDirectory}${path.delimiter}${previousPath ?? ""}`;
+        process.env.PATH = [shadowDirectory, trustedDirectory, previousPath ?? ""].join(
+          path.delimiter,
+        );
         const manager = new DesktopAgentManager(settings);
         const profile = await manager.upsert({
           schemaVersion: 1,
@@ -150,7 +156,7 @@ describe("DesktopAgentManager", () => {
           expect.arrayContaining([
             expect.objectContaining({
               role: "interpreter",
-              path: expect.stringMatching(/node\.exe$/iu),
+              path: await realpath(trustedNode),
             }),
           ]),
         );
