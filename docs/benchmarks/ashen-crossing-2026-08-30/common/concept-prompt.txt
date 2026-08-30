@@ -1,0 +1,12 @@
+Use case: stylized-concept
+Asset type: shared game-environment concept image for a fair Unity benchmark
+Primary request: Create a polished, production-minded concept painting for "Ashen Crossing", a compact MMORPG tutorial vertical slice.
+Scene/backdrop: a fortified volcanic outpost in the lower foreground leads through a winding ash canyon to a broken stone bridge and a circular boss arena beyond. Three repairable teal signal beacons must be clearly readable along the route. Ash-armored raiders occupy the canyon. A huge two-phase Ash Colossus made of obsidian plates and orange magma waits in the distant arena.
+Subject: the whole playable route and its gameplay landmarks, with a small armored player character leaving the outpost toward the first beacon.
+Style/medium: stylized high-quality 3D game key art / environment concept, feasible with Unity primitives and procedural materials, not photorealistic.
+Composition/framing: wide 16:9 landscape, elevated three-quarter camera like an MMORPG gameplay view, strong visual path from lower-left outpost to upper-right boss arena, all three teal beacons visible and spatially distinct, bridge as a clear gate.
+Lighting/mood: smoky sunset, charcoal ash, warm lava glow contrasted with teal objective lights; adventurous and readable, not horror.
+Color palette: charcoal, rust, ember orange, muted sandstone, bright cyan-teal objective accents.
+Materials/textures: chunky stone ramparts, cracked volcanic ground, simple banners, emissive crystals, readable silhouettes.
+Constraints: no written words, no logos, no watermark, no UI text, no copyrighted characters; preserve generous clear space around landmarks; the image must serve as the exact same visual reference for both benchmark participants.
+Avoid: excessive tiny detail, muddy low contrast, close-up composition, illegible clutter, interface overlays.

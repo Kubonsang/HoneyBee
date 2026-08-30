@@ -1,0 +1,38 @@
+[
+  {
+    "condition": "controlled-single",
+    "pid": 34668,
+    "resetAtMs": null,
+    "wallMs": 25586,
+    "peakWorkingSetBytes": 530751488,
+    "markersPresent": [true, true, true, true, true, true, true, true],
+    "markersOrdered": true,
+    "exceptionCount": 0,
+    "exceptions": [],
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\controlled-single-autoplay-player.log"
+  },
+  {
+    "condition": "e2e-honeybee",
+    "pid": 52648,
+    "resetAtMs": null,
+    "wallMs": 25642,
+    "peakWorkingSetBytes": 618754048,
+    "markersPresent": [true, true, true, true, true, true, true, true],
+    "markersOrdered": true,
+    "exceptionCount": 0,
+    "exceptions": [],
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-honeybee-autoplay-player.log"
+  },
+  {
+    "condition": "e2e-direct",
+    "pid": 66420,
+    "resetAtMs": null,
+    "wallMs": 25516,
+    "peakWorkingSetBytes": 509964288,
+    "markersPresent": [true, true, true, true, true, true, true, true],
+    "markersOrdered": true,
+    "exceptionCount": 0,
+    "exceptions": [],
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-direct-autoplay-player.log"
+  }
+]

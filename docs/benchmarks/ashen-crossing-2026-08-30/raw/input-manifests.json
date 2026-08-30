@@ -1,0 +1,22 @@
+[
+  {
+    "condition": "controlled-multi",
+    "manifestSha256": "c85d40278100470c9e48fcde43b8a27ec0221a740b94ddef59350b74ead24a6d",
+    "fileCount": 66
+  },
+  {
+    "condition": "controlled-single",
+    "manifestSha256": "c85d40278100470c9e48fcde43b8a27ec0221a740b94ddef59350b74ead24a6d",
+    "fileCount": 66
+  },
+  {
+    "condition": "e2e-honeybee",
+    "manifestSha256": "c85d40278100470c9e48fcde43b8a27ec0221a740b94ddef59350b74ead24a6d",
+    "fileCount": 66
+  },
+  {
+    "condition": "e2e-direct",
+    "manifestSha256": "c85d40278100470c9e48fcde43b8a27ec0221a740b94ddef59350b74ead24a6d",
+    "fileCount": 66
+  }
+]

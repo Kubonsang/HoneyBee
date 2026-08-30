@@ -1,0 +1,13 @@
+{
+  "warning": "Open only after recording the blind vote in BALLOT.md.",
+  "randomization": "System.Security.Cryptography.RandomNumberGenerator.GetInt32(2)",
+  "randomBit": 1,
+  "A": {
+    "condition": "e2e-direct",
+    "sha256": "c89a1c4d1a98247c52f7455baeb8c58ee1a7d14eea5d86485fecabb0593d6d9a"
+  },
+  "B": {
+    "condition": "e2e-honeybee",
+    "sha256": "eb756c080cd74adb939353a604c9b76e1dab69ea088b57bc212ace110247e4ff"
+  }
+}

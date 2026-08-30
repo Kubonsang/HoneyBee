@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "runId": "ef2413e1-2e6d-4b31-93b9-50f805603633",
+  "monitorStartedAt": "2026-08-30T22:30:32.7687562+09:00",
+  "elapsedMs": 190598,
+  "terminalType": "workflow.completed",
+  "terminalTimestamp": "2026-08-30T13:33:41.595Z",
+  "initialFreeBytes": 60345806848,
+  "minimumFreeBytes": 59968364544,
+  "peakPhysicalDiskDeltaBytes": 377442304,
+  "peakHoneyBeeWorkingSetBytes": 2052485120,
+  "peakProviderWorkingSetBytes": 2036023296,
+  "peakUnityWorkingSetBytes": 0,
+  "peakProviderCount": 5,
+  "peakWorkspaceEntries": 4,
+  "journalPath": "C:\\Users\\user\\AppData\\Roaming\\HoneyBee\\runtime\\runs\\ef2413e1-2e6d-4b31-93b9-50f805603633\\events.jsonl"
+}

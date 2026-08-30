@@ -1,0 +1,34 @@
+[
+  {
+    "condition": "controlled-multi",
+    "exitCode": 0,
+    "elapsedMs": 76989,
+    "freeBefore": 70924275712,
+    "freeAfter": 69011353600,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\prewarm-controlled-multi.log"
+  },
+  {
+    "condition": "controlled-single",
+    "exitCode": 0,
+    "elapsedMs": 79627,
+    "freeBefore": 69011353600,
+    "freeAfter": 65657860096,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\prewarm-controlled-single.log"
+  },
+  {
+    "condition": "e2e-honeybee",
+    "exitCode": 0,
+    "elapsedMs": 78961,
+    "freeBefore": 65659916288,
+    "freeAfter": 62772641792,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\prewarm-e2e-honeybee.log"
+  },
+  {
+    "condition": "e2e-direct",
+    "exitCode": 0,
+    "elapsedMs": 77064,
+    "freeBefore": 62772641792,
+    "freeAfter": 60361371648,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\prewarm-e2e-direct.log"
+  }
+]
