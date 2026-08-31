@@ -1,6 +1,8 @@
 import { execFile, spawn } from "node:child_process";
 import { createRequire } from "node:module";
 import path from "node:path";
+import process from "node:process";
+import { clearTimeout, setTimeout } from "node:timers";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 

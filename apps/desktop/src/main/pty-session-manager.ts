@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-import type { IPty } from "node-pty";
+import type { IPty, spawn as spawnPty } from "node-pty";
 
 import {
   DesktopPtySessionV1Schema,
@@ -14,7 +14,7 @@ const MAX_CHUNKS = 1_000;
 const MAX_BUFFER_BYTES = 4 * 1024 * 1024;
 const MAX_CHUNK_CHARACTERS = 65_536;
 
-type PtyModule = Pick<typeof import("node-pty"), "spawn">;
+type PtyModule = { readonly spawn: typeof spawnPty };
 
 export interface DesktopPtyLaunch {
   readonly profileId: string;

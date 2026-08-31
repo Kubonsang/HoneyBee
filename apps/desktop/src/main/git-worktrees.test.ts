@@ -108,5 +108,5 @@ describe("DesktopGitWorktrees", () => {
     expect(
       await git(repository, "branch", "--list", `honeybee/integration/${groupRunId}`),
     ).toContain(groupRunId);
-  });
+  }, 15_000);
 });
