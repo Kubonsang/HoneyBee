@@ -41,142 +41,109 @@ if (!validUrl || outputValue === undefined) {
           useContentSize: true,
           show: false,
           backgroundColor: "#090d10",
-          webPreferences: {
-            contextIsolation: true,
-            nodeIntegration: false,
-            sandbox: true,
-          },
+          webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
         });
         window.webContents.on("console-message", (event) => {
           if (event.level === "error") consoleErrors.push(event.message);
         });
         try {
           await window.loadURL(targetUrl);
-          await delay(500);
+          await delay(350);
           const result = await window.webContents.executeJavaScript(`
             (async () => {
-              const wait = () => new Promise((resolve) => setTimeout(resolve, 50));
+              const wait = () => new Promise((resolve) => setTimeout(resolve, 70));
               const button = (label) =>
                 [...document.querySelectorAll("button")].find((item) =>
                   item.textContent?.trim().includes(label),
                 );
-              const title = () => document.querySelector(".section-heading h1")?.textContent?.trim();
-              if (!document.querySelector(".brand-lockup")) {
-                throw new Error("State-driven Desktop shell did not render.");
-              }
-              let terminalAutoOpened = false;
-              for (let attempt = 0; attempt < 30; attempt += 1) {
-                await wait();
-                terminalAutoOpened = Boolean(
-                  document.querySelector(".utility-drawer.open .terminal-panel"),
+              const exactButton = (label) =>
+                [...document.querySelectorAll("button")].find(
+                  (item) => item.textContent?.trim() === label,
                 );
-                if (terminalAutoOpened) break;
-              }
-              if (!terminalAutoOpened) {
-                throw new Error("Active Run did not auto-open the Live CLI.");
-              }
-
-              button("Projects")?.click();
-              await wait();
-              if (title() !== "Projects") throw new Error("Projects navigation failed.");
-
-              button("Agents")?.click();
-              await wait();
-              if (title() !== "Agents") throw new Error("Agent Manager navigation failed.");
-              if (!document.querySelector(".agent-card")) {
-                throw new Error("Agent Manager did not render a connected Agent.");
-              }
-
-              button("New Work")?.click();
-              await wait();
-              const textarea = document.querySelector(".task-field textarea");
-              if (!(textarea instanceof HTMLTextAreaElement)) throw new Error("Task input missing.");
-              const setter = Object.getOwnPropertyDescriptor(
-                HTMLTextAreaElement.prototype,
-                "value",
-              )?.set;
-              setter?.call(textarea, "Add inventory stacking");
-              textarea.dispatchEvent(new Event("input", { bubbles: true }));
-              await wait();
-              if (textarea.value !== "Add inventory stacking") throw new Error("Task input failed.");
-
-              const compile = [...document.querySelectorAll(".toggle-chip")].find((item) =>
-                item.textContent?.includes("Compile"),
-              )?.querySelector("input");
-              if (!(compile instanceof HTMLInputElement)) {
-                throw new Error("Compile capability control is missing.");
-              }
-              const compileInitiallyChecked = compile.checked;
-              compile.click();
-              await wait();
-              if (compile.checked === compileInitiallyChecked) {
-                throw new Error("Compile capability did not toggle.");
-              }
-              compile.click();
-              await wait();
-              if (compile.checked !== compileInitiallyChecked) {
-                throw new Error("Compile capability did not restore.");
-              }
-
-              const utility = document.querySelector(".utility-status-bar");
-              if (!(utility instanceof HTMLButtonElement)) throw new Error("Utility drawer missing.");
-              utility.click();
-              await wait();
-              button("Runs")?.click();
-              await wait();
-              const completed = [...document.querySelectorAll(".utility-run-list button")].find(
-                (item) => item.textContent?.includes("Fix Player Movement Jitter"),
-              );
-              if (!(completed instanceof HTMLButtonElement)) {
-                throw new Error("Completed Run navigation target missing.");
-              }
-              completed.click();
-              let patchReview = false;
-              for (let attempt = 0; attempt < 40; attempt += 1) {
+              const click = async (label, exact = false) => {
+                const target = exact ? exactButton(label) : button(label);
+                if (!(target instanceof HTMLButtonElement)) throw new Error(label + " button missing.");
+                target.click();
                 await wait();
-                patchReview = Boolean(document.querySelector(".patch-workbench"));
-                if (patchReview) break;
+              };
+
+              if (!document.querySelector(".desktop-shell.shell-hub .activity-rail")) {
+                throw new Error("Project-first Hub shell did not render.");
               }
-              if (!patchReview) {
-                throw new Error("Verified patch review did not render.");
+              if (document.querySelector(".section-heading h1")?.textContent?.trim() !== "Projects") {
+                throw new Error("Desktop did not start in Projects Hub.");
               }
-              const evidence = button("Review evidence");
-              if (!(evidence instanceof HTMLButtonElement)) {
-                throw new Error("Review evidence action is missing.");
+              await click("Open Workspace");
+              if (!document.querySelector(".desktop-shell.shell-project .project-workbench")) {
+                throw new Error("Project selection did not replace the whole app shell.");
               }
-              evidence.click();
-              await wait();
-              const activity = document.querySelector(".utility-drawer.open .utility-activity");
-              if (
-                !activity?.textContent?.includes("Verified patch is ready for disposition.") ||
-                !activity.textContent.includes("unity-verified-patch")
-              ) {
-                throw new Error("Selected Run evidence did not render in Activity.");
+              if (!document.querySelector(".file-explorer")) {
+                throw new Error("Files did not open as the default Workbench resource.");
+              }
+              await click("Assets", true);
+              await click("Scripts", true);
+              await click("PlayerController.cs", true);
+              if (!document.querySelector(".code-preview")?.textContent?.includes("PlayerController")) {
+                throw new Error("Read-only project source did not render.");
               }
 
-              button("Live CLI")?.click();
+              await click("Agent CLI", true);
+              if (!document.querySelector(".interactive-terminal")) {
+                throw new Error("Native Agent terminal did not render.");
+              }
+              await click("Start terminal");
               let terminalReady = false;
-              for (let attempt = 0; attempt < 30; attempt += 1) {
+              for (let attempt = 0; attempt < 20; attempt += 1) {
                 await wait();
-                const rows = document.querySelector(".terminal-panel .xterm-rows");
                 terminalReady =
-                  Boolean(document.querySelector(".terminal-panel")) &&
-                  Boolean(button("Open in window")) &&
-                  (rows?.textContent ?? "").includes("Terminal stream ready.");
+                  (document.querySelector(".interactive-terminal .xterm-rows")?.textContent ?? "").includes(
+                    "MyUnityGame",
+                  );
                 if (terminalReady) break;
               }
-              if (!terminalReady) {
-                throw new Error("Delayed Live CLI output or external window action is missing.");
+              if (!terminalReady) throw new Error("Interactive PTY output did not stream.");
+
+              await click("Work Map", true);
+              if (!document.querySelector(".work-dag .dag-integration-card")) {
+                throw new Error("Work Map DAG did not render.");
+              }
+              await click("Worktrees", true);
+              if (!document.querySelector(".worktree-repository-card")) {
+                throw new Error("Git Worktrees view did not render.");
+              }
+              await click("Project", true);
+              if (!document.querySelector(".project-operations-view .operations-grid")) {
+                throw new Error("Project Operations did not render.");
+              }
+              await click("Settings", true);
+              if (!document.querySelector(".desktop-preferences-panel")) {
+                throw new Error("Desktop preferences did not render.");
               }
 
+              await click("New Work", true);
+              const textarea = document.querySelector(".task-field textarea");
+              if (!(textarea instanceof HTMLTextAreaElement)) throw new Error("Task input missing.");
+              const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+              setter?.call(textarea, "Add inventory stacking");
+              textarea.dispatchEvent(new Event("input", { bubbles: true }));
+              await click("Run Doctor");
+              for (let attempt = 0; attempt < 20 && button("Run Work")?.disabled; attempt += 1) await wait();
+              await click("Run Work");
+              if (!document.querySelector(".plan-review-dialog")?.textContent?.includes("Review the Work DAG")) {
+                throw new Error("Plan approval gate did not render before execution.");
+              }
+              if (!button("Approve plan & start")) throw new Error("Plan approval action is missing.");
+
               return {
-                navigation: true,
-                taskInput: true,
-                capabilityToggle: true,
-                patchReview: true,
-                evidenceReview: true,
-                liveCli: true,
-                terminalAutoOpened: true,
+                projectHub: true,
+                projectShell: true,
+                files: true,
+                interactivePty: true,
+                workMap: true,
+                worktrees: true,
+                projectOperations: true,
+                settings: true,
+                planApproval: true,
               };
             })()
           `);
@@ -187,25 +154,11 @@ if (!validUrl || outputValue === undefined) {
           await delay(100);
           const compactLayout = await window.webContents.executeJavaScript(`
             document.documentElement.scrollWidth <= window.innerWidth &&
-              Boolean(document.querySelector(".brand-lockup")) &&
-              Boolean(document.querySelector(".new-work-button"))
+              Boolean(document.querySelector(".desktop-shell")) &&
+              Boolean(document.querySelector(".activity-rail"))
           `);
-          if (!compactLayout) {
-            throw new Error("Desktop workspace overflowed at the 1024px compact viewport.");
-          }
+          if (!compactLayout) throw new Error("Project-first shell overflowed at 1024px.");
           window.setContentSize(1440, 1024);
-          await window.webContents.reload();
-          let reviewReady = false;
-          for (let attempt = 0; attempt < 40; attempt += 1) {
-            await delay(50);
-            reviewReady = await window.webContents.executeJavaScript(
-              `Boolean(document.querySelector(".patch-workbench"))`,
-            );
-            if (reviewReady) break;
-          }
-          if (!reviewReady) {
-            throw new Error("Verified patch review did not remain stable for capture.");
-          }
           await delay(100);
           await writeFile(outputPath, (await window.webContents.capturePage()).toPNG());
           process.stdout.write(

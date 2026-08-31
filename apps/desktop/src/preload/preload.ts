@@ -12,14 +12,25 @@ import {
   DesktopDogfoodFinalizeRequestV1Schema,
   DesktopDogfoodOpenEvidenceRequestV1Schema,
   DesktopDogfoodStartRequestV1Schema,
+  DesktopGitRunRequestV1Schema,
+  DesktopGitSnapshotRequestV1Schema,
   DesktopIpcChannels,
   DesktopIpcResponseSchemas,
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
+  DesktopPreferencesV1Schema,
+  DesktopProjectFileRequestV1Schema,
+  DesktopProjectSearchRequestV1Schema,
+  DesktopProjectTreeRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectAddRequestV2Schema,
   DesktopProjectAgentPreferenceRequestV1Schema,
   DesktopRunRequestV1Schema,
+  DesktopPtyCreateRequestV1Schema,
+  DesktopPtyResizeRequestV1Schema,
+  DesktopPtySessionRequestV1Schema,
+  DesktopPtySnapshotRequestV1Schema,
+  DesktopPtyWriteRequestV1Schema,
   DesktopStartRequestV2Schema,
   DesktopTerminalSnapshotRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
@@ -32,6 +43,10 @@ const api: HoneyBeeDesktopApi = {
   bootstrap: async () =>
     DesktopIpcResponseSchemas.bootstrap.parse(
       await ipcRenderer.invoke(DesktopIpcChannels.bootstrap),
+    ),
+  projectCatalog: async () =>
+    DesktopIpcResponseSchemas.projectCatalog.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.projectCatalog),
     ),
   chooseProfile: async () =>
     DesktopIpcResponseSchemas.chooseProfile.parse(
@@ -157,6 +172,90 @@ const api: HoneyBeeDesktopApi = {
         DesktopRunRequestV1Schema.parse(request),
       ),
     ),
+  projectTree: async (request) =>
+    DesktopIpcResponseSchemas.projectTree.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.projectTree,
+        DesktopProjectTreeRequestV1Schema.parse(request),
+      ),
+    ),
+  readProjectFile: async (request) =>
+    DesktopIpcResponseSchemas.projectFileRead.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.projectFileRead,
+        DesktopProjectFileRequestV1Schema.parse(request),
+      ),
+    ),
+  searchProject: async (request) =>
+    DesktopIpcResponseSchemas.projectSearch.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.projectSearch,
+        DesktopProjectSearchRequestV1Schema.parse(request),
+      ),
+    ),
+  createPty: async (request) =>
+    DesktopIpcResponseSchemas.ptyCreate.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.ptyCreate,
+        DesktopPtyCreateRequestV1Schema.parse(request),
+      ),
+    ),
+  ptySnapshot: async (request) =>
+    DesktopIpcResponseSchemas.ptySnapshot.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.ptySnapshot,
+        DesktopPtySnapshotRequestV1Schema.parse(request),
+      ),
+    ),
+  writePty: async (request) =>
+    DesktopIpcResponseSchemas.ptyWrite.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.ptyWrite,
+        DesktopPtyWriteRequestV1Schema.parse(request),
+      ),
+    ),
+  resizePty: async (request) =>
+    DesktopIpcResponseSchemas.ptyResize.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.ptyResize,
+        DesktopPtyResizeRequestV1Schema.parse(request),
+      ),
+    ),
+  closePty: async (request) =>
+    DesktopIpcResponseSchemas.ptyClose.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.ptyClose,
+        DesktopPtySessionRequestV1Schema.parse(request),
+      ),
+    ),
+  gitSnapshot: async (request) =>
+    DesktopIpcResponseSchemas.gitSnapshot.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.gitSnapshot,
+        DesktopGitSnapshotRequestV1Schema.parse(request),
+      ),
+    ),
+  materializeRunWorktree: async (request) =>
+    DesktopIpcResponseSchemas.gitMaterializeRun.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.gitMaterializeRun,
+        DesktopGitRunRequestV1Schema.parse(request),
+      ),
+    ),
+  mergeRunWorktree: async (request) =>
+    DesktopIpcResponseSchemas.gitMergeRun.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.gitMergeRun,
+        DesktopGitRunRequestV1Schema.parse(request),
+      ),
+    ),
+  finalizeIntegration: async (request) =>
+    DesktopIpcResponseSchemas.gitFinalizeIntegration.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.gitFinalizeIntegration,
+        DesktopGitRunRequestV1Schema.parse(request),
+      ),
+    ),
   readArtifact: async (request) =>
     DesktopIpcResponseSchemas.artifactRead.parse(
       await ipcRenderer.invoke(
@@ -247,6 +346,17 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.developerSettingsUpdate,
         DesktopDeveloperSettingsUpdateV1Schema.parse(request),
+      ),
+    ),
+  preferences: async () =>
+    DesktopIpcResponseSchemas.preferencesGet.parse(
+      await ipcRenderer.invoke(DesktopIpcChannels.preferencesGet),
+    ),
+  updatePreferences: async (request) =>
+    DesktopIpcResponseSchemas.preferencesUpdate.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.preferencesUpdate,
+        DesktopPreferencesV1Schema.parse(request),
       ),
     ),
   dogfoodStatus: async () =>

@@ -1,16 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  ClockCounterClockwise,
-  Cube,
-  FolderSimple,
-  Gear,
-  Hexagon,
-  Plus,
-  Pulse,
-  Robot,
-  SquaresFour,
-  X,
-} from "@phosphor-icons/react";
+import { Cube, FolderSimple, Plus, Pulse, SquaresFour, X } from "@phosphor-icons/react";
 
 import type {
   ArtifactViewV1,
@@ -25,17 +14,22 @@ import {
   DesktopStartRequestV2Schema,
   type DesktopBootstrapV2,
   type DesktopPendingAgentApprovalV1,
+  type DesktopPreferencesV1,
+  type DesktopProjectCatalogEntryV1,
+  type DesktopProjectCatalogV1,
   type DesktopProjectProfile,
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { AgentManagerView } from "./AgentManagerView.js";
 import { CommandCenter } from "./CommandCenter.js";
+import { DesktopShell, type DesktopShellMode, type DesktopView } from "./DesktopShell.js";
 import { DogfoodMetricsPanel } from "./DogfoodMetricsPanel.js";
+import { DesktopPreferencesPanel } from "./DesktopPreferencesPanel.js";
+import { ProjectOperationsView, WorkMapView, WorktreesView } from "./ProjectViews.js";
+import { ProjectWorkbench } from "./ProjectWorkbench.js";
 import { RawProtocolSettingsPanel } from "./RawProtocolSettingsPanel.js";
 import { SetupCenter } from "./SetupCenter.js";
 import { WorkspaceView, type UtilityTab, type WorkDraft } from "./WorkspaceView.js";
-
-type DesktopView = "workspace" | "runs" | "projects" | "setup" | "agents" | "settings";
 
 const initialWork = (key = 1): WorkDraft => ({
   key,
@@ -57,13 +51,18 @@ const hasOperationCode = (error: unknown, code: string): boolean =>
 
 export function App() {
   const [bootstrap, setBootstrap] = useState<DesktopBootstrapV2>();
+  const [projectCatalog, setProjectCatalog] = useState<DesktopProjectCatalogV1>();
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
   const [editingProfileId, setEditingProfileId] = useState<string>();
-  const [view, setView] = useState<DesktopView>("workspace");
+  const [setupProjectPath, setSetupProjectPath] = useState<string>();
+  const [shellMode, setShellMode] = useState<DesktopShellMode>("hub");
+  const [view, setView] = useState<DesktopView>("projects");
   const [doctor, setDoctor] = useState<DoctorReportV1>();
   const [works, setWorks] = useState<readonly WorkDraft[]>([initialWork()]);
   const [maxParallelWorks, setMaxParallelWorks] = useState(1);
   const [composing, setComposing] = useState(false);
+  const [planReviewOpen, setPlanReviewOpen] = useState(false);
+  const [preferences, setPreferences] = useState<DesktopPreferencesV1>();
   const [busy, setBusy] = useState<"profile" | "doctor" | "start">();
   const [detailBusy, setDetailBusy] = useState<
     "artifact" | RunActionV1 | PatchActionV1 | "clone"
@@ -91,18 +90,46 @@ export function App() {
     void window.honeybee
       .bootstrap()
       .then((value) => {
-        const profileId = value.profiles[0]?.profileId;
         setBootstrap(value);
-        setSelectedProfileId(profileId);
-        setDefaultAgentId(
-          profileId === undefined
-            ? value.lastUsedAgentId
-            : (value.preferredAgentIds[profileId] ?? value.lastUsedAgentId),
-        );
-        setView(profileId === undefined ? "projects" : "workspace");
+        setSelectedProfileId(undefined);
+        setDefaultAgentId(value.lastUsedAgentId);
+        setShellMode("hub");
+        setView("projects");
       })
       .catch((reason: unknown) => setError(readableError(reason)));
   }, []);
+
+  useEffect(() => {
+    void window.honeybee
+      .preferences()
+      .then(setPreferences)
+      .catch((reason: unknown) => setError(readableError(reason)));
+  }, []);
+
+  useEffect(() => {
+    if (preferences === undefined) return;
+    const root = document.documentElement;
+    root.dataset.density = preferences.density;
+    root.dataset.reducedMotion = String(preferences.reducedMotion);
+    root.style.setProperty("--hb-explorer-width", `${preferences.fileExplorerWidth}px`);
+    root.style.setProperty("--hb-terminal-font-size", String(preferences.terminalFontSize));
+  }, [preferences]);
+
+  useEffect(() => {
+    if (bootstrap === undefined) return;
+    let stopped = false;
+    void window.honeybee
+      .projectCatalog()
+      .then((catalog) => {
+        if (!stopped) setProjectCatalog(catalog);
+      })
+      .catch((reason: unknown) => {
+        if (!stopped) setError(readableError(reason));
+      });
+    return () => {
+      stopped = true;
+    };
+  }, [bootstrap]);
 
   useEffect(() => {
     let stopped = false;
@@ -163,6 +190,7 @@ export function App() {
             setArtifact(undefined);
             setPatch(undefined);
             setError(undefined);
+            setShellMode(profileId === undefined ? "hub" : "project");
             setView(profileId === undefined ? "projects" : "workspace");
             setNotice("Project setup changed. HoneyBee refreshed the active project profile.");
             return;
@@ -269,6 +297,20 @@ export function App() {
     () => bootstrap?.profiles.find((profile) => profile.profileId === selectedProfileId),
     [bootstrap, selectedProfileId],
   );
+  const catalogProjects = useMemo<readonly DesktopProjectCatalogEntryV1[]>(
+    () =>
+      projectCatalog?.projects ??
+      bootstrap?.profiles.map((profile) => ({
+        schemaVersion: 1 as const,
+        projectPath: profile.projectPath,
+        label: profile.label,
+        source: "managed" as const,
+        profileId: profile.profileId,
+        lastOpenedAt: profile.lastOpenedAt,
+      })) ??
+      [],
+    [bootstrap, projectCatalog],
+  );
   const enabledAgents = useMemo(
     () => bootstrap?.agents.filter((agent) => agent.enabled) ?? [],
     [bootstrap],
@@ -322,8 +364,11 @@ export function App() {
         profileId: profile.profileId,
       });
       setBootstrap(value);
+      setProjectCatalog(undefined);
       if (selectedProfileId === profile.profileId) {
-        activateProfile(value.profiles[0]?.profileId, value);
+        activateProfile(undefined, value);
+        setShellMode("hub");
+        setView("projects");
       }
     } catch (reason) {
       setError(readableError(reason));
@@ -336,6 +381,8 @@ export function App() {
       setBootstrap(value);
       activateProfile(profile.profileId, value);
       setEditingProfileId(undefined);
+      setSetupProjectPath(undefined);
+      setShellMode("project");
       setView("workspace");
       setComposing(true);
       setNotice(`${profile.label} is ready. Run Doctor before the first Work.`);
@@ -347,9 +394,12 @@ export function App() {
   const refreshBootstrap = async (): Promise<void> => {
     const value = await window.honeybee.bootstrap();
     setBootstrap(value);
-    const profileId = value.profiles.some((profile) => profile.profileId === selectedProfileId)
-      ? selectedProfileId
-      : value.profiles[0]?.profileId;
+    setProjectCatalog(undefined);
+    const profileId =
+      shellMode === "project" &&
+      value.profiles.some((profile) => profile.profileId === selectedProfileId)
+        ? selectedProfileId
+        : undefined;
     setSelectedProfileId(profileId);
     setDefaultAgentId(
       profileId === undefined
@@ -399,8 +449,14 @@ export function App() {
     });
   };
 
+  const reviewPlan = (): void => {
+    if (!validWorks) return;
+    setPlanReviewOpen(true);
+  };
+
   const startWorks = async (): Promise<void> => {
     if (selectedProfile === undefined || !validWorks || defaultAgentId === undefined) return;
+    setPlanReviewOpen(false);
     setBusy("start");
     setError(undefined);
     setNotice(undefined);
@@ -443,6 +499,7 @@ export function App() {
       });
       setUtilityTab("terminal");
       setUtilityOpen(true);
+      setShellMode("project");
       setView("workspace");
     } catch (reason) {
       setError(readableError(reason));
@@ -548,6 +605,7 @@ export function App() {
       setMaxParallelWorks(cloned.maxParallelWorks);
       setDefaultAgentId(cloned.defaultAgentId ?? undefined);
       setComposing(true);
+      setShellMode("project");
       setView("workspace");
       setUtilityOpen(false);
       setNotice(
@@ -586,6 +644,7 @@ export function App() {
     setPatch(undefined);
     setComposing(false);
     setUtilityOpen(false);
+    setShellMode("project");
     setView("workspace");
   };
 
@@ -597,7 +656,9 @@ export function App() {
     setArtifact(undefined);
     setPatch(undefined);
     setComposing(true);
+    setPlanReviewOpen(false);
     setUtilityOpen(false);
+    setShellMode("project");
     setView("workspace");
   };
 
@@ -615,84 +676,28 @@ export function App() {
               : undefined;
 
   return (
-    <div className="desktop-app">
-      <header className="app-topbar">
-        <button
-          className="brand-lockup"
-          onClick={() => {
-            setView("workspace");
+    <>
+      <DesktopShell
+        mode={shellMode}
+        view={view}
+        profile={selectedProfile}
+        runCount={snapshot?.runs.length ?? 0}
+        activeRunCount={snapshot?.runs.filter((run) => !run.terminal).length ?? 0}
+        runtimeVersion={bootstrap?.runtime.runtimeVersion}
+        onView={(nextView) => {
+          setView(nextView);
+          if (nextView !== "workspace") {
             setComposing(false);
-          }}
-        >
-          <span className="brand-symbol">
-            <Hexagon size={27} weight="duotone" />
-          </span>
-          <strong>HoneyBee</strong>
-        </button>
-        <div className="project-switcher">
-          <Cube size={16} weight="duotone" />
-          <select
-            aria-label="Selected Unity project"
-            value={selectedProfileId ?? ""}
-            onChange={(event) => {
-              activateProfile(event.target.value || undefined);
-              setView(event.target.value.length === 0 ? "projects" : "workspace");
-            }}
-          >
-            <option value="">Choose a project</option>
-            {bootstrap?.profiles.map((profile) => (
-              <option key={profile.profileId} value={profile.profileId}>
-                {profile.label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <span className="runtime-identity">
-          <i className="live-dot" />
-          HoneyBee {bootstrap?.runtime.runtimeVersion ?? "…"}
-        </span>
-        <nav className="shell-nav" aria-label="Application views">
-          <button
-            className={view === "runs" ? "selected" : ""}
-            onClick={() => {
-              setComposing(false);
-              setUtilityOpen(false);
-              setView("runs");
-            }}
-            disabled={selectedProfile === undefined}
-            title={`${snapshot?.runs.length ?? 0} durable Runs · ${
-              snapshot?.runs.filter((run) => !run.terminal).length ?? 0
-            } active`}
-          >
-            <ClockCounterClockwise size={17} /> Runs
-            <span className="shell-nav-badge">{snapshot?.runs.length ?? 0}</span>
-          </button>
-          <button
-            className={view === "projects" ? "selected" : ""}
-            onClick={() => setView("projects")}
-          >
-            <FolderSimple size={17} /> Projects
-          </button>
-          <button className={view === "agents" ? "selected" : ""} onClick={() => setView("agents")}>
-            <Robot size={17} /> Agents
-          </button>
-          <button
-            className={view === "settings" ? "selected" : ""}
-            onClick={() => setView("settings")}
-          >
-            <Gear size={17} /> Settings
-          </button>
-        </nav>
-        <button
-          className="primary new-work-button"
-          onClick={beginNewWork}
-          disabled={selectedProfile === undefined}
-        >
-          <Plus size={17} weight="bold" /> New Work
-        </button>
-      </header>
-
-      <main className={`app-main view-${view}`}>
+            setUtilityOpen(false);
+          }
+        }}
+        onHub={() => {
+          activateProfile(undefined);
+          setShellMode("hub");
+          setView("projects");
+        }}
+        onNewWork={beginNewWork}
+      >
         {pageTitle !== undefined && (
           <header className="section-heading">
             <span className="eyebrow">HONEYBEE DESKTOP</span>
@@ -738,7 +743,40 @@ export function App() {
           </section>
         ))}
 
-        {view === "runs" && selectedProfile !== undefined ? (
+        {view === "work-map" && selectedProfile !== undefined ? (
+          <WorkMapView
+            profile={selectedProfile}
+            snapshot={snapshot}
+            doctor={doctor}
+            agents={bootstrap?.agents ?? []}
+            onRunDoctor={() => void runDoctor()}
+            onSelectRun={selectRun}
+            onNewWork={beginNewWork}
+          />
+        ) : view === "worktrees" && selectedProfile !== undefined ? (
+          <WorktreesView
+            profile={selectedProfile}
+            snapshot={snapshot}
+            doctor={doctor}
+            agents={bootstrap?.agents ?? []}
+            onRunDoctor={() => void runDoctor()}
+            onSelectRun={selectRun}
+            onNewWork={beginNewWork}
+            onError={setError}
+            onNotice={setNotice}
+          />
+        ) : view === "project" && selectedProfile !== undefined ? (
+          <ProjectOperationsView
+            profile={selectedProfile}
+            snapshot={snapshot}
+            doctor={doctor}
+            agents={bootstrap?.agents ?? []}
+            onRunDoctor={() => void runDoctor()}
+            onSelectRun={selectRun}
+            onNewWork={beginNewWork}
+            onError={setError}
+          />
+        ) : view === "runs" && selectedProfile !== undefined ? (
           <CommandCenter
             snapshot={snapshot}
             selectedRunId={selectedRunId}
@@ -750,19 +788,22 @@ export function App() {
             <div className="projects-toolbar">
               <div>
                 <span>{bootstrap?.profiles.length ?? 0} managed projects</span>
-                <strong>Unity environments ready for durable Work</strong>
+                <strong>
+                  {catalogProjects.length} Unity projects · choose exactly one workspace
+                </strong>
               </div>
               <button
                 className="primary"
                 onClick={() => {
                   setEditingProfileId(undefined);
+                  setSetupProjectPath(undefined);
                   setView("setup");
                 }}
               >
                 <Plus size={17} /> Add project
               </button>
             </div>
-            {bootstrap?.profiles.length === 0 ? (
+            {catalogProjects.length === 0 ? (
               <div className="empty-projects">
                 <FolderSimple size={38} weight="duotone" />
                 <h2>Add your first Unity project</h2>
@@ -771,6 +812,7 @@ export function App() {
                   className="primary"
                   onClick={() => {
                     setEditingProfileId(undefined);
+                    setSetupProjectPath(undefined);
                     setView("setup");
                   }}
                 >
@@ -779,56 +821,77 @@ export function App() {
               </div>
             ) : (
               <div className="projects-grid">
-                {bootstrap?.profiles.map((profile) => (
-                  <article className="project-tile" key={profile.profileId}>
-                    <span className="project-glyph">
-                      <Cube size={22} weight="duotone" />
-                    </span>
-                    <div>
-                      <h2>{profile.label}</h2>
-                      <p title={profile.projectPath}>{profile.projectPath}</p>
-                      <small>
-                        {profile.schemaVersion === 3
-                          ? "Ready · managed environment"
-                          : profile.configLabel}
-                      </small>
-                    </div>
-                    <div className="project-tile-actions">
-                      <button
-                        className="primary"
-                        onClick={() => {
-                          activateProfile(profile.profileId);
-                          setView("workspace");
-                        }}
-                      >
-                        Open Workspace
-                      </button>
-                      <button
-                        className="secondary"
-                        onClick={() => {
-                          activateProfile(profile.profileId);
-                          setEditingProfileId(profile.profileId);
-                          setView("setup");
-                        }}
-                      >
-                        Project Settings
-                      </button>
-                      <button
-                        className="icon-button danger"
-                        onClick={() => void removeProfile(profile)}
-                        aria-label={`Remove ${profile.label}`}
-                      >
-                        <X size={16} />
-                      </button>
-                    </div>
-                  </article>
-                ))}
+                {catalogProjects.map((project) => {
+                  const profile = bootstrap?.profiles.find(
+                    (candidate) => candidate.profileId === project.profileId,
+                  );
+                  return (
+                    <article className="project-tile" key={project.projectPath}>
+                      <span className="project-glyph">
+                        <Cube size={22} weight="duotone" />
+                      </span>
+                      <div>
+                        <h2>{project.label}</h2>
+                        <p title={project.projectPath}>{project.projectPath}</p>
+                        <small>
+                          {profile === undefined
+                            ? `Unity Hub${project.projectVersion === undefined ? "" : ` · ${project.projectVersion}`} · setup required`
+                            : profile.schemaVersion === 3
+                              ? "Ready · managed environment"
+                              : profile.configLabel}
+                        </small>
+                      </div>
+                      <div className="project-tile-actions">
+                        <button
+                          className="primary"
+                          onClick={() => {
+                            if (profile === undefined) {
+                              setEditingProfileId(undefined);
+                              setSetupProjectPath(project.projectPath);
+                              setView("setup");
+                            } else {
+                              activateProfile(profile.profileId);
+                              setShellMode("project");
+                              setView("workspace");
+                            }
+                          }}
+                        >
+                          {profile === undefined ? "Set up project" : "Open Workspace"}
+                        </button>
+                        {profile !== undefined && (
+                          <>
+                            <button
+                              className="secondary"
+                              onClick={() => {
+                                activateProfile(profile.profileId);
+                                setEditingProfileId(profile.profileId);
+                                setSetupProjectPath(undefined);
+                                setShellMode("project");
+                                setView("setup");
+                              }}
+                            >
+                              Project Settings
+                            </button>
+                            <button
+                              className="icon-button danger"
+                              onClick={() => void removeProfile(profile)}
+                              aria-label={`Remove ${profile.label}`}
+                            >
+                              <X size={16} />
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    </article>
+                  );
+                })}
               </div>
             )}
           </section>
         ) : view === "setup" ? (
           <SetupCenter
-            key={editingProfileId ?? "new-project"}
+            key={editingProfileId ?? setupProjectPath ?? "new-project"}
+            {...(setupProjectPath === undefined ? {} : { initialProjectPath: setupProjectPath })}
             {...(() => {
               const initialProfile = bootstrap?.profiles.find(
                 (profile) => profile.profileId === editingProfileId,
@@ -857,6 +920,11 @@ export function App() {
           />
         ) : view === "settings" ? (
           <div className="settings-layout">
+            <DesktopPreferencesPanel
+              onChange={setPreferences}
+              onError={setError}
+              onNotice={setNotice}
+            />
             <RawProtocolSettingsPanel
               onError={(message) => setError(message)}
               onNotice={(message) => setNotice(message)}
@@ -877,55 +945,145 @@ export function App() {
             </button>
           </section>
         ) : (
-          <WorkspaceView
+          <ProjectWorkbench
             profile={selectedProfile}
-            snapshot={snapshot}
-            selectedRunId={selectedRunId}
-            detail={runDetail}
-            patch={patch}
-            artifact={artifact}
-            doctor={doctor}
-            works={works}
             agents={enabledAgents}
             defaultAgentId={defaultAgentId}
-            maxParallelWorks={maxParallelWorks}
             composing={composing}
-            testplayAvailable={testplayAvailable}
-            canStart={validWorks && busy === undefined}
-            busy={busy}
-            detailBusy={detailBusy ?? (patchLoading ? "artifact" : undefined)}
-            utilityOpen={utilityOpen}
-            utilityTab={utilityTab}
-            onUpdateWork={updateWork}
-            onAddWork={addWork}
-            onRemoveWork={removeWork}
-            onDefaultAgent={setDefaultAgentId}
-            onMaxParallelWorks={(value) =>
-              setMaxParallelWorks(Math.max(1, Math.min(works.length, value || 1)))
-            }
-            onStart={() => void startWorks()}
-            onRunDoctor={() => void runDoctor()}
-            onSelectRun={selectRun}
-            onControlRun={(action) => void controlRun(action)}
-            onReadArtifact={(artifactId) => void readArtifact(artifactId)}
-            onPatchControl={(action) => void controlPatch(action)}
-            onCloneRun={() => void cloneRun()}
-            onTerminalError={setError}
-            onUtility={(tab, open = true) => {
-              if (tab === "terminal" && selectedRunId !== undefined) {
-                setTerminalDismissedRuns((current) => {
-                  const next = new Set(current);
-                  if (open) next.delete(selectedRunId);
-                  else next.add(selectedRunId);
-                  return next;
-                });
+            preferences={preferences}
+            onError={setError}
+          >
+            <WorkspaceView
+              profile={selectedProfile}
+              snapshot={snapshot}
+              selectedRunId={selectedRunId}
+              detail={runDetail}
+              patch={patch}
+              artifact={artifact}
+              doctor={doctor}
+              works={works}
+              agents={enabledAgents}
+              defaultAgentId={defaultAgentId}
+              maxParallelWorks={maxParallelWorks}
+              composing={composing}
+              testplayAvailable={testplayAvailable}
+              canStart={validWorks && busy === undefined}
+              busy={busy}
+              detailBusy={detailBusy ?? (patchLoading ? "artifact" : undefined)}
+              utilityOpen={utilityOpen}
+              utilityTab={utilityTab}
+              onUpdateWork={updateWork}
+              onAddWork={addWork}
+              onRemoveWork={removeWork}
+              onDefaultAgent={setDefaultAgentId}
+              onMaxParallelWorks={(value) =>
+                setMaxParallelWorks(Math.max(1, Math.min(works.length, value || 1)))
               }
-              setUtilityTab(tab);
-              setUtilityOpen(open);
-            }}
-          />
+              onStart={reviewPlan}
+              onRunDoctor={() => void runDoctor()}
+              onSelectRun={selectRun}
+              onControlRun={(action) => void controlRun(action)}
+              onReadArtifact={(artifactId) => void readArtifact(artifactId)}
+              onPatchControl={(action) => void controlPatch(action)}
+              onCloneRun={() => void cloneRun()}
+              onTerminalError={setError}
+              onUtility={(tab, open = true) => {
+                if (tab === "terminal" && selectedRunId !== undefined) {
+                  setTerminalDismissedRuns((current) => {
+                    const next = new Set(current);
+                    if (open) next.delete(selectedRunId);
+                    else next.add(selectedRunId);
+                    return next;
+                  });
+                }
+                setUtilityTab(tab);
+                setUtilityOpen(open);
+              }}
+            />
+          </ProjectWorkbench>
         )}
-      </main>
+      </DesktopShell>
+
+      {planReviewOpen && selectedProfile !== undefined && (
+        <div className="plan-review-backdrop" role="presentation">
+          <section
+            className="plan-review-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Review Work plan"
+          >
+            <header>
+              <div>
+                <span className="eyebrow">EXECUTION PLAN</span>
+                <h2>Review the Work DAG</h2>
+                <p>
+                  HoneyBee will run up to {maxParallelWorks} Work{maxParallelWorks === 1 ? "" : "s"}{" "}
+                  in parallel. Nothing starts until you approve this plan.
+                </p>
+              </div>
+              <button
+                className="icon-button"
+                onClick={() => setPlanReviewOpen(false)}
+                aria-label="Close plan review"
+              >
+                <X size={17} />
+              </button>
+            </header>
+            <div className="plan-review-project">
+              <Cube size={19} weight="duotone" />
+              <span>
+                <strong>{selectedProfile.label}</strong>
+                <small>{selectedProfile.projectPath}</small>
+              </span>
+              <em>{works.length} Work nodes</em>
+            </div>
+            <div className="plan-review-dag">
+              <div className="plan-review-nodes">
+                {works.map((work, index) => {
+                  const assignedAgent = enabledAgents.find(
+                    (agent) => agent.agentId === (work.agentId ?? defaultAgentId),
+                  );
+                  return (
+                    <article key={work.key}>
+                      <span>{String(index + 1).padStart(2, "0")}</span>
+                      <div>
+                        <strong>{work.id}</strong>
+                        <p>{work.task.trim()}</p>
+                        <small>
+                          {assignedAgent?.displayName ?? "Agent unavailable"} · {work.priority}
+                          {work.compile ? " · compile" : ""}
+                          {work.warmTest ? " · warm test" : ""}
+                        </small>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+              <div className="plan-dag-arrow" aria-hidden="true">
+                →
+              </div>
+              <article className="plan-integration-node">
+                <SquaresFour size={23} weight="duotone" />
+                <strong>Review & integrate</strong>
+                <small>Verified patches remain gated by your approval.</small>
+              </article>
+            </div>
+            <footer>
+              <span>Agent actions may still request one-time approval during execution.</span>
+              <button className="secondary" onClick={() => setPlanReviewOpen(false)}>
+                Back to edit
+              </button>
+              <button
+                className="primary"
+                onClick={() => void startWorks()}
+                disabled={busy !== undefined}
+              >
+                Approve plan & start
+              </button>
+            </footer>
+          </section>
+        </div>
+      )}
 
       {error !== undefined && (
         <div className="toast error-toast">
@@ -943,6 +1101,6 @@ export function App() {
           </button>
         </div>
       )}
-    </div>
+    </>
   );
 }

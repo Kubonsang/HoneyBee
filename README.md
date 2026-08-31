@@ -91,7 +91,7 @@ Batch config schema 1 remains accepted with its original process-local queue for
 
 A completed child stores a `unity-verified-patch` manifest before workspace release. Added and modified file bodies are separate `unity-patch-content` binary Artifacts in the existing content-addressed store; the manifest contains only Artifact references and delete metadata. HoneyBee verifies the patch against a clean source copy, and the original project remains unchanged.
 
-Git Worktree integration, distributed scheduling, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md) and [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md).
+Git Worktrees remain outside the CLI batch executor: its Agents still run in workspace-storage isolation. The Desktop can now project a completed verified text patch into approval-gated Work and integration branches after validation. Distributed scheduling, Semantic IR, and Recipe systems remain out of scope. See [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), and [ADR-028](docs/decisions/ADR-028-project-first-desktop-workbench.md).
 
 ## Unity Editor pool v0.6
 
@@ -123,8 +123,20 @@ corepack pnpm --filter honeybee-desktop package:smoke
 
 `package:smoke` produces `apps/desktop/release/HoneyBee-win32-x64/HoneyBee.exe` and launches that
 packaged executable with an isolated temporary user-data directory. The smoke requires Electron
-`app.ready`, the sandboxed preload API, the renderer Projects home, and runtime bootstrap IPC to
-all succeed. It force-closes only its own process tree and removes its temporary profile.
+`app.ready`, the sandboxed preload API, the renderer Projects home, preferences IPC, and runtime
+bootstrap IPC to all succeed. A second smoke loads packaged `node-pty` from asar and starts a real
+PowerShell ConPTY. The scripts force-close only their own process trees and remove temporary profiles.
+
+Desktop always opens in a Unity Hub-style Projects home. Selecting one managed project replaces the
+whole shell with **Workbench**, **Work Map**, **Runs**, **Worktrees**, and **Project** views; background
+Runs continue when the operator navigates elsewhere. Workbench provides a bounded read-only project
+Explorer, up to eight source tabs, a provider-owned native Agent CLI, a project PowerShell, and the
+durable structured Run stream. Interactive PTYs are process-local conveniences and are closed on app
+exit; durable Work evidence remains in the Run Journal and Artifact Store.
+
+New Work uses a plan-first UI gate. The operator reviews the independent Work nodes, selected Agents,
+capabilities, parallel limit, and final review/integration node before approval starts execution. The
+Work Map then exposes the durable parent/child Runs as a live DAG.
 
 Open **Agents** first to connect Codex, Claude Code, OpenCode, or a custom `stdio-framed-v2` CLI.
 HoneyBee stores global execution profiles, not provider credentials: official CLI login remains
@@ -156,6 +168,13 @@ For schema-2 parent creation, storage returns a `stagingPath` that is the provid
 Doctor validates Unity project structure/version, physical path isolation, the preferred global Agent readiness, the bundled storage pin/service, and managed compatibility inputs without running an Agent task. If TestPlay is configured, Doctor also validates its side-effect-free version and protocol 3 compile/warm-test command surface; otherwise it reports the capability backend as optional and unavailable. After Doctor passes, the Task Composer maps one Work to the existing single transaction and two or more Works to the existing v0.6 batch workflow. A batch has one default Agent and each Work may override it; main validates every selected profile before workspace acquisition and persists the exact commands in the Run config Artifact. Compile/warm-test controls stay disabled until the optional TestPlay pair is configured.
 
 The Command Center shows live Work phases, the priority/FIFO Editor queue, Editor ownership, Run History, typed Journal activity, and bounded Evidence previews. Cleanup-pending Runs expose only runtime-authorized Resume/Cancel actions. A completed child Run exposes its local verified patch as file-by-file before/after views.
+
+For a clean named Git source branch, **Worktrees** can materialize a pending verified text patch as a
+real `honeybee/work/<run-id>` commit. Each Work merge into
+`honeybee/integration/<parent-run-id>` requires explicit approval. Conflicts remain visible as an
+Integration Work; a clean integration can reach the source only by a separate fast-forward approval.
+Generated worktree folders are removed after success while both branch histories remain. Binary or
+truncated previews fail closed and continue to use the existing durable patch-disposition path.
 
 New patches use a reference-only manifest v3 with detailed base/result trees, separate
 content-addressed before/after blobs, and explicit workspace-integrity/compile/warm-test verification
@@ -284,7 +303,7 @@ corepack pnpm verify
 
 `.honeybee/` contains local plaintext Artifacts and is excluded from Git. Run `corepack pnpm security:install-hooks` once per clone and see [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
-HoneyBee remains a local CLI kernel with a thin Desktop operator surface. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, config-owned compile/warm-test capabilities, a local Setup Center, and a fixed-manifest Component Manager for bundled storage plus optional TestPlay. Git Worktree integration, distributed scheduling, retained workspaces, provider fallback, arbitrary component sources, a plugin ecosystem, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md), [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md), [ADR-024](docs/decisions/ADR-024-desktop-setup-center.md), and [ADR-025](docs/decisions/ADR-025-component-manager-v1.md).
+HoneyBee remains a local CLI kernel with a thin Desktop operator surface. v0.6 adds a same-host Editor pool, owned-Editor registry, exact Warm Bridge binding, config-owned compile/warm-test capabilities, a local Setup Center, and a fixed-manifest Component Manager for bundled storage plus optional TestPlay. Desktop post-validation Git integration is local and approval-gated; Agent execution inside Git Worktrees, distributed scheduling, retained execution workspaces, provider fallback, arbitrary component sources, a plugin ecosystem, Semantic IR, Recipe systems, capture/GPU scheduling, preemption, and automatic capacity optimization are out of scope. Full power-loss durability remains outside the guarantee; durable cleanup recovery targets HoneyBee/Agent/adapter process interruption. See [ADR-014](docs/decisions/ADR-014-strict-sequential-orchestration-kernel.md), [ADR-015](docs/decisions/ADR-015-durable-dag-orchestration-kernel.md), [ADR-016](docs/decisions/ADR-016-single-unity-work-transaction.md), [ADR-017](docs/decisions/ADR-017-parallel-unity-batch-local-resources.md), [ADR-018](docs/decisions/ADR-018-global-unity-resource-leases.md), [ADR-019](docs/decisions/ADR-019-unity-editor-pool-and-capabilities.md), [ADR-020](docs/decisions/ADR-020-desktop-runtime-control-plane.md), [ADR-021](docs/decisions/ADR-021-desktop-shell-and-project-profiles.md), [ADR-024](docs/decisions/ADR-024-desktop-setup-center.md), [ADR-025](docs/decisions/ADR-025-component-manager-v1.md), and [ADR-028](docs/decisions/ADR-028-project-first-desktop-workbench.md).
 
 ## License
 

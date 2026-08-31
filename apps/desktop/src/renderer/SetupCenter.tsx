@@ -24,6 +24,7 @@ interface SetupCenterProps {
   readonly onComplete: (profile: DesktopProjectProfile) => void;
   readonly onError: (message: string) => void;
   readonly initialProfile?: DesktopProjectProfile;
+  readonly initialProjectPath?: string;
   readonly agents: readonly DesktopAgentProfileV1[];
   readonly preferredAgentId?: string;
   readonly onManageAgents: () => void;
@@ -36,6 +37,7 @@ export function SetupCenter({
   onComplete,
   onError,
   initialProfile,
+  initialProjectPath,
   agents,
   preferredAgentId,
   onManageAgents,
@@ -49,7 +51,9 @@ export function SetupCenter({
   const [status, setStatus] = useState<DesktopSetupStatusV1>();
   const [busy, setBusy] = useState<"discover" | "start" | "import" | "install-testplay">();
   const [localPhase, setLocalPhase] = useState<string>();
-  const [projectPath, setProjectPath] = useState(initialProfile?.projectPath ?? "");
+  const [projectPath, setProjectPath] = useState(
+    initialProfile?.projectPath ?? initialProjectPath ?? "",
+  );
   const [unityPath, setUnityPath] = useState(managed?.unity.path ?? "");
   const [agentId, setAgentId] = useState(
     preferredAgentId ?? agents.find((agent) => agent.enabled)?.agentId ?? "",
@@ -109,6 +113,12 @@ export function SetupCenter({
       setLocalPhase(undefined);
     }
   };
+
+  useEffect(() => {
+    if (initialProfile !== undefined || initialProjectPath === undefined || discovery !== undefined)
+      return;
+    void loadProject(initialProjectPath);
+  }, [discovery, initialProfile, initialProjectPath]);
 
   const choose = async (
     kind: "project" | "unity",

@@ -1,0 +1,5 @@
+{
+  "name": "honeybee-packaged-pty-smoke",
+  "private": true,
+  "main": "main.cjs"
+}

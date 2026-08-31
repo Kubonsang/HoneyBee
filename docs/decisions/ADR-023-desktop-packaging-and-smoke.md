@@ -13,8 +13,10 @@ build can miss Electron ESM startup deadlocks and file-URL asset failures.
 ## Decision
 
 The Electron main process is bundled with the existing HoneyBee runtime facade. Preload and
-renderer remain separate bundles, and the packaged application contains only those three outputs
-inside Electron asar. The renderer uses relative assets so the same build loads from `file://`.
+renderer remain separate bundles. The packaged application contains those outputs inside Electron
+asar plus the `node-pty` JavaScript package; only its Windows x64 native runtime is unpacked. PDBs
+and other-platform prebuilds are excluded. The renderer uses relative assets so the same build loads
+from `file://`.
 
 Main startup does not await `app.whenReady()` at ESM top level. Initialization runs from an
 asynchronous ready callback after module evaluation, avoiding an Electron ESM readiness deadlock.
@@ -29,6 +31,8 @@ and requires all of the following:
 - The preload exposes the strict versioned `window.honeybee` API.
 - The renderer mounts the Command Center.
 - Bootstrap crosses IPC and returns runtime API version 1.
+- Preferences cross IPC with conservative defaults.
+- Packaged `node-pty` loads and a real PowerShell ConPTY returns a known marker.
 
 The smoke records only stage names in an OS temporary file, bounds captured diagnostics, kills only
 the process tree it started, and removes its temporary profile.

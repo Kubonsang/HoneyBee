@@ -359,6 +359,20 @@ const api: HoneyBeeDesktopApi = {
     preferredAgentIds: { [projectId]: agentId },
     lastUsedAgentId: agentId,
   }),
+  projectCatalog: async () => ({
+    schemaVersion: 1,
+    observedAt: timestamp(0),
+    projects: [
+      {
+        schemaVersion: 1,
+        projectPath: "C:\\Unity\\MyUnityGame",
+        label: "MyUnityGame",
+        source: "managed",
+        profileId: projectId,
+        lastOpenedAt: timestamp(4),
+      },
+    ],
+  }),
   chooseProfile: async () => null,
   chooseSetupPath: async () => null,
   discoverProject: unsupported,
@@ -421,6 +435,101 @@ const api: HoneyBeeDesktopApi = {
     };
   },
   openTerminalWindow: async () => true,
+  projectTree: async (request) => ({
+    schemaVersion: 1,
+    relativePath: request.relativePath,
+    entries:
+      request.relativePath === ""
+        ? [
+            { name: "Assets", relativePath: "Assets", kind: "directory" as const },
+            { name: "Packages", relativePath: "Packages", kind: "directory" as const },
+            {
+              name: "README.md",
+              relativePath: "README.md",
+              kind: "file" as const,
+              byteLength: 42,
+            },
+          ]
+        : request.relativePath === "Assets"
+          ? [{ name: "Scripts", relativePath: "Assets/Scripts", kind: "directory" as const }]
+          : [
+              {
+                name: "PlayerController.cs",
+                relativePath: "Assets/Scripts/PlayerController.cs",
+                kind: "file" as const,
+                byteLength: 256,
+              },
+            ],
+    truncated: false,
+  }),
+  readProjectFile: async (request) => ({
+    schemaVersion: 1,
+    relativePath: request.relativePath,
+    encoding: "utf8",
+    content: "public sealed class PlayerController\n{\n    // HoneyBee workbench preview\n}\n",
+    byteLength: 82,
+    truncated: false,
+    language: "csharp",
+  }),
+  searchProject: async (request) => ({
+    schemaVersion: 1,
+    query: request.query,
+    matches: [
+      {
+        name: "PlayerController.cs",
+        relativePath: "Assets/Scripts/PlayerController.cs",
+        kind: "file",
+        byteLength: 256,
+      },
+    ],
+    truncated: false,
+  }),
+  createPty: async (request) => ({
+    schemaVersion: 1,
+    sessionId: "00000000-0000-4000-8000-000000000088",
+    profileId: request.profileId,
+    kind: request.kind,
+    label: request.kind === "agent" ? "OpenCode" : "PowerShell",
+    state: "running",
+    createdAt: timestamp(0),
+  }),
+  ptySnapshot: async (request) => ({
+    schemaVersion: 1,
+    session: {
+      schemaVersion: 1,
+      sessionId: request.sessionId,
+      profileId: projectId,
+      kind: "shell",
+      label: "PowerShell",
+      state: "running",
+      createdAt: timestamp(0),
+    },
+    cursor: 1,
+    chunks: request.afterCursor === 0 ? [{ cursor: 1, data: "PS C:\\Unity\\MyUnityGame> " }] : [],
+    truncated: false,
+  }),
+  writePty: async () => true,
+  resizePty: async () => true,
+  closePty: async () => true,
+  gitSnapshot: async () => ({
+    schemaVersion: 1,
+    available: true,
+    projectPath: "C:\\Unity\\MyUnityGame",
+    repositoryRoot: "C:\\Unity\\MyUnityGame",
+    currentBranch: "main",
+    worktrees: [
+      {
+        path: "C:\\Unity\\MyUnityGame",
+        branch: "main",
+        head: "0123456789abcdef0123456789abcdef01234567",
+        kind: "source",
+        status: "clean",
+      },
+    ],
+  }),
+  materializeRunWorktree: unsupported,
+  mergeRunWorktree: unsupported,
+  finalizeIntegration: unsupported,
   readArtifact: unsupported,
   resumeRun: unsupported,
   cancelRun: unsupported,
@@ -442,6 +551,15 @@ const api: HoneyBeeDesktopApi = {
     rawAgentProtocolEnabled: false,
   }),
   updateDeveloperSettings: unsupported,
+  preferences: async () => ({
+    schemaVersion: 1,
+    density: "comfortable",
+    terminalFontSize: 12,
+    fileExplorerWidth: 280,
+    workbenchDefault: "files",
+    reducedMotion: false,
+  }),
+  updatePreferences: unsupported,
   dogfoodStatus: async () => ({
     schemaVersion: 1,
     enabled: false,
