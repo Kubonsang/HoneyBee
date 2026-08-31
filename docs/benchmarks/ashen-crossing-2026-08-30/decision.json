@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "decidedAt": "2026-08-31",
+  "visualVerdict": "preference-dependent-no-winner",
+  "adoptionDecision": "continue-honeybee-desktop-refinement",
+  "rationale": "The measured wall-time reduction is sufficient product value. AI remains an operator-controlled tool; a human owns direction, selection, and final polish.",
+  "capacityInterpretation": {
+    "persistentProjectAndBuildSize": "effectively-equal",
+    "transientDisk": "honeybee-lower-in-this-trial",
+    "workingMemory": "honeybee-higher"
+  }
+}

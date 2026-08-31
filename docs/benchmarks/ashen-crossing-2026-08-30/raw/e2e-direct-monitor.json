@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "condition": "e2e-direct",
+  "startedAt": "2026-08-30T13:59:12.1027992+00:00",
+  "elapsedMs": 1621007,
+  "exitCode": null,
+  "timedOut": true,
+  "checkpointAt15Minutes": true,
+  "checkpointPath": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\checkpoints\\e2e-direct-15min",
+  "initialFreeBytes": 60070748160,
+  "minimumFreeBytes": 59791134720,
+  "peakPhysicalDiskDeltaBytes": 279613440,
+  "peakProcessTreeWorkingSetBytes": 1399328768,
+  "peakProcessTreeCount": 9,
+  "stdout": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-direct.stdout.log",
+  "stderr": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-direct.stderr.log"
+}
