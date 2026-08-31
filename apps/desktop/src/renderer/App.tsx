@@ -26,7 +26,7 @@ import { DesktopShell, type DesktopShellMode, type DesktopView } from "./Desktop
 import { DogfoodMetricsPanel } from "./DogfoodMetricsPanel.js";
 import { DesktopPreferencesPanel } from "./DesktopPreferencesPanel.js";
 import { ProjectOperationsView, WorkMapView, WorktreesView } from "./ProjectViews.js";
-import { ProjectWorkbench } from "./ProjectWorkbench.js";
+import { ProjectWorkbench, WorkbenchTabs, type WorkbenchTab } from "./ProjectWorkbench.js";
 import { RawProtocolSettingsPanel } from "./RawProtocolSettingsPanel.js";
 import { SetupCenter } from "./SetupCenter.js";
 import { WorkspaceView, type UtilityTab, type WorkDraft } from "./WorkspaceView.js";
@@ -61,6 +61,7 @@ export function App() {
   const [works, setWorks] = useState<readonly WorkDraft[]>([initialWork()]);
   const [maxParallelWorks, setMaxParallelWorks] = useState(1);
   const [composing, setComposing] = useState(false);
+  const [workbenchTab, setWorkbenchTab] = useState<WorkbenchTab>("files");
   const [planReviewOpen, setPlanReviewOpen] = useState(false);
   const [preferences, setPreferences] = useState<DesktopPreferencesV1>();
   const [busy, setBusy] = useState<"profile" | "doctor" | "start">();
@@ -114,6 +115,16 @@ export function App() {
     root.style.setProperty("--hb-explorer-width", `${preferences.fileExplorerWidth}px`);
     root.style.setProperty("--hb-terminal-font-size", String(preferences.terminalFontSize));
   }, [preferences]);
+
+  useEffect(() => {
+    if (composing) setWorkbenchTab("work");
+  }, [composing]);
+
+  useEffect(() => {
+    if (!composing && selectedRunId === undefined && preferences !== undefined) {
+      setWorkbenchTab(preferences.workbenchDefault);
+    }
+  }, [composing, preferences?.workbenchDefault, selectedRunId]);
 
   useEffect(() => {
     if (bootstrap === undefined) return;
@@ -638,14 +649,32 @@ export function App() {
   };
 
   const selectRun = (runId: string): void => {
+    const active = snapshot?.runs.find((run) => run.runId === runId)?.terminal === false;
+    const changingRun = selectedRunId !== runId;
     setSelectedRunId(runId);
-    setRunDetail(undefined);
-    setArtifact(undefined);
-    setPatch(undefined);
+    if (changingRun) {
+      setRunDetail(undefined);
+      setArtifact(undefined);
+      setPatch(undefined);
+    }
     setComposing(false);
-    setUtilityOpen(false);
+    setWorkbenchTab("work");
     setShellMode("project");
     setView("workspace");
+    if (active) {
+      lastTerminalRunRef.current = runId;
+      setTerminalDismissedRuns((current) => {
+        if (!current.has(runId)) return current;
+        const next = new Set(current);
+        next.delete(runId);
+        return next;
+      });
+      setUtilityTab("terminal");
+      setUtilityOpen(true);
+    } else {
+      lastTerminalRunRef.current = undefined;
+      setUtilityOpen(false);
+    }
   };
 
   const beginNewWork = (): void => {
@@ -684,6 +713,11 @@ export function App() {
         runCount={snapshot?.runs.length ?? 0}
         activeRunCount={snapshot?.runs.filter((run) => !run.terminal).length ?? 0}
         runtimeVersion={bootstrap?.runtime.runtimeVersion}
+        titlebarActions={
+          shellMode === "project" && view === "workspace" && selectedProfile !== undefined ? (
+            <WorkbenchTabs tab={workbenchTab} onTab={setWorkbenchTab} />
+          ) : undefined
+        }
         onView={(nextView) => {
           setView(nextView);
           if (nextView !== "workspace") {
@@ -949,8 +983,8 @@ export function App() {
             profile={selectedProfile}
             agents={enabledAgents}
             defaultAgentId={defaultAgentId}
-            composing={composing}
-            preferences={preferences}
+            terminalFontSize={preferences?.terminalFontSize ?? 12}
+            tab={workbenchTab}
             onError={setError}
           >
             <WorkspaceView

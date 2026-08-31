@@ -217,6 +217,31 @@ const completedDetail = RunDetailV1Schema.parse({
   artifacts: [patchArtifact],
 });
 
+const activeDetail = (runId: string) => {
+  const summary = summaries.find((item) => item.runId === runId && !item.terminal) ?? summaries[0];
+  return RunDetailV1Schema.parse({
+    schemaVersion: 1,
+    summary,
+    events: [
+      {
+        sequence: 1,
+        timestamp: timestamp(80),
+        type: "workflow.started",
+        summary: "HoneyBee prepared the isolated Unity workspace.",
+        artifacts: [],
+      },
+      {
+        sequence: 2,
+        timestamp: timestamp(18),
+        type: "step.started",
+        stepId: "agent",
+        summary: "Agent is inspecting project files and planning the change.",
+        artifacts: [],
+      },
+    ],
+    artifacts: [],
+  });
+};
 const textContent = (
   text: string,
   digest: string,
@@ -395,7 +420,8 @@ const api: HoneyBeeDesktopApi = {
   startWorks: unsupported,
   cloneRunDraft: unsupported,
   runtimeSnapshot: async () => snapshot,
-  runDetail: async () => completedDetail,
+  runDetail: async (request) =>
+    request.runId === runDone ? completedDetail : activeDetail(request.runId),
   terminalSnapshot: async (request) => {
     await new Promise<void>((resolve) => setTimeout(resolve, 60));
     const cursor = Math.min(2, request.afterCursor + 1);

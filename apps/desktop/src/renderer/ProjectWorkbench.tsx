@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import {
   CaretDown,
   CaretRight,
@@ -20,7 +20,6 @@ import { Terminal } from "@xterm/xterm";
 
 import type {
   DesktopAgentProfileV1,
-  DesktopPreferencesV1,
   DesktopProjectFileV1,
   DesktopProjectProfile,
   DesktopProjectTreeEntryV1,
@@ -28,14 +27,14 @@ import type {
   DesktopPtySessionV1,
 } from "../shared/ipc.js";
 
-type WorkbenchTab = "files" | "agent" | "shell" | "work";
+export type WorkbenchTab = "files" | "agent" | "shell" | "work";
 
 interface ProjectWorkbenchProps {
   readonly profile: DesktopProjectProfile;
   readonly agents: readonly DesktopAgentProfileV1[];
   readonly defaultAgentId?: string | undefined;
-  readonly composing: boolean;
-  readonly preferences?: DesktopPreferencesV1 | undefined;
+  readonly terminalFontSize: number;
+  readonly tab: WorkbenchTab;
   readonly children: ReactNode;
   onError(message: string): void;
 }
@@ -86,7 +85,6 @@ function FileExplorer({
     setSearchResults(undefined);
     void loadDirectory("");
     // The profile ID is the scope boundary; loadDirectory intentionally starts a fresh tree.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profile.profileId]);
 
   const toggleDirectory = (relativePath: string): void => {
@@ -527,42 +525,13 @@ export function ProjectWorkbench({
   profile,
   agents,
   defaultAgentId,
-  composing,
-  preferences,
+  terminalFontSize,
+  tab,
   children,
   onError,
 }: ProjectWorkbenchProps) {
-  const [tab, setTab] = useState<WorkbenchTab>(preferences?.workbenchDefault ?? "files");
-  useEffect(() => {
-    if (composing) setTab("work");
-  }, [composing]);
-  useEffect(() => {
-    if (!composing && preferences !== undefined) setTab(preferences.workbenchDefault);
-  }, [composing, preferences?.workbenchDefault]);
-  const items = useMemo(
-    () =>
-      [
-        ["files", "Files", <FileCode size={16} />],
-        ["agent", "Agent CLI", <Robot size={16} />],
-        ["shell", "Shell", <TerminalWindow size={16} />],
-        ["work", "Work & Runs", <Play size={16} />],
-      ] as const,
-    [],
-  );
   return (
     <section className="project-workbench">
-      <nav className="workbench-tabs" aria-label="Workbench resources">
-        {items.map(([value, label, icon]) => (
-          <button
-            className={tab === value ? "selected" : ""}
-            key={value}
-            onClick={() => setTab(value)}
-          >
-            {icon}
-            {label}
-          </button>
-        ))}
-      </nav>
       <div className={`workbench-stage workbench-${tab}`}>
         {tab === "files" ? (
           <FileExplorer profile={profile} onError={onError} />
@@ -573,7 +542,7 @@ export function ProjectWorkbench({
             agents={agents}
             defaultAgentId={defaultAgentId}
             initialKind={tab}
-            terminalFontSize={preferences?.terminalFontSize ?? 12}
+            terminalFontSize={terminalFontSize}
             onError={onError}
           />
         ) : (
@@ -581,5 +550,34 @@ export function ProjectWorkbench({
         )}
       </div>
     </section>
+  );
+}
+
+export function WorkbenchTabs({
+  tab,
+  onTab,
+}: {
+  readonly tab: WorkbenchTab;
+  onTab(tab: WorkbenchTab): void;
+}) {
+  const items = [
+    ["files", "Files", <FileCode size={16} />],
+    ["agent", "Agent CLI", <Robot size={16} />],
+    ["shell", "Shell", <TerminalWindow size={16} />],
+    ["work", "Work & Runs", <Play size={16} />],
+  ] as const;
+  return (
+    <nav className="workbench-tabs" aria-label="Workbench resources">
+      {items.map(([value, label, icon]) => (
+        <button
+          className={tab === value ? "selected" : ""}
+          key={value}
+          onClick={() => onTab(value)}
+        >
+          {icon}
+          {label}
+        </button>
+      ))}
+    </nav>
   );
 }

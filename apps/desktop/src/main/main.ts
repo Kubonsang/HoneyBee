@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 import { StepIdSchema } from "@honeybee/orchestration-contracts";
 import { trustedAgentInvocation } from "@honeybee/core";
 import {
@@ -1417,11 +1417,18 @@ const createWindow = async (): Promise<void> => {
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
-    minWidth: 980,
-    minHeight: 680,
+    minWidth: 1100,
+    minHeight: 720,
+    autoHideMenuBar: true,
     backgroundColor: "#090d10",
     show: false,
     title: "HoneyBee",
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#0d1215",
+      symbolColor: "#aab3b9",
+      height: 54,
+    },
     webPreferences: {
       preload: desktopPreloadPath(),
       contextIsolation: true,
@@ -1429,6 +1436,7 @@ const createWindow = async (): Promise<void> => {
       sandbox: true,
     },
   });
+  mainWindow.setMenuBarVisibility(false);
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
@@ -1510,6 +1518,7 @@ const startDesktop = async (): Promise<void> => {
   await writeSmokeStage("module-loaded");
   await app.whenReady();
   await writeSmokeStage("app-ready");
+  Menu.setApplicationMenu(null);
   registerIpc();
   await createWindow();
 };

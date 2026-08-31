@@ -607,10 +607,38 @@ function RunWorkspace({
       </section>
     );
   }
+  const active = !detail.summary.terminal;
+  const latestEvent = detail.events[detail.events.length - 1];
   return (
     <section className="focus-workspace run-workspace">
       <FocusHeader title={runTitle(detail.summary)} detail={detail} />
       <StageRail detail={detail} />
+      {active && (
+        <section className="live-run-banner" aria-live="polite">
+          <span className="live-run-indicator">
+            <span className="live-run-pulse" />
+            Live Run
+          </span>
+          <div className="live-run-copy">
+            <strong>{latestEvent?.summary ?? `Agent is ${detail.summary.phase}`}</strong>
+            <small>
+              {latestEvent === undefined
+                ? "Waiting for the first durable event…"
+                : `Updated ${new Date(latestEvent.timestamp).toLocaleTimeString()} · event #${latestEvent.sequence}`}
+            </small>
+          </div>
+          <div className="live-run-actions">
+            <button onClick={() => onUtility("terminal", true)}>
+              <TerminalWindow size={16} />
+              Live CLI
+            </button>
+            <button onClick={() => onUtility("activity", true)}>
+              <ListBullets size={16} />
+              Activity
+            </button>
+          </div>
+        </section>
+      )}
       {patch !== undefined ? (
         <PatchReview
           detail={detail}
@@ -681,26 +709,31 @@ function RunWorkspace({
                 ))}
               </div>
             </section>
-            <section className="recent-events">
+            <section className={`recent-events ${active ? "live" : ""}`} aria-live="polite">
               <header>
                 <ListBullets size={18} />
-                <strong>Recent activity</strong>
+                <strong>{active ? "Live activity" : "Recent activity"}</strong>
+                {active && <span className="live-event-count">{detail.events.length} events</span>}
                 <button onClick={() => onUtility("activity", true)}>View all</button>
               </header>
-              {detail.events
-                .slice(-6)
-                .reverse()
-                .map((event) => (
-                  <article key={event.sequence}>
-                    <span className="event-dot" />
-                    <div>
-                      <strong>{event.summary}</strong>
-                      <small>
-                        {new Date(event.timestamp).toLocaleTimeString()} · #{event.sequence}
-                      </small>
-                    </div>
-                  </article>
-                ))}
+              {detail.events.length === 0 ? (
+                <p className="empty-live-events">Waiting for the first durable event…</p>
+              ) : (
+                detail.events
+                  .slice(-6)
+                  .reverse()
+                  .map((event) => (
+                    <article key={event.sequence}>
+                      <span className="event-dot" />
+                      <div>
+                        <strong>{event.summary}</strong>
+                        <small>
+                          {new Date(event.timestamp).toLocaleTimeString()} · #{event.sequence}
+                        </small>
+                      </div>
+                    </article>
+                  ))
+              )}
             </section>
           </div>
           {detail.artifacts.length > 0 && (

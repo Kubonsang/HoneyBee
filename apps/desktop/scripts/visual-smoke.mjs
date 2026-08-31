@@ -61,7 +61,12 @@ if (!validUrl || outputValue === undefined) {
                   (item) => item.textContent?.trim() === label,
                 );
               const click = async (label, exact = false) => {
-                const target = exact ? exactButton(label) : button(label);
+                let target;
+                for (let attempt = 0; attempt < 20; attempt += 1) {
+                  target = exact ? exactButton(label) : button(label);
+                  if (target instanceof HTMLButtonElement) break;
+                  await wait();
+                }
                 if (!(target instanceof HTMLButtonElement)) throw new Error(label + " button missing.");
                 target.click();
                 await wait();
@@ -77,6 +82,34 @@ if (!validUrl || outputValue === undefined) {
               if (!document.querySelector(".desktop-shell.shell-project .project-workbench")) {
                 throw new Error("Project selection did not replace the whole app shell.");
               }
+              const titlebar = document.querySelector(".shell-titlebar");
+              const workbenchTabs = document.querySelector(".shell-titlebar-actions .workbench-tabs");
+              if (!(titlebar instanceof HTMLElement) || !(workbenchTabs instanceof HTMLElement)) {
+                throw new Error("Workbench tabs did not move into the top titlebar.");
+              }
+              const titlebarBounds = titlebar.getBoundingClientRect();
+              const tabBounds = workbenchTabs.getBoundingClientRect();
+              if (
+                tabBounds.top < titlebarBounds.top ||
+                tabBounds.bottom > titlebarBounds.bottom + 1 ||
+                tabBounds.right > titlebarBounds.right
+              ) {
+                throw new Error("Workbench tabs escaped the top-right titlebar slot.");
+              }
+              const interactionProbe = document.querySelector(".activity-rail button");
+              if (
+                !(interactionProbe instanceof HTMLButtonElement) ||
+                !getComputedStyle(interactionProbe).transitionProperty.includes("transform")
+              ) {
+                throw new Error("Tactile button feedback is missing.");
+              }
+              const liveIndicator = document.querySelector(".shell-runtime-status .live-dot");
+              if (
+                !(liveIndicator instanceof HTMLElement) ||
+                getComputedStyle(liveIndicator).animationName !== "live-breathe"
+              ) {
+                throw new Error("Live runtime feedback is missing.");
+              }
               if (!document.querySelector(".file-explorer")) {
                 throw new Error("Files did not open as the default Workbench resource.");
               }
@@ -87,6 +120,52 @@ if (!validUrl || outputValue === undefined) {
                 throw new Error("Read-only project source did not render.");
               }
 
+              await click("Runs");
+              const activeRun = [...document.querySelectorAll(".work-run-card")].find((item) =>
+                item.textContent?.includes("inventory-stack"),
+              );
+              if (!(activeRun instanceof HTMLButtonElement)) {
+                throw new Error("Active Run was missing from Run History.");
+              }
+              activeRun.click();
+              let liveRunReady = false;
+              for (let attempt = 0; attempt < 20; attempt += 1) {
+                await wait();
+                const selectedWorkbenchTab = document.querySelector(".workbench-tabs button.selected");
+                liveRunReady =
+                  selectedWorkbenchTab?.textContent?.trim() === "Work & Runs" &&
+                  Boolean(document.querySelector(".live-run-banner")) &&
+                  Boolean(document.querySelector(".utility-drawer.open .terminal-panel"));
+                if (liveRunReady) break;
+              }
+              if (!liveRunReady) {
+                throw new Error(
+                  "Selecting an active Run did not open its live Workbench and CLI: " +
+                    JSON.stringify({
+                      selectedTab: document
+                        .querySelector(".workbench-tabs button.selected")
+                        ?.textContent?.trim(),
+                      liveBanner: Boolean(document.querySelector(".live-run-banner")),
+                      utilityOpen: Boolean(document.querySelector(".utility-drawer.open")),
+                      terminalPanel: Boolean(document.querySelector(".terminal-panel")),
+                      loading: Boolean(document.querySelector(".loading-workspace")),
+                      currentState: document.querySelector(".current-step h2")?.textContent?.trim(),
+                      resultTitle: document.querySelector(".result-banner h2")?.textContent?.trim(),
+                      error: document.querySelector(".error-toast span")?.textContent?.trim(),
+                    }),
+                );
+              }
+              let liveOutputReady = false;
+              for (let attempt = 0; attempt < 20; attempt += 1) {
+                await wait();
+                liveOutputReady = Boolean(
+                  document.querySelector(".utility-drawer.open .terminal-panel")?.textContent?.includes(
+                    "Inspecting the selected Run.",
+                  ),
+                );
+                if (liveOutputReady) break;
+              }
+              if (!liveOutputReady) throw new Error("Selected Run CLI output did not stream live.");
               await click("Agent CLI", true);
               if (!document.querySelector(".interactive-terminal")) {
                 throw new Error("Native Agent terminal did not render.");
@@ -137,7 +216,10 @@ if (!validUrl || outputValue === undefined) {
               return {
                 projectHub: true,
                 projectShell: true,
+                topRightWorkbenchTabs: true,
+                microInteractions: true,
                 files: true,
+                liveRunWorkbench: true,
                 interactivePty: true,
                 workMap: true,
                 worktrees: true,
@@ -150,14 +232,14 @@ if (!validUrl || outputValue === undefined) {
           if (consoleErrors.length > 0) {
             throw new Error(`Renderer console errors: ${consoleErrors.join(" | ")}`);
           }
-          window.setContentSize(1024, 800);
+          window.setContentSize(1100, 720);
           await delay(100);
           const compactLayout = await window.webContents.executeJavaScript(`
             document.documentElement.scrollWidth <= window.innerWidth &&
               Boolean(document.querySelector(".desktop-shell")) &&
               Boolean(document.querySelector(".activity-rail"))
           `);
-          if (!compactLayout) throw new Error("Project-first shell overflowed at 1024px.");
+          if (!compactLayout) throw new Error("Project-first shell overflowed at 1100x720.");
           window.setContentSize(1440, 1024);
           await delay(100);
           await writeFile(outputPath, (await window.webContents.capturePage()).toPNG());

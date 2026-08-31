@@ -699,6 +699,99 @@
   line-height: 1.6;
 }
 
+.live-run-banner {
+  margin-top: 14px;
+  min-height: 68px;
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 13px;
+  align-items: center;
+  background: linear-gradient(105deg, rgb(41 117 83 / 17%), var(--hb-surface) 62%);
+  border: 1px solid rgb(69 161 117 / 38%);
+  border-radius: 9px;
+  box-shadow: inset 3px 0 0 rgb(74 190 130 / 72%);
+}
+
+.live-run-indicator {
+  padding: 6px 9px;
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: #7fdaa9;
+  background: rgb(56 151 103 / 14%);
+  border: 1px solid rgb(75 179 126 / 28%);
+  border-radius: 999px;
+  font-size: 8px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.live-run-pulse {
+  width: 7px;
+  height: 7px;
+  background: #58d091;
+  border-radius: 50%;
+  box-shadow: 0 0 0 0 rgb(88 208 145 / 45%);
+  animation: live-run-pulse 1.8s ease-out infinite;
+}
+
+@keyframes live-run-pulse {
+  70% {
+    box-shadow: 0 0 0 7px rgb(88 208 145 / 0%);
+  }
+
+  100% {
+    box-shadow: 0 0 0 0 rgb(88 208 145 / 0%);
+  }
+}
+
+.live-run-copy {
+  min-width: 0;
+}
+
+.live-run-copy strong,
+.live-run-copy small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-run-copy strong {
+  color: #d7e1dc;
+  font-size: 10px;
+}
+
+.live-run-copy small {
+  margin-top: 4px;
+  color: #6f8078;
+  font-size: 8px;
+}
+
+.live-run-actions {
+  display: flex;
+  gap: 7px;
+}
+
+.live-run-actions button {
+  min-height: 30px;
+  padding: 0 10px;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  color: #aebcb5;
+  background: #11191d;
+  border: 1px solid #2c3a35;
+  border-radius: 6px;
+  font-size: 8px;
+}
+
+.live-run-actions button:hover {
+  color: #d8eee2;
+  border-color: #416753;
+}
 .run-body-grid {
   margin-top: 14px;
   display: grid;
@@ -812,6 +905,25 @@
   font-size: 11px;
 }
 
+.live-event-count {
+  margin-left: 3px;
+  color: #5c8e73;
+  font-size: 8px;
+}
+
+.recent-events.live {
+  border-color: rgb(69 161 117 / 28%);
+}
+
+.empty-live-events {
+  min-height: 42px;
+  margin: 0;
+  display: grid;
+  place-items: center;
+  color: #617069;
+  border-top: 1px solid var(--hb-border-soft);
+  font-size: 8px;
+}
 .recent-events > header button {
   margin-left: auto;
   color: #8f9aa1;

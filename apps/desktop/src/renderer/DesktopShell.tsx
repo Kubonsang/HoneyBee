@@ -35,6 +35,7 @@ interface DesktopShellProps {
   readonly runCount: number;
   readonly activeRunCount: number;
   readonly runtimeVersion?: string | undefined;
+  readonly titlebarActions?: ReactNode;
   readonly children: ReactNode;
   readonly onView: (view: DesktopView) => void;
   readonly onHub: () => void;
@@ -55,6 +56,7 @@ export function DesktopShell({
   runCount,
   activeRunCount,
   runtimeVersion,
+  titlebarActions,
   children,
   onView,
   onHub,
@@ -139,6 +141,9 @@ export function DesktopShell({
             <i className="live-dot" />
             <span>HoneyBee {runtimeVersion ?? "…"}</span>
           </div>
+          {titlebarActions !== undefined && (
+            <div className="shell-titlebar-actions">{titlebarActions}</div>
+          )}
         </header>
         <main className={`shell-content view-${view}`}>{children}</main>
       </section>
