@@ -13,10 +13,13 @@ winner. That does not block the product decision: an AI agent is an operator-con
 the measured wall-time reduction is valuable even when a human remains responsible for direction,
 selection, and final polish.
 
-In this one warm trial, HoneyBee reached the objective compile/test/build/runtime gates in
-**10m 47.50s**. Direct Codex reached its **27m 01.01s** cap without a final response, tests, or a
-README. HoneyBee therefore reached the accepted objective state at least **16m 13.51s earlier**,
-using 60.1% less wall time.
+In this one warm trial, HoneyBee finished implementation in **10m 47.50s** and the resulting
+artifact later compiled, passed 39/39 tests, built, and emitted every required autoplay marker in
+order without a detected managed exception. Direct Codex reached its **27m 01.01s** cap without a
+final response, tests, or a README. HoneyBee therefore produced the more complete measured artifact
+at least **16m 13.51s earlier**, using 60.1% less implementation wall time. Unity buffered the
+Player logs until process close, so the required autoplay completion/reset within 15 seconds was
+not measured and gate 5 remains unverified.
 
 ## What the result does and does not prove
 
@@ -30,16 +33,17 @@ supervision, not automatic quality superiority.
 
 ## Outcome
 
-| Condition                                  | Implementation wall |              Tests | Build/runtime               | Verdict               |
-| ------------------------------------------ | ------------------: | -----------------: | --------------------------- | --------------------- |
-| Controlled multi: 3 builders + final owner |           9m 17.84s | blocked by compile | no build                    | hard fail             |
-| Controlled single through HoneyBee adapter |           5m 38.71s |              41/41 | pass/pass                   | objective pass        |
-| HoneyBee product Apply path                |          10m 47.50s |              39/39 | pass/pass                   | objective pass        |
-| Direct Codex                               |      27m 01.01s cap |                0/0 | pass/pass from capped files | hard fail: incomplete |
+| Condition                                  | Implementation wall |              Tests | Build | Runtime evidence                                      | Acceptance                                  |
+| ------------------------------------------ | ------------------: | -----------------: | ----- | ----------------------------------------------------- | ------------------------------------------- |
+| Controlled multi: 3 builders + final owner |           9m 17.84s | blocked by compile | none  | blocked by compile                                    | hard fail                                   |
+| Controlled single through HoneyBee adapter |           5m 38.71s |              41/41 | pass  | markers ordered, no exception; ≤15s timing unverified | gates 1-4 pass; gate 5 unverified           |
+| HoneyBee product Apply path                |          10m 47.50s |              39/39 | pass  | markers ordered, no exception; ≤15s timing unverified | gates 1-4 pass; gate 5 unverified           |
+| Direct Codex                               |      27m 01.01s cap |                0/0 | pass  | markers ordered, no exception; ≤15s timing unverified | hard fail: test floor and incomplete output |
 
-The direct artifact was externally buildable and its autoplay contract worked, but accepting it as
-complete would erase the explicit 30-test floor and documentation requirement. No condition
-received a harness source correction after its stopping point.
+The direct artifact was externally buildable and its autoplay markers were complete and ordered,
+but accepting it as complete would erase the explicit 30-test floor and documentation requirement.
+The 15-second autoplay limit is unverified for every runnable condition. No condition received a
+harness source correction after its stopping point.
 
 ## Visible artifacts
 

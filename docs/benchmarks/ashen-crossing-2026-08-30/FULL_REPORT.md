@@ -4,7 +4,7 @@ Measured on 2026-08-30 (Asia/Seoul), Windows 11, Unity 6000.3.10f1. This is one 
 
 ## Bottom line
 
-The warm end-to-end HoneyBee path produced a tested and runnable artifact in **10m 47.50s**. The direct single-agent path hit its **27m 01.01s** cap without a final response and without tests or documentation. HoneyBee therefore reached the objective gates at least **16m 13.51s earlier** (60.1% less wall time; at least 2.50x throughput on this trial).
+The warm end-to-end HoneyBee path produced a tested, buildable artifact with ordered runtime markers in **10m 47.50s**. The direct single-agent path hit its **27m 01.01s** cap without a final response and without tests or documentation. HoneyBee therefore produced the more complete measured artifact at least **16m 13.51s earlier** (60.1% less implementation wall time; at least 2.50x throughput on this trial). This is not a claim of full acceptance: the required autoplay completion/reset within 15 seconds was not measured.
 
 That is not evidence that four agents improve quality by themselves. In the topology-controlled comparison, the multi-agent condition took **9m 17.84s** end to end, versus **5m 38.71s** for the same-adapter single owner, and the multi result did not compile. The single result passed 41/41 tests. The controlled result therefore rejects a simple “more agents = better/faster” claim for the current integration design.
 
@@ -23,12 +23,12 @@ The exact prompts are in [`prompts/`](prompts/): Systems owned pure systems/test
 
 ## Timing
 
-| Condition                                | Agent-active wall | End-to-end implementation wall | Outcome at stop                                   |
-| ---------------------------------------- | ----------------: | -----------------------------: | ------------------------------------------------- |
-| Controlled multi: 3 builders + final     |         6m 09.48s |                      9m 17.84s | Hard fail: 3 C# type-contract errors              |
-| Controlled single, same HoneyBee adapter |         5m 18.98s |                      5m 38.71s | 41/41 tests; build and runtime pass               |
-| End-to-end HoneyBee, product Apply only  |         9m 45.22s |                     10m 47.50s | 39/39 tests; build and runtime pass               |
-| End-to-end direct Codex                  |        27m 01.01s |                 27m 01.01s cap | Timed out; build/runtime pass, 0 tests, no README |
+| Condition                                | Agent-active wall | End-to-end implementation wall | Outcome at stop                                                                  |
+| ---------------------------------------- | ----------------: | -----------------------------: | -------------------------------------------------------------------------------- |
+| Controlled multi: 3 builders + final     |         6m 09.48s |                      9m 17.84s | Hard fail: 3 C# type-contract errors                                             |
+| Controlled single, same HoneyBee adapter |         5m 18.98s |                      5m 38.71s | 41/41 tests; build and ordered markers pass; timing unverified                   |
+| End-to-end HoneyBee, product Apply only  |         9m 45.22s |                     10m 47.50s | 39/39 tests; build and ordered markers pass; timing unverified                   |
+| End-to-end direct Codex                  |        27m 01.01s |                 27m 01.01s cap | Timed out; build and ordered markers pass; 0 tests, no README; timing unverified |
 
 “Agent-active wall” sums the monitored generation phases and excludes integration gaps. “End-to-end implementation wall” runs from the first Work/process launch to applied result or forced cap. Prewarming and external validation are excluded from both.
 
@@ -38,14 +38,14 @@ HoneyBee could not register the fresh comparison project: two `addProject` attem
 
 ## Objective acceptance gates
 
-| Condition           | Compile | ≥30 EditMode tests | Win64 build | Normal ready / no managed exception | Ordered autoplay + reset | Objective verdict     |
-| ------------------- | ------: | -----------------: | ----------: | ----------------------------------: | -----------------------: | --------------------- |
-| Controlled multi    |    FAIL |            blocked |        FAIL |                             blocked |                  blocked | Hard fail             |
-| Controlled single   |    pass |              41/41 |        pass |                                pass |                     pass | Pass through gate 5   |
-| End-to-end HoneyBee |    pass |              39/39 |        pass |                                pass |                     pass | Pass through gate 5   |
-| End-to-end direct   |    pass |            **0/0** |        pass |                                pass |                     pass | Hard fail: test floor |
+| Condition           | Compile | ≥30 EditMode tests | Win64 build | Normal ready / no managed exception | Autoplay markers / ≤15s timing | Objective verdict                        |
+| ------------------- | ------: | -----------------: | ----------: | ----------------------------------: | -----------------------------: | ---------------------------------------- |
+| Controlled multi    |    FAIL |            blocked |        FAIL |                             blocked |                        blocked | Hard fail                                |
+| Controlled single   |    pass |              41/41 |        pass |                                pass |              pass / unverified | Gates 1-4 pass; gate 5 unverified        |
+| End-to-end HoneyBee |    pass |              39/39 |        pass |                                pass |              pass / unverified | Gates 1-4 pass; gate 5 unverified        |
+| End-to-end direct   |    pass |            **0/0** |        pass |                                pass |              pass / unverified | Hard fail: test floor; gate 5 unverified |
 
-All three successful Players emitted Ready, five phase markers, Complete, and Reset in the required order, with zero detected managed exceptions. Unity buffered the Player log until process close, so marker ordering is valid but a sub-15-second completion time is not claimed from this run.
+All three runnable Players emitted Ready, five phase markers, Complete, and Reset in the required order, with zero detected managed exceptions. `raw/runtime-summary.json` records `resetAtMs: null` and roughly 25-second harness wall times because Unity buffered the Player log until process close. Marker presence and ordering are valid; completion/reset within 15 seconds is unverified, so no runnable result passes gate 5 on the preserved evidence.
 
 Controlled multi failed with:
 
@@ -56,7 +56,7 @@ No agent or harness source correction was made after the failure.
 
 ## Quality: what the harness can and cannot decide
 
-The objective harness says that controlled single and end-to-end HoneyBee are the only two gate-valid artifacts. Direct produced a visually reviewable, buildable Player at the forced cap, but its missing tests and README are real incompleteness, not a cosmetic penalty. Controlled multi is not reviewable as a Player because it does not compile.
+The objective harness says that controlled single and end-to-end HoneyBee satisfy gates 1-4, while gate 5 remains unverified for both. Direct produced a visually reviewable, buildable Player at the forced cap, but its missing tests and README are real incompleteness, not a cosmetic penalty; its gate 5 timing is also unverified. Controlled multi is not reviewable as a Player because it does not compile. None of the four artifacts is fully gate-valid on the preserved evidence.
 
 The 25-point visual/“MMORPG feel” portion is intentionally not converted into an unblinded model score. Compare the sealed full-resolution captures in [`blind/A.png`](blind/A.png) and [`blind/B.png`](blind/B.png), then record the preferred image and the five rubric fields in [`blind/BALLOT.md`](blind/BALLOT.md). Open [`blind/SEALED_MAP.json`](blind/SEALED_MAP.json) only after choosing.
 
@@ -86,7 +86,7 @@ Line count is not used as a quality measure because some agents emitted highly c
 
 ## Interpretation
 
-1. **Product-level time win:** HoneyBee reached the objective gates much earlier than direct in this one large task.
+1. **Product-level time win:** HoneyBee produced the artifact that later passed compile, tests, build, and ordered-marker checks much earlier than direct in this one large task; full gate 5 acceptance was not established.
 2. **No topology-level quality win:** controlled multi was slower than controlled single and failed compilation.
 3. **Integration is the bottleneck:** product Apply rejected two non-overlapping ownership patches because the source manifest was global. A final owner hid the failure by reimplementation, wasting 313 agent-seconds.
 4. **Memory is the cost:** the four-agent phase traded a much larger memory envelope for wall-clock concurrency.
