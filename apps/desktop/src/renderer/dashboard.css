@@ -1158,6 +1158,144 @@
   color: #cfd6d9;
 }
 
+.terminal-panel {
+  height: 100%;
+  min-height: 210px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #070b0e;
+  border: 1px solid var(--hb-border-soft);
+  border-radius: 7px;
+}
+
+.terminal-panel > header {
+  min-height: 43px;
+  padding: 6px 9px;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: center;
+  background: #0c1216;
+  border-bottom: 1px solid var(--hb-border-soft);
+}
+
+.terminal-title,
+.terminal-title > span,
+.terminal-actions {
+  display: flex;
+  align-items: center;
+}
+
+.terminal-title {
+  min-width: 0;
+  gap: 8px;
+  color: var(--hb-amber);
+}
+
+.terminal-title > span {
+  align-items: baseline;
+  gap: 8px;
+}
+
+.terminal-title strong {
+  color: #e4e9eb;
+  font-size: 10px;
+}
+
+.terminal-title small {
+  color: #68747b;
+  font-size: 8px;
+}
+
+.terminal-state {
+  width: 7px;
+  height: 7px;
+  background: #59646c;
+  border-radius: 50%;
+}
+
+.terminal-state.running {
+  background: var(--hb-green);
+  box-shadow: 0 0 8px rgb(89 211 109 / 55%);
+}
+
+.terminal-state.completed {
+  background: var(--hb-amber);
+}
+
+.terminal-actions {
+  gap: 7px;
+}
+
+.terminal-actions > label {
+  display: inline-flex;
+  gap: 5px;
+  align-items: center;
+  color: #89949a;
+  font-size: 8px;
+}
+
+.terminal-actions .segmented-control button {
+  min-height: 27px;
+  padding: 0 8px;
+  font-size: 8px;
+}
+
+.terminal-actions .secondary {
+  min-height: 29px;
+  padding: 0 9px;
+  font-size: 8px;
+}
+
+.terminal-privacy {
+  margin: 0;
+  padding: 5px 10px;
+  color: #8c969c;
+  background: #0b1115;
+  border-bottom: 1px solid var(--hb-border-soft);
+  font-size: 8px;
+}
+
+.terminal-privacy.warning {
+  color: var(--hb-amber);
+}
+
+.terminal-host {
+  flex: 1;
+  min-height: 0;
+  padding: 6px 8px;
+}
+
+.terminal-host .xterm {
+  height: 100%;
+}
+
+.terminal-window-shell {
+  width: 100vw;
+  height: 100vh;
+  padding: 10px;
+  background: #05090c;
+}
+
+.terminal-window-shell .terminal-panel {
+  min-height: 0;
+}
+
+.terminal-window-error {
+  padding: 12px;
+  color: #ffd8d6;
+  background: #32191a;
+  font-size: 11px;
+}
+
+html:has(.terminal-window-shell),
+body:has(.terminal-window-shell),
+body:has(.terminal-window-shell) #root {
+  min-width: 0;
+  height: 100%;
+}
+
 @media (max-width: 1180px) {
   .result-banner {
     grid-template-columns: 48px 1fr;

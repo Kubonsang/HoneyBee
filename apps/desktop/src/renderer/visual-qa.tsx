@@ -382,6 +382,45 @@ const api: HoneyBeeDesktopApi = {
   cloneRunDraft: unsupported,
   runtimeSnapshot: async () => snapshot,
   runDetail: async () => completedDetail,
+  terminalSnapshot: async (request) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    const cursor = Math.min(2, request.afterCursor + 1);
+    return {
+      schemaVersion: 1,
+      instanceId: "00000000-0000-4000-8000-000000000099",
+      cursor,
+      state: cursor < 2 ? ("running" as const) : ("completed" as const),
+      entries:
+        request.afterCursor === 0
+          ? [
+              {
+                cursor: 1,
+                runId: request.runId,
+                stepId: "unity-agent",
+                timestamp: timestamp(1),
+                channel: "system" as const,
+                mode: request.mode,
+                text: "Inspecting the selected Run.",
+              },
+            ]
+          : request.afterCursor === 1
+            ? [
+                {
+                  cursor: 2,
+                  runId: request.runId,
+                  stepId: "unity-agent",
+                  timestamp: timestamp(2),
+                  channel: "assistant" as const,
+                  mode: request.mode,
+                  text: "Terminal stream ready.",
+                },
+              ]
+            : [],
+      truncated: false,
+      rawAvailable: false,
+    };
+  },
+  openTerminalWindow: async () => true,
   readArtifact: unsupported,
   resumeRun: unsupported,
   cancelRun: unsupported,
@@ -400,6 +439,7 @@ const api: HoneyBeeDesktopApi = {
   developerSettings: async () => ({
     schemaVersion: 1,
     dogfoodMetricsEnabled: false,
+    rawAgentProtocolEnabled: false,
   }),
   updateDeveloperSettings: unsupported,
   dogfoodStatus: async () => ({

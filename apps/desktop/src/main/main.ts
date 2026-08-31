@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { StepIdSchema } from "@honeybee/orchestration-contracts";
 import {
   AgentSessionProcessRunner,
   DesktopWorkScheduler,
@@ -37,6 +38,7 @@ import {
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
   DesktopStartRequestV2Schema,
+  DesktopTerminalSnapshotRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
@@ -47,6 +49,7 @@ import { DesktopAgentManager } from "./agent-manager.js";
 import { DesktopAgentApprovalBroker } from "./agent-approval-broker.js";
 import { DesktopDogfoodController } from "./desktop-dogfood.js";
 import { DesktopSettingsStore } from "./settings.js";
+import { DesktopTerminalBroker } from "./terminal-broker.js";
 import { cloneRunDraftFromConfig } from "./run-draft.js";
 import {
   DesktopSetupCoordinator,
@@ -60,6 +63,7 @@ import {
 } from "./setup.js";
 
 let mainWindow: BrowserWindow | undefined;
+const terminalWindows = new Map<string, BrowserWindow>();
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v1";
 if (smokeMode) app.disableHardwareAcceleration();
@@ -96,11 +100,13 @@ const setup = new DesktopSetupCoordinator(
 const agentManager = new DesktopAgentManager(settings);
 const agentApprovalBroker = new DesktopAgentApprovalBroker();
 const desktopWorkScheduler = new DesktopWorkScheduler(4);
+const terminalBroker = new DesktopTerminalBroker();
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
   agentRunner: new AgentSessionProcessRunner(undefined, {
     scheduler: desktopWorkScheduler,
     approval: agentApprovalBroker,
+    trace: terminalBroker,
   }),
 });
 const dogfood = new DesktopDogfoodController(userData, runtime.info().stateRoot);
@@ -372,6 +378,70 @@ const safeHandler =
       throw new Error(`HoneyBee operation failed (${code}): ${message}`, { cause: error });
     }
   };
+
+type TerminalRunList = Awaited<ReturnType<HoneyBeeRuntimeFacade["listRuns"]>>;
+let terminalRunListCache: { expiresAt: number; runs: TerminalRunList } | undefined;
+let terminalRunListPending: Promise<TerminalRunList> | undefined;
+
+const listTerminalRuns = async (): Promise<TerminalRunList> => {
+  const cached = terminalRunListCache;
+  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.runs;
+  terminalRunListPending ??= runtime.listRuns().then((runs) => {
+    terminalRunListCache = { expiresAt: Date.now() + 500, runs };
+    return runs;
+  });
+  try {
+    return await terminalRunListPending;
+  } finally {
+    terminalRunListPending = undefined;
+  }
+};
+
+const terminalRunContext = async (runId: string) => {
+  const runs = await listTerminalRuns();
+  let selected = runs.find((run) => run.runId === runId);
+  if (selected === undefined) {
+    selected = (await runtime.getRunDetail(runId)).summary;
+  }
+  const targets = [selected, ...runs.filter((run) => run.parentRunId === selected.runId)];
+  for (const target of targets) {
+    if (
+      !target.terminal ||
+      terminalBroker.hasEntries(target.runId) ||
+      terminalBroker.hasReplayed(target.runId)
+    ) {
+      continue;
+    }
+    const detail = await runtime.getRunDetail(target.runId);
+    const transcript = detail.artifacts.find(
+      (artifact) => artifact.kind === "agent-session-transcript",
+    );
+    if (transcript === undefined) {
+      terminalBroker.markReplayAttempted(target.runId);
+      continue;
+    }
+    const view = await runtime.readReferencedArtifact(target.runId, transcript.artifactId);
+    if (view.encoding !== "utf8") {
+      terminalBroker.markReplayAttempted(target.runId);
+      continue;
+    }
+    terminalBroker.replayTranscript(
+      target.runId,
+      target.workId ?? StepIdSchema.parse("agent"),
+      view.content,
+      target.updatedAt ?? new Date().toISOString(),
+    );
+  }
+  const hasEntries = targets.some((target) => terminalBroker.hasEntries(target.runId));
+  return {
+    runIds: targets.map((target) => target.runId),
+    state: targets.some((target) => !target.terminal)
+      ? ("running" as const)
+      : hasEntries
+        ? ("completed" as const)
+        : ("unavailable" as const),
+  };
+};
 
 const registerIpc = (): void => {
   ipcMain.handle(
@@ -984,6 +1054,32 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.terminalSnapshot,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopTerminalSnapshotRequestV1Schema.parse(requestValue);
+      const [context, developer] = await Promise.all([
+        terminalRunContext(request.runId),
+        settings.developerSettings(),
+      ]);
+      return terminalBroker.snapshot({
+        ...context,
+        scopeKey: request.runId,
+        afterCursor: request.afterCursor,
+        mode: request.mode,
+        rawEnabled: developer.rawAgentProtocolEnabled,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.terminalWindowOpen,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopRunRequestV1Schema.parse(requestValue);
+      await runtime.getRunDetail(request.runId);
+      await openTerminalWindow(request.runId);
+      return true;
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.artifactRead,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopArtifactRequestV1Schema.parse(requestValue);
@@ -1020,10 +1116,62 @@ const registerIpc = (): void => {
   );
 };
 
-const createWindow = async (): Promise<void> => {
-  const preload = fileURLToPath(
-    new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url),
+const desktopPreloadPath = (): string =>
+  fileURLToPath(new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url));
+
+const loadRenderer = async (
+  window: BrowserWindow,
+  query: Readonly<Record<string, string>> = {},
+): Promise<void> => {
+  const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
+  if (
+    developmentUrl !== undefined &&
+    /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(developmentUrl)
+  ) {
+    const target = new URL(developmentUrl);
+    for (const [key, value] of Object.entries(query)) target.searchParams.set(key, value);
+    await window.loadURL(target.toString());
+    return;
+  }
+  await window.loadFile(
+    fileURLToPath(new URL(/* @vite-ignore */ "../../renderer/index.html", import.meta.url)),
+    { query: { ...query } },
   );
+};
+
+const openTerminalWindow = async (runId: string): Promise<void> => {
+  const existing = terminalWindows.get(runId);
+  if (existing !== undefined && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show();
+    existing.focus();
+    return;
+  }
+  const terminalWindow = new BrowserWindow({
+    width: 980,
+    height: 640,
+    minWidth: 680,
+    minHeight: 420,
+    backgroundColor: "#070b0e",
+    show: false,
+    title: `HoneyBee Terminal · ${runId.slice(0, 8)}`,
+    ...(mainWindow === undefined ? {} : { parent: mainWindow }),
+    webPreferences: {
+      preload: desktopPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  terminalWindows.set(runId, terminalWindow);
+  terminalWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  terminalWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  terminalWindow.once("ready-to-show", () => terminalWindow.show());
+  terminalWindow.once("closed", () => terminalWindows.delete(runId));
+  await loadRenderer(terminalWindow, { view: "terminal", runId });
+};
+
+const createWindow = async (): Promise<void> => {
   mainWindow = new BrowserWindow({
     width: 1320,
     height: 860,
@@ -1033,7 +1181,7 @@ const createWindow = async (): Promise<void> => {
     show: false,
     title: "HoneyBee",
     webPreferences: {
-      preload,
+      preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1043,17 +1191,7 @@ const createWindow = async (): Promise<void> => {
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
   await writeSmokeStage("window-created");
-  const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
-  if (
-    developmentUrl !== undefined &&
-    /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(developmentUrl)
-  ) {
-    await mainWindow.loadURL(developmentUrl);
-  } else {
-    await mainWindow.loadFile(
-      fileURLToPath(new URL(/* @vite-ignore */ "../../renderer/index.html", import.meta.url)),
-    );
-  }
+  await loadRenderer(mainWindow);
   await writeSmokeStage("renderer-loaded");
   if (smokeMode) {
     try {
@@ -1067,9 +1205,9 @@ const createWindow = async (): Promise<void> => {
         "      if (api !== undefined && ready) {",
         "        const components = await api.components();",
         "        const developerBefore = await api.developerSettings();",
-        "        const developerEnabled = await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true });",
+        "        const developerEnabled = await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true, rawAgentProtocolEnabled: false });",
         "        const dogfood = await api.dogfoodStatus();",
-        "        await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: false });",
+        "        await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: false, rawAgentProtocolEnabled: false });",
         "        resolve({",
         "          componentSchemaVersion: components.schemaVersion,",
         "          developerDefaultOff: developerBefore.dogfoodMetricsEnabled === false,",

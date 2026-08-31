@@ -162,7 +162,12 @@ export class RuntimeProcessContainment {
 }
 
 export { AgentSessionProcessRunner } from "./agent-session-adapters.js";
-export type { AgentApprovalPort } from "./agent-session-adapters.js";
+export type {
+  AgentApprovalPort,
+  AgentSessionTraceChannel,
+  AgentSessionTraceEvent,
+  AgentSessionTraceObserver,
+} from "./agent-session-adapters.js";
 export { DesktopWorkScheduler } from "./desktop-work-scheduler.js";
 export {
   NativeAgentCapacityIndex,

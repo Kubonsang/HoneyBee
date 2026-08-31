@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  ClockCounterClockwise,
   Cube,
   FolderSimple,
   Gear,
@@ -28,11 +29,13 @@ import {
   type DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { AgentManagerView } from "./AgentManagerView.js";
+import { CommandCenter } from "./CommandCenter.js";
 import { DogfoodMetricsPanel } from "./DogfoodMetricsPanel.js";
+import { RawProtocolSettingsPanel } from "./RawProtocolSettingsPanel.js";
 import { SetupCenter } from "./SetupCenter.js";
 import { WorkspaceView, type UtilityTab, type WorkDraft } from "./WorkspaceView.js";
 
-type DesktopView = "workspace" | "projects" | "setup" | "agents" | "settings";
+type DesktopView = "workspace" | "runs" | "projects" | "setup" | "agents" | "settings";
 
 const initialWork = (key = 1): WorkDraft => ({
   key,
@@ -79,6 +82,10 @@ export function App() {
   );
   const [utilityOpen, setUtilityOpen] = useState(false);
   const [utilityTab, setUtilityTab] = useState<UtilityTab>("runs");
+  const [terminalDismissedRuns, setTerminalDismissedRuns] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const lastTerminalRunRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     void window.honeybee
@@ -186,6 +193,21 @@ export function App() {
     const active = snapshot.runs.find((run) => !run.terminal);
     if (active !== undefined) setSelectedRunId(active.runId);
   }, [composing, selectedRunId, snapshot, view]);
+
+  useEffect(() => {
+    const active =
+      selectedRunId !== undefined &&
+      snapshot?.runs.find((run) => run.runId === selectedRunId)?.terminal === false;
+    if (!active || selectedRunId === undefined) {
+      lastTerminalRunRef.current = undefined;
+      return;
+    }
+    if (lastTerminalRunRef.current === selectedRunId) return;
+    lastTerminalRunRef.current = selectedRunId;
+    if (terminalDismissedRuns.has(selectedRunId)) return;
+    setUtilityTab("terminal");
+    setUtilityOpen(true);
+  }, [selectedRunId, snapshot, terminalDismissedRuns]);
 
   useEffect(() => {
     if (selectedRunId === undefined) {
@@ -414,6 +436,13 @@ export function App() {
       setArtifact(undefined);
       setPatch(undefined);
       setComposing(false);
+      setTerminalDismissedRuns((current) => {
+        const next = new Set(current);
+        next.delete(result.runId);
+        return next;
+      });
+      setUtilityTab("terminal");
+      setUtilityOpen(true);
       setView("workspace");
     } catch (reason) {
       setError(readableError(reason));
@@ -573,15 +602,17 @@ export function App() {
   };
 
   const pageTitle =
-    view === "projects"
-      ? "Projects"
-      : view === "setup"
-        ? "Setup Center"
-        : view === "agents"
-          ? "Agents"
-          : view === "settings"
-            ? "Settings"
-            : undefined;
+    view === "runs"
+      ? "Runs"
+      : view === "projects"
+        ? "Projects"
+        : view === "setup"
+          ? "Setup Center"
+          : view === "agents"
+            ? "Agents"
+            : view === "settings"
+              ? "Settings"
+              : undefined;
 
   return (
     <div className="desktop-app">
@@ -622,6 +653,21 @@ export function App() {
         </span>
         <nav className="shell-nav" aria-label="Application views">
           <button
+            className={view === "runs" ? "selected" : ""}
+            onClick={() => {
+              setComposing(false);
+              setUtilityOpen(false);
+              setView("runs");
+            }}
+            disabled={selectedProfile === undefined}
+            title={`${snapshot?.runs.length ?? 0} durable Runs · ${
+              snapshot?.runs.filter((run) => !run.terminal).length ?? 0
+            } active`}
+          >
+            <ClockCounterClockwise size={17} /> Runs
+            <span className="shell-nav-badge">{snapshot?.runs.length ?? 0}</span>
+          </button>
+          <button
             className={view === "projects" ? "selected" : ""}
             onClick={() => setView("projects")}
           >
@@ -654,11 +700,13 @@ export function App() {
             <p>
               {view === "projects"
                 ? "Choose a Unity project or prepare a new managed environment."
-                : view === "setup"
-                  ? "Create and recover a strict local managed Unity environment."
-                  : view === "agents"
-                    ? "Connect and manage AI execution profiles independently of projects."
-                    : "Developer diagnostics and local Desktop preferences."}
+                : view === "runs"
+                  ? "Inspect active and durable Runs, then open any Run for its timeline and review."
+                  : view === "setup"
+                    ? "Create and recover a strict local managed Unity environment."
+                    : view === "agents"
+                      ? "Connect and manage AI execution profiles independently of projects."
+                      : "Developer diagnostics and local Desktop preferences."}
             </p>
           </header>
         )}
@@ -690,7 +738,14 @@ export function App() {
           </section>
         ))}
 
-        {view === "projects" ? (
+        {view === "runs" && selectedProfile !== undefined ? (
+          <CommandCenter
+            snapshot={snapshot}
+            selectedRunId={selectedRunId}
+            historyOnly
+            onSelectRun={selectRun}
+          />
+        ) : view === "projects" ? (
           <section className="projects-home">
             <div className="projects-toolbar">
               <div>
@@ -802,6 +857,10 @@ export function App() {
           />
         ) : view === "settings" ? (
           <div className="settings-layout">
+            <RawProtocolSettingsPanel
+              onError={(message) => setError(message)}
+              onNotice={(message) => setNotice(message)}
+            />
             <DogfoodMetricsPanel
               {...(selectedProfileId === undefined ? {} : { profileId: selectedProfileId })}
               onError={(message) => setError(message)}
@@ -851,7 +910,16 @@ export function App() {
             onReadArtifact={(artifactId) => void readArtifact(artifactId)}
             onPatchControl={(action) => void controlPatch(action)}
             onCloneRun={() => void cloneRun()}
+            onTerminalError={setError}
             onUtility={(tab, open = true) => {
+              if (tab === "terminal" && selectedRunId !== undefined) {
+                setTerminalDismissedRuns((current) => {
+                  const next = new Set(current);
+                  if (open) next.delete(selectedRunId);
+                  else next.add(selectedRunId);
+                  return next;
+                });
+              }
               setUtilityTab(tab);
               setUtilityOpen(open);
             }}

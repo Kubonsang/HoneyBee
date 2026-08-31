@@ -39,6 +39,7 @@ import type {
   DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { buildLineDiff } from "./diff-lines.js";
+import { TerminalPanel } from "./TerminalPanel.js";
 import {
   WORK_STAGES,
   capabilityToggleDisabled,
@@ -60,7 +61,7 @@ export interface WorkDraft {
   readonly unavailableAgent: string | undefined;
 }
 
-export type UtilityTab = "runs" | "pool" | "doctor" | "activity";
+export type UtilityTab = "runs" | "pool" | "doctor" | "terminal" | "activity";
 
 interface WorkspaceViewProps {
   readonly profile: DesktopProjectProfile;
@@ -94,6 +95,7 @@ interface WorkspaceViewProps {
   readonly onPatchControl: (action: PatchActionV1) => void;
   readonly onCloneRun: () => void;
   readonly onUtility: (tab: UtilityTab, open?: boolean) => void;
+  readonly onTerminalError: (message: string) => void;
 }
 
 function StageRail({ detail }: { readonly detail?: RunDetailV1 | undefined }) {
@@ -476,8 +478,18 @@ function PatchReview({
     [patch.patch.artifactId, patch.files],
   );
   const file = patch.files.find((candidate) => candidate.path === selectedPath) ?? patch.files[0];
-  const before = file?.before?.format === "text" ? (file.before.text ?? "") : undefined;
-  const after = file?.after?.format === "text" ? (file.after.text ?? "") : undefined;
+  const before =
+    file?.operation === "add"
+      ? ""
+      : file?.before?.format === "text"
+        ? (file.before.text ?? "")
+        : undefined;
+  const after =
+    file?.operation === "delete"
+      ? ""
+      : file?.after?.format === "text"
+        ? (file.after.text ?? "")
+        : undefined;
 
   return (
     <>
@@ -738,6 +750,7 @@ function UtilityDrawer({
   onReadArtifact,
   onRunDoctor,
   onUtility,
+  onTerminalError,
 }: Pick<
   WorkspaceViewProps,
   | "snapshot"
@@ -750,6 +763,7 @@ function UtilityDrawer({
   | "onReadArtifact"
   | "onRunDoctor"
   | "onUtility"
+  | "onTerminalError"
 > & {
   readonly open: boolean;
   readonly tab: UtilityTab;
@@ -758,6 +772,7 @@ function UtilityDrawer({
     ["runs", <ClockCounterClockwise size={16} key="runs" />, "Runs"],
     ["pool", <Cpu size={16} key="pool" />, "Editor Pool"],
     ["doctor", <Stethoscope size={16} key="doctor" />, "Doctor"],
+    ["terminal", <Code size={16} key="terminal" />, "Live CLI"],
     ["activity", <TerminalWindow size={16} key="activity" />, "Activity"],
   ];
   return (
@@ -768,8 +783,12 @@ function UtilityDrawer({
         aria-expanded={open}
       >
         <CaretDown size={16} />
-        <span>Utilities</span>
-        <small>runs, editor pool, queue, doctor, activity</small>
+        <span>Runs & diagnostics</span>
+        <small>
+          {snapshot === undefined
+            ? "Connecting to durable runtime…"
+            : `${snapshot.runs.length} durable Runs · history, editor pool, live CLI, activity`}
+        </small>
         <span className="status-spacer" />
         <i className="live-dot" />
         <strong>
@@ -909,6 +928,12 @@ function UtilityDrawer({
               )}
             </div>
           )}
+          {tab === "terminal" &&
+            (selectedRunId === undefined ? (
+              <p className="quiet">Select or start a Run to view its Agent session.</p>
+            ) : (
+              <TerminalPanel runId={selectedRunId} onError={onTerminalError} />
+            ))}
           {tab === "activity" && (
             <div className="utility-activity">
               {detail === undefined ? (
@@ -1005,6 +1030,7 @@ export function WorkspaceView(props: WorkspaceViewProps) {
         onReadArtifact={props.onReadArtifact}
         onRunDoctor={props.onRunDoctor}
         onUtility={props.onUtility}
+        onTerminalError={props.onTerminalError}
       />
     </>
   );

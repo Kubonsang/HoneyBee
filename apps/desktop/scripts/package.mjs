@@ -7,7 +7,11 @@ import { packager } from "@electron/packager";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const staging = path.join(appRoot, "dist", "package");
-const output = path.join(appRoot, "release");
+const outputDirectory = process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release";
+if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".") {
+  throw new Error("Packaging output must be one directory inside the Desktop app.");
+}
+const output = path.join(appRoot, outputDirectory);
 const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 const compatibilityManifest = path.join(appRoot, "resources", "component-compatibility-v1.json");
 const nativeAgentHostManifest = path.join(appRoot, "resources", "native-agent-host-v1.json");

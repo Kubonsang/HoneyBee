@@ -143,6 +143,35 @@ class CancellableRunner implements AgentProcessRunner {
   }
 }
 
+class ThrowingDeferredCancellableRunner implements AgentProcessRunner {
+  public started!: () => void;
+  public readonly startedPromise = new Promise<void>((resolve) => {
+    this.started = resolve;
+  });
+
+  public async run(
+    request: Parameters<AgentProcessRunner["run"]>[0],
+    lifecycle: Parameters<AgentProcessRunner["run"]>[1],
+  ): ReturnType<AgentProcessRunner["run"]> {
+    await lifecycle.onStarted(process.pid, { containment: "deferred-v1" });
+    await lifecycle.onRegistered?.(process.pid);
+    this.started();
+    await new Promise<void>((resolve) => {
+      if (request.signal?.aborted === true) resolve();
+      else request.signal?.addEventListener("abort", () => resolve(), { once: true });
+    });
+    await lifecycle.onExited({
+      pid: process.pid,
+      exitCode: null,
+      signal: "SIGTERM",
+      durationMs: 1,
+      stdoutBytes: 0,
+      stderrBytes: 0,
+    });
+    throw new HoneyBeeCoreError("agent.cancelled", "Structured Agent session was cancelled.");
+  }
+}
+
 class PollingErrorControl extends FileRunControl {
   #pendingCalls = 0;
 
@@ -201,6 +230,52 @@ const cancellationConfig = (root: string) => {
 };
 
 describe("UnityWorkTransaction cancellation", () => {
+  it("records a deferred process drain when a structured runner throws after exit", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-deferred-cancel-"));
+    try {
+      const config = cancellationConfig(root);
+      const runId = RunIdSchema.parse(randomUUID());
+      await new FileRunRepository(root).create(runId);
+      const controls = new FileRunControl(root);
+      const journal = new FileOrchestrationJournal(root);
+      const runner = new ThrowingDeferredCancellableRunner();
+      const storage = new RecordingStorage();
+      const bootstrap = new RecordingBootstrap();
+      const transaction = new UnityWorkTransaction(
+        runner,
+        new FileArtifactStore(root),
+        journal,
+        controls,
+        bootstrap,
+        storage,
+        new TestPlayCliAdapter(config.testplay),
+      );
+
+      const execution = transaction.run(runId, "cancel structured session safely", config);
+      await runner.startedPromise;
+      await controls.submit({
+        requestId: EventIdSchema.parse(randomUUID()),
+        runId,
+        action: "cancel",
+        timestamp: new Date().toISOString(),
+      });
+      const result = await execution;
+
+      expect(result.status).toBe("cancelled");
+      expect(storage.releases).toBe(1);
+      expect(bootstrap.released).toBe(true);
+      const replay = await journal.replay(runId);
+      expect(replay.status).toBe("terminal");
+      if (replay.status === "terminal") {
+        expect(replay.events.some((event) => event.type === "process.drain-completed")).toBe(true);
+        expect(replay.events.at(-2)?.type).toBe("workspace.released");
+        expect(replay.events.at(-1)?.type).toBe("workflow.cancelled");
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 10_000);
+
   it("drains the Agent and releases with an independent cleanup path", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-unity-cancel-"));
     try {

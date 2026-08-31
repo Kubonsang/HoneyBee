@@ -15,6 +15,8 @@ import {
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopStartRequestV1Schema,
   DesktopStartRequestV2Schema,
+  DesktopTerminalSnapshotRequestV1Schema,
+  DesktopTerminalSnapshotV1Schema,
   HoneyBeeCompatibilityManifestV1Schema,
 } from "./ipc.js";
 
@@ -93,6 +95,47 @@ describe("Desktop IPC contracts", () => {
         autoStart: true,
       }).success,
     ).toBe(false);
+  });
+
+  it("keeps Live CLI snapshots cursor-based, bounded, and strict", () => {
+    const runId = "00000000-0000-4000-8000-000000000001";
+    expect(
+      DesktopTerminalSnapshotRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        runId,
+        afterCursor: 12,
+        mode: "readable",
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopTerminalSnapshotRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        runId,
+        afterCursor: -1,
+        mode: "stdin",
+      }).success,
+    ).toBe(false);
+    expect(
+      DesktopTerminalSnapshotV1Schema.safeParse({
+        schemaVersion: 1,
+        instanceId: "00000000-0000-4000-8000-000000000002",
+        cursor: 1,
+        state: "running",
+        entries: [
+          {
+            cursor: 1,
+            runId,
+            stepId: "unity-agent",
+            timestamp: new Date(0).toISOString(),
+            channel: "assistant",
+            mode: "readable",
+            text: "Working",
+          },
+        ],
+        truncated: false,
+        rawAvailable: false,
+      }).success,
+    ).toBe(true);
   });
 
   it("keeps cloned Run drafts explicit about unavailable Agents", () => {
@@ -263,12 +306,20 @@ describe("Desktop IPC contracts", () => {
       DesktopDeveloperSettingsV1Schema.safeParse({
         schemaVersion: 1,
         dogfoodMetricsEnabled: true,
+        rawAgentProtocolEnabled: false,
       }).success,
     ).toBe(true);
     expect(
       DesktopDeveloperSettingsV1Schema.safeParse({
         schemaVersion: 1,
         dogfoodMetricsEnabled: true,
+      }).success,
+    ).toBe(false);
+    expect(
+      DesktopDeveloperSettingsV1Schema.safeParse({
+        schemaVersion: 1,
+        dogfoodMetricsEnabled: true,
+        rawAgentProtocolEnabled: false,
         automaticUpload: true,
       }).success,
     ).toBe(false);

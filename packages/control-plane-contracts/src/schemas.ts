@@ -82,7 +82,7 @@ export const RunSummaryV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     runId: RunIdSchema,
-    journalSchemaVersion: z.number().int().min(1).max(5).optional(),
+    journalSchemaVersion: z.number().int().min(1).max(6).optional(),
     mode: z.string().min(1).max(64),
     status: z.string().min(1).max(64),
     phase: z.string().min(1).max(120),

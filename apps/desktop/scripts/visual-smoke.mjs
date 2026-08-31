@@ -64,6 +64,17 @@ if (!validUrl || outputValue === undefined) {
               if (!document.querySelector(".brand-lockup")) {
                 throw new Error("State-driven Desktop shell did not render.");
               }
+              let terminalAutoOpened = false;
+              for (let attempt = 0; attempt < 30; attempt += 1) {
+                await wait();
+                terminalAutoOpened = Boolean(
+                  document.querySelector(".utility-drawer.open .terminal-panel"),
+                );
+                if (terminalAutoOpened) break;
+              }
+              if (!terminalAutoOpened) {
+                throw new Error("Active Run did not auto-open the Live CLI.");
+              }
 
               button("Projects")?.click();
               await wait();
@@ -111,6 +122,8 @@ if (!validUrl || outputValue === undefined) {
               if (!(utility instanceof HTMLButtonElement)) throw new Error("Utility drawer missing.");
               utility.click();
               await wait();
+              button("Runs")?.click();
+              await wait();
               const completed = [...document.querySelectorAll(".utility-run-list button")].find(
                 (item) => item.textContent?.includes("Fix Player Movement Jitter"),
               );
@@ -141,12 +154,29 @@ if (!validUrl || outputValue === undefined) {
                 throw new Error("Selected Run evidence did not render in Activity.");
               }
 
+              button("Live CLI")?.click();
+              let terminalReady = false;
+              for (let attempt = 0; attempt < 30; attempt += 1) {
+                await wait();
+                const rows = document.querySelector(".terminal-panel .xterm-rows");
+                terminalReady =
+                  Boolean(document.querySelector(".terminal-panel")) &&
+                  Boolean(button("Open in window")) &&
+                  (rows?.textContent ?? "").includes("Terminal stream ready.");
+                if (terminalReady) break;
+              }
+              if (!terminalReady) {
+                throw new Error("Delayed Live CLI output or external window action is missing.");
+              }
+
               return {
                 navigation: true,
                 taskInput: true,
                 capabilityToggle: true,
                 patchReview: true,
                 evidenceReview: true,
+                liveCli: true,
+                terminalAutoOpened: true,
               };
             })()
           `);

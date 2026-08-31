@@ -33,7 +33,7 @@ type AgentAdapter = DesktopAgentProfileV1["adapter"];
 
 const sessionDefaults = (provider: DesktopAgentProviderV1, adapter: AgentAdapter) => {
   if (adapter === "codex-app-server-v1") {
-    return { command: "codex", args: "app-server --stdio" };
+    return { command: "codex", args: "--disable plugins app-server --stdio" };
   }
   if (adapter === "opencode-acp-v1") {
     return { command: "opencode", args: "acp" };

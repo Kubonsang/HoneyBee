@@ -788,6 +788,48 @@ export const DesktopRunRequestV1Schema = z
   .strict();
 export type DesktopRunRequestV1 = z.infer<typeof DesktopRunRequestV1Schema>;
 
+export const DesktopTerminalModeV1Schema = z.enum(["readable", "raw"]);
+export type DesktopTerminalModeV1 = z.infer<typeof DesktopTerminalModeV1Schema>;
+
+export const DesktopTerminalSnapshotRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: z.string().uuid(),
+    afterCursor: z.number().int().nonnegative(),
+    mode: DesktopTerminalModeV1Schema,
+  })
+  .strict();
+export type DesktopTerminalSnapshotRequestV1 = z.infer<
+  typeof DesktopTerminalSnapshotRequestV1Schema
+>;
+
+export const DesktopTerminalEntryV1Schema = z
+  .object({
+    cursor: z.number().int().positive(),
+    runId: z.string().uuid(),
+    stepId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u),
+    timestamp: z.string().datetime(),
+    channel: z.enum(["system", "assistant", "tool", "approval", "stderr", "raw"]),
+    mode: DesktopTerminalModeV1Schema,
+    text: z.string().max(16_384),
+    direction: z.enum(["provider", "honeybee"]).optional(),
+  })
+  .strict();
+export type DesktopTerminalEntryV1 = z.infer<typeof DesktopTerminalEntryV1Schema>;
+
+export const DesktopTerminalSnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    instanceId: z.string().uuid(),
+    cursor: z.number().int().nonnegative(),
+    state: z.enum(["running", "completed", "unavailable"]),
+    entries: z.array(DesktopTerminalEntryV1Schema).max(5_000),
+    truncated: z.boolean(),
+    rawAvailable: z.boolean(),
+  })
+  .strict();
+export type DesktopTerminalSnapshotV1 = z.infer<typeof DesktopTerminalSnapshotV1Schema>;
+
 export const DesktopArtifactRequestV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -832,6 +874,7 @@ export const DesktopDeveloperSettingsV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     dogfoodMetricsEnabled: z.boolean(),
+    rawAgentProtocolEnabled: z.boolean(),
   })
   .strict();
 export type DesktopDeveloperSettingsV1 = z.infer<typeof DesktopDeveloperSettingsV1Schema>;
@@ -911,6 +954,8 @@ export const DesktopIpcChannels = {
   cloneRunDraft: "desktop.run.clone-draft.v1",
   runtimeSnapshot: "desktop.runtime.snapshot.v1",
   runDetail: "desktop.run.detail.v1",
+  terminalSnapshot: "desktop.terminal.snapshot.v1",
+  terminalWindowOpen: "desktop.terminal.window.open.v1",
   artifactRead: "desktop.artifact.read.v1",
   runResume: "desktop.run.resume.v1",
   runCancel: "desktop.run.cancel.v1",
@@ -960,6 +1005,8 @@ export interface HoneyBeeDesktopApi {
   cloneRunDraft(request: DesktopCloneRunDraftRequestV1): Promise<DesktopClonedRunDraftV1>;
   runtimeSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopRuntimeSnapshotV1>;
   runDetail(request: DesktopRunRequestV1): Promise<RunDetailV1>;
+  terminalSnapshot(request: DesktopTerminalSnapshotRequestV1): Promise<DesktopTerminalSnapshotV1>;
+  openTerminalWindow(request: DesktopRunRequestV1): Promise<boolean>;
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
   resumeRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
   cancelRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
@@ -1009,6 +1056,8 @@ export const DesktopIpcResponseSchemas = {
   cloneRunDraft: DesktopClonedRunDraftV1Schema,
   runtimeSnapshot: DesktopRuntimeSnapshotV1Schema,
   runDetail: RunDetailV1Schema,
+  terminalSnapshot: DesktopTerminalSnapshotV1Schema,
+  terminalWindowOpen: z.boolean(),
   artifactRead: ArtifactViewV1Schema,
   runResume: RunControlResultV1Schema,
   runCancel: RunControlResultV1Schema,

@@ -5,13 +5,20 @@ import {
   StepIdSchema,
   type AgentProcessLifecycle,
   type AgentProcessRequest,
+  type AgentProcessRunner,
   type AgentSessionLifecycleEventV1,
 } from "@honeybee/core";
 
 import {
   CodexAppServerAdapter,
+  AgentSessionProcessRunner,
   OpenCodeAcpAdapter,
+  codexAgentSessionExecutable,
+  codexAgentSessionEnvironment,
+  codexObservedSkillConfiguration,
+  internalAgentSessionEnvironment,
   type AgentApprovalPort,
+  type AgentSessionTraceEvent,
 } from "./agent-session-adapters.js";
 
 const request = (script: string): AgentProcessRequest => ({
@@ -40,6 +47,91 @@ ${body}
 `;
 
 describe("structured Agent session adapters", () => {
+  it("boots the containment launcher in Node mode from packaged Electron on Windows", () => {
+    expect(
+      internalAgentSessionEnvironment("win32", {
+        SystemRoot: "C:\\Windows",
+        TEMP: "C:\\Temp",
+        HONEYBEE_DO_NOT_LEAK: "secret",
+      }),
+    ).toEqual({
+      SystemRoot: "C:\\Windows",
+      TEMP: "C:\\Temp",
+      ELECTRON_RUN_AS_NODE: "1",
+    });
+  });
+
+  it("uses the approved standalone Codex home and Windows sandbox resources", () => {
+    const trust = {
+      files: [
+        {
+          role: "entrypoint",
+          path: "C:\\Users\\test\\.codex\\packages\\standalone\\releases\\0.146.0-x86_64-pc-windows-msvc\\bin\\codex.exe",
+        },
+      ],
+    };
+    expect(
+      codexAgentSessionExecutable(
+        "win32",
+        trust,
+        "C:\\Users\\test\\AppData\\Local\\Programs\\OpenAI\\Codex\\bin\\codex.exe",
+      ),
+    ).toBe(trust.files[0]?.path);
+    expect(
+      codexAgentSessionEnvironment("win32", trust, {
+        CODEX_HOME: "C:\\Orca\\runtime-home",
+        Path: "C:\\Windows\\System32",
+      }),
+    ).toMatchObject({
+      CODEX_HOME: "C:\\Users\\test\\.codex",
+      Path: "C:\\Users\\test\\.codex\\packages\\standalone\\releases\\0.146.0-x86_64-pc-windows-msvc\\codex-resources;C:\\Windows\\System32",
+    });
+  });
+
+  it("keeps observed Codex skills disabled inside the execution thread", () => {
+    expect(
+      codexObservedSkillConfiguration({
+        data: [
+          {
+            skills: [
+              { path: "C:\\skills\\unity-cli\\SKILL.md", enabled: true },
+              { path: "C:\\skills\\unity-cli\\SKILL.md", enabled: true },
+              { path: "C:\\skills\\ui\\SKILL.md", enabled: true },
+            ],
+          },
+        ],
+      }),
+    ).toEqual({
+      config: [
+        { path: "C:\\skills\\ui\\SKILL.md", enabled: false },
+        { path: "C:\\skills\\unity-cli\\SKILL.md", enabled: false },
+      ],
+    });
+  });
+
+  it("reports framed stdio lifecycle failures without changing execution semantics", async () => {
+    const traces: AgentSessionTraceEvent[] = [];
+    const legacy: AgentProcessRunner = {
+      run: async () => {
+        throw new Error("legacy failed");
+      },
+    };
+    const runner = new AgentSessionProcessRunner(legacy, {
+      trace: {
+        onTrace: (event) => {
+          traces.push(event);
+        },
+      },
+    });
+
+    await expect(
+      runner.run({ ...request(""), adapter: "stdio-framed-v2" }, lifecycle([])),
+    ).rejects.toThrow("legacy failed");
+    expect(traces.map((event) => event.channel)).toEqual(["system", "system"]);
+    expect(traces[0]?.text).toContain("framed stdio");
+    expect(traces[1]?.text).toContain("legacy failed");
+  });
+
   it("times out while provider initialization is pending", async () => {
     const events: AgentSessionLifecycleEventV1[] = [];
     let exited = 0;
@@ -78,6 +170,7 @@ rl.on("line", line => {
 
   it("runs a Codex app-server turn and normalizes its final message", async () => {
     const events: AgentSessionLifecycleEventV1[] = [];
+    const traces: AgentSessionTraceEvent[] = [];
     const script = provider(String.raw`
 rl.on("line", line => {
   const message = JSON.parse(line);
@@ -89,16 +182,61 @@ rl.on("line", line => {
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "HONEYBEE_RESPONSE_BEGIN\\n" } });
     send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "{\\\"schemaVersion\\\":2,\\\"outcome\\\":\\\"completed\\\",\\\"outputs\\\":{\\\"content\\\":{\\\"mediaType\\\":\\\"text/plain; charset=utf-8\\\",\\\"content\\\":\\\"ok\\\"}}}\\nHONEYBEE_RESPONSE_END" } });
     send({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });
+    setInterval(() => undefined, 1000);
   }
 });
 `);
-    const result = await new CodexAppServerAdapter().run(request(script), lifecycle(events), {
+    const result = await new CodexAppServerAdapter({
+      onTrace: (event) => {
+        traces.push(event);
+      },
+    }).run(request(script), lifecycle(events), {
       decide: async () => {
         throw new Error("unexpected approval");
       },
     });
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain("HONEYBEE_RESPONSE_BEGIN");
+    expect(traces.some((event) => event.channel === "assistant")).toBe(true);
+    const threadStart = traces.find(
+      (event) =>
+        event.mode === "raw" &&
+        event.direction === "honeybee" &&
+        event.text.includes('"method":"thread/start"'),
+    );
+    expect(threadStart).toBeDefined();
+    expect(JSON.parse(threadStart?.text ?? "{}")).toMatchObject({
+      params: {
+        config: {
+          features: { plugins: false },
+          model_reasoning_effort: "low",
+        },
+      },
+    });
+    const turnStart = traces.find(
+      (event) =>
+        event.mode === "raw" &&
+        event.direction === "honeybee" &&
+        event.text.includes('"method":"turn/start"'),
+    );
+    expect(turnStart).toBeDefined();
+    expect(JSON.parse(turnStart?.text ?? "{}")).toMatchObject({ params: { effort: "low" } });
+    expect(
+      traces.some(
+        (event) =>
+          event.mode === "raw" &&
+          event.direction === "honeybee" &&
+          event.text.includes('"method":"turn/start"'),
+      ),
+    ).toBe(true);
+    expect(
+      traces.some(
+        (event) =>
+          event.mode === "raw" &&
+          event.direction === "provider" &&
+          event.text.includes("item/agentMessage/delta"),
+      ),
+    ).toBe(true);
     expect(events.map((event) => event.type)).toEqual([
       "session-opened",
       "turn-started",
@@ -106,6 +244,36 @@ rl.on("line", line => {
       "turn-completed",
       "session-closed",
     ]);
+  });
+
+  it("keeps Codex approval requests out of the tool-only trace branch", async () => {
+    const events: AgentSessionLifecycleEventV1[] = [];
+    const script = provider(String.raw`
+rl.on("line", line => {
+  const message = JSON.parse(line);
+  if (message.method === "initialize") send({ jsonrpc: "2.0", id: message.id, result: {} });
+  else if (message.method === "skills/list") send({ jsonrpc: "2.0", id: message.id, result: { data: [] } });
+  else if (message.method === "thread/start") send({ jsonrpc: "2.0", id: message.id, result: { thread: { id: "thread-1" } } });
+  else if (message.method === "turn/start") {
+    send({ jsonrpc: "2.0", id: message.id, result: { turn: { id: "turn-1" } } });
+    send({ jsonrpc: "2.0", id: "approval-1", method: "item/commandExecution/requestApproval", params: { command: "git status" } });
+  } else if (message.id === "approval-1" && message.result?.decision === "accept") {
+    send({ jsonrpc: "2.0", method: "item/agentMessage/delta", params: { delta: "done" } });
+    send({ jsonrpc: "2.0", method: "turn/completed", params: { turn: { status: "completed" } } });
+  }
+});
+`);
+    const result = await new CodexAppServerAdapter().run(request(script), lifecycle(events), {
+      decide: async (value) => ({
+        schemaVersion: 1,
+        approvalId: value.approvalId,
+        decision: "allow-once",
+        source: "user",
+        decidedAt: new Date().toISOString(),
+      }),
+    });
+    expect(result.stdout).toBe("done");
+    expect(events.map((event) => event.type)).toContain("approval-delivered");
   });
 
   it("drains the provider when terminal lifecycle persistence fails", async () => {
@@ -147,6 +315,7 @@ rl.on("line", line => {
 
   it("persists the normalized approval lifecycle before ACP delivery", async () => {
     const events: AgentSessionLifecycleEventV1[] = [];
+    const traces: AgentSessionTraceEvent[] = [];
     const script = provider(String.raw`
 rl.on("line", line => {
   const message = JSON.parse(line);
@@ -170,8 +339,18 @@ rl.on("line", line => {
         decidedAt: new Date().toISOString(),
       }),
     };
-    const result = await new OpenCodeAcpAdapter().run(request(script), lifecycle(events), approval);
+    const result = await new OpenCodeAcpAdapter({
+      onTrace: (event) => {
+        traces.push(event);
+      },
+    }).run(request(script), lifecycle(events), approval);
     expect(result.stdout).toBe("done");
+    expect(
+      traces.filter((event) => event.channel === "approval").map((event) => event.text),
+    ).toEqual(["Agent requests permission to run a command.", "Agent action allowed once."]);
+    expect(traces.some((event) => event.channel === "assistant" && event.text === "done")).toBe(
+      true,
+    );
     const types = events.map((event) => event.type);
     expect(types.indexOf("approval-requested")).toBeLessThan(types.indexOf("approval-resolved"));
     expect(types.indexOf("approval-resolved")).toBeLessThan(types.indexOf("approval-delivered"));

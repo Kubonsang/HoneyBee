@@ -21,6 +21,7 @@ import {
   DesktopProjectAgentPreferenceRequestV1Schema,
   DesktopRunRequestV1Schema,
   DesktopStartRequestV2Schema,
+  DesktopTerminalSnapshotRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
@@ -139,6 +140,20 @@ const api: HoneyBeeDesktopApi = {
     DesktopIpcResponseSchemas.runDetail.parse(
       await ipcRenderer.invoke(
         DesktopIpcChannels.runDetail,
+        DesktopRunRequestV1Schema.parse(request),
+      ),
+    ),
+  terminalSnapshot: async (request) =>
+    DesktopIpcResponseSchemas.terminalSnapshot.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.terminalSnapshot,
+        DesktopTerminalSnapshotRequestV1Schema.parse(request),
+      ),
+    ),
+  openTerminalWindow: async (request) =>
+    DesktopIpcResponseSchemas.terminalWindowOpen.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.terminalWindowOpen,
         DesktopRunRequestV1Schema.parse(request),
       ),
     ),

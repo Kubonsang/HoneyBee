@@ -292,6 +292,9 @@ const internalLauncherEnvironment = (): NodeJS.ProcessEnv => {
     const value = process.env[name];
     if (value !== undefined) environment[name] = value;
   }
+  // In a packaged Desktop process, process.execPath is HoneyBee.exe rather than node.exe.
+  // Electron's documented Node mode lets the same containment launcher work in both hosts.
+  environment.ELECTRON_RUN_AS_NODE = "1";
   return environment;
 };
 
@@ -522,7 +525,16 @@ export const runCommand = (
                 return;
               }
               if (child.exitCode !== null || child.signalCode !== null) {
-                registerResolve();
+                if (termination === "exited") {
+                  registerReject(
+                    new HoneyBeeCoreError(
+                      "agent.spawn-failed",
+                      "The Agent containment launcher exited before registration.",
+                    ),
+                  );
+                } else {
+                  registerResolve();
+                }
                 return;
               }
               if (termination !== "exited") {
@@ -540,7 +552,16 @@ export const runCommand = (
           () =>
             new Promise<void>((writeResolve, writeReject) => {
               if (child.exitCode !== null || child.signalCode !== null) {
-                writeResolve();
+                if (termination === "exited") {
+                  writeReject(
+                    new HoneyBeeCoreError(
+                      "agent.spawn-failed",
+                      "The Agent containment launcher exited before activation.",
+                    ),
+                  );
+                } else {
+                  writeResolve();
+                }
                 return;
               }
               if (termination !== "exited") {
@@ -596,7 +617,12 @@ export const runCommand = (
       clearTimeout(timeout);
       if (forcedTermination !== undefined) clearTimeout(forcedTermination);
       options.signal?.removeEventListener("abort", onAbort);
-      registrationReject?.(new Error("The deferred process exited before registration completed."));
+      registrationReject?.(
+        new HoneyBeeCoreError(
+          "agent.spawn-failed",
+          "The Agent containment launcher exited before registration.",
+        ),
+      );
       outputWaitReject?.(new Error("The deferred process closed before output was drained."));
       activationReject?.(new Error("The deferred process exited before accepting its input."));
       void (async () => {

@@ -15,7 +15,11 @@ const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const packagedExecutable =
   process.argv[2] === undefined ? undefined : path.resolve(appRoot, process.argv[2]);
 if (packagedExecutable !== undefined) {
-  const releaseRoot = path.join(appRoot, "release");
+  const outputDirectory = process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release";
+  if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".") {
+    throw new Error("Packaged smoke output must be one directory inside the Desktop app.");
+  }
+  const releaseRoot = path.join(appRoot, outputDirectory);
   const relative = path.relative(releaseRoot, packagedExecutable);
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Packaged smoke executable escaped the Desktop release directory.");

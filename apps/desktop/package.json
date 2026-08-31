@@ -17,9 +17,11 @@
   },
   "dependencies": {
     "@honeybee/control-plane-contracts": "workspace:*",
-    "@honeybee/orchestration-contracts": "workspace:*",
     "@honeybee/core": "workspace:*",
+    "@honeybee/orchestration-contracts": "workspace:*",
     "@phosphor-icons/react": "2.1.10",
+    "@xterm/addon-fit": "0.10.0",
+    "@xterm/xterm": "5.5.0",
     "honeybee-cli": "workspace:*",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
