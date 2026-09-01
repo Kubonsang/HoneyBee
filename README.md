@@ -1,5 +1,17 @@
 # HoneyBee
 
+HoneyBee 0.7 is a CLI-first Workspace Core for Unity on Windows. It creates full-project
+differencing-VHDX workspaces, registers each one as a real Git worktree, and can open Codex, Claude
+Code, Unity, or a shell in that directory. HoneyBee does not supervise agents or merge and publish
+their work.
+
+```powershell
+honeybee project init C:\Projects\Game --workspace-root D:\HoneyBee-Workspaces
+honeybee cache prepare
+honeybee workspace create combat --branch feature/combat
+honeybee workspace launch combat codex
+```
+
 HoneyBee is a CLI-first orchestration kernel with a local Desktop control plane for durable Agent work and isolated Unity validation.
 
 Version 0.6 assigns durable Editor-pool slots to isolated Unity Work Transactions, binds each owned Editor and Warm Bridge to one exact workspace, and runs config-selected compile/warm-test capabilities under that exclusive slot. The v0.5, v0.4, and v0.3 contracts remain compatible.

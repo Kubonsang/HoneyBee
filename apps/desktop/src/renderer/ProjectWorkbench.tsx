@@ -564,7 +564,6 @@ export function WorkbenchTabs({
     ["files", "Files", <FileCode size={16} />],
     ["agent", "Agent CLI", <Robot size={16} />],
     ["shell", "Shell", <TerminalWindow size={16} />],
-    ["work", "Work & Runs", <Play size={16} />],
   ] as const;
   return (
     <nav className="workbench-tabs" aria-label="Workbench resources">

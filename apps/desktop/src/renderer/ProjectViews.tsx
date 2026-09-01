@@ -10,9 +10,15 @@ import {
   GitCommit,
   GitMerge,
   HardDrives,
+  FolderOpen,
+  Plus,
   Pulse,
+  Robot,
   SpinnerGap,
   Stethoscope,
+  TerminalWindow,
+  Trash,
+  UploadSimple,
   Warning,
 } from "@phosphor-icons/react";
 
@@ -23,6 +29,7 @@ import type {
   DesktopGitSnapshotV1,
   DesktopProjectProfile,
   DesktopRuntimeSnapshotV1,
+  DesktopWorkspaceSnapshotV1,
 } from "../shared/ipc.js";
 
 interface ProjectViewProps {
@@ -123,7 +130,289 @@ export function WorkMapView({ snapshot, onSelectRun, onNewWork }: ProjectViewPro
   );
 }
 
-export function WorktreesView({
+const workspaceBytes = (value: number | undefined): string => {
+  if (value === undefined) return "CoW allocation pending";
+  if (value < 1024 ** 2) return `${Math.max(1, Math.round(value / 1024))} KB allocated`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MB allocated`;
+  return `${(value / 1024 ** 3).toFixed(2)} GB allocated`;
+};
+
+export function WorkspacesView({ profile }: ProjectViewProps) {
+  return (
+    <section className="project-surface workspaces-view">
+      <header className="project-view-heading">
+        <div>
+          <span className="eyebrow">CLI-FIRST WORKSPACE CORE</span>
+          <h1>CoW Workspaces</h1>
+          <p>
+            HoneyBee Desktop no longer creates, supervises, or publishes work. Use the CLI to make a
+            full-project VHDX-backed Git worktree, then open Codex, Claude, Unity, or a shell.
+          </p>
+        </div>
+      </header>
+      <div className="map-empty-state">
+        <TerminalWindow size={42} weight="duotone" />
+        <h2>Workspace Core is CLI-first</h2>
+        <p>{profile.projectPath}</p>
+        <code>
+          honeybee project init &quot;{profile.projectPath}&quot; --workspace-root
+          &quot;D:\HoneyBee-Workspaces&quot;
+        </code>
+        <code>honeybee cache prepare</code>
+        <code>honeybee workspace create tutorial --branch feature/tutorial</code>
+        <code>honeybee workspace launch tutorial codex</code>
+      </div>
+    </section>
+  );
+}
+
+export function LegacyManagedWorkspacesView({ profile, onError, onNotice }: ProjectViewProps) {
+  const [snapshot, setSnapshot] = useState<DesktopWorkspaceSnapshotV1>();
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState<string>();
+
+  const refresh = async (): Promise<void> => {
+    try {
+      setSnapshot(
+        await window.honeybee.workspaceSnapshot({ schemaVersion: 1, profileId: profile.profileId }),
+      );
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Workspace inspection failed.");
+    }
+  };
+
+  useEffect(() => {
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const poll = async (): Promise<void> => {
+      if (!stopped) await refresh();
+      if (!stopped) timer = setTimeout(() => void poll(), 2_000);
+    };
+    void poll();
+    return () => {
+      stopped = true;
+      if (timer !== undefined) clearTimeout(timer);
+    };
+  }, [profile.profileId]);
+
+  const createWorkspace = async (): Promise<void> => {
+    if (label.trim().length === 0) return;
+    setBusy("create");
+    try {
+      await window.honeybee.createWorkspace({
+        schemaVersion: 1,
+        profileId: profile.profileId,
+        label: label.trim(),
+      });
+      setLabel("");
+      await refresh();
+      onNotice?.("CoW Workspace created. Open a tool and work directly inside it.");
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Workspace creation failed.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const openWorkspace = async (
+    workspaceId: string,
+    target: "terminal" | "unity" | "agent" | "explorer",
+  ): Promise<void> => {
+    setBusy(`${workspaceId}:${target}`);
+    try {
+      await window.honeybee.openWorkspace({
+        schemaVersion: 1,
+        profileId: profile.profileId,
+        workspaceId,
+        target,
+      });
+      onNotice?.(`Opened ${target}. HoneyBee will not supervise the process.`);
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : `Could not open ${target}.`);
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const publishWorkspace = async (workspaceId: string, branch: string): Promise<void> => {
+    setBusy(`${workspaceId}:publish`);
+    try {
+      const receipt = await window.honeybee.publishWorkspace({
+        schemaVersion: 1,
+        profileId: profile.profileId,
+        workspaceId,
+        branch,
+      });
+      await refresh();
+      onNotice?.(`Published ${receipt.branch} at ${receipt.commit.slice(0, 8)}.`);
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Workspace publishing failed.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const deleteWorkspace = async (workspaceId: string, workspaceLabel: string): Promise<void> => {
+    if (
+      !window.confirm(`Delete “${workspaceLabel}” and its CoW disk? Published branches remain.`)
+    ) {
+      return;
+    }
+    setBusy(`${workspaceId}:delete`);
+    try {
+      setSnapshot(
+        await window.honeybee.deleteWorkspace({
+          schemaVersion: 1,
+          profileId: profile.profileId,
+          workspaceId,
+        }),
+      );
+      onNotice?.("Workspace and its CoW disk were released and deleted.");
+    } catch (error) {
+      onError?.(error instanceof Error ? error.message : "Workspace deletion failed.");
+    } finally {
+      setBusy(undefined);
+    }
+  };
+
+  const workspaces = snapshot?.workspaces ?? [];
+  return (
+    <section className="project-surface workspaces-view">
+      <header className="project-view-heading">
+        <div>
+          <span className="eyebrow">ISOLATED PROJECT WORK</span>
+          <h1>CoW Workspaces</h1>
+          <p>Create a durable project directory, work with any tool, then publish its commits.</p>
+        </div>
+        <div className="workspace-create-form">
+          <input
+            value={label}
+            maxLength={80}
+            placeholder="Work name"
+            onChange={(event) => setLabel(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") void createWorkspace();
+            }}
+          />
+          <button
+            className="primary"
+            disabled={
+              busy !== undefined || label.trim().length === 0 || snapshot?.supported === false
+            }
+            onClick={() => void createWorkspace()}
+          >
+            {busy === "create" ? (
+              <SpinnerGap className="spin-icon" size={16} />
+            ) : (
+              <Plus size={16} />
+            )}
+            Create Workspace
+          </button>
+        </div>
+      </header>
+      {snapshot?.supported === false && <p className="worktree-message">{snapshot.message}</p>}
+      <div className="workspace-list">
+        {snapshot === undefined ? (
+          <div className="map-empty-state compact">
+            <SpinnerGap className="spin-icon" size={32} />
+            <p>Reading Workspaces…</p>
+          </div>
+        ) : workspaces.length === 0 ? (
+          <div className="map-empty-state">
+            <HardDrives size={42} weight="duotone" />
+            <h2>No CoW Workspaces yet</h2>
+            <p>Name one Work. HoneyBee prepares isolation, then gets out of your way.</p>
+          </div>
+        ) : (
+          workspaces.map((workspace) => (
+            <article
+              className={`workspace-card state-${workspace.publishState}`}
+              key={workspace.workspaceId}
+            >
+              <header>
+                <span className="workspace-drive">
+                  <HardDrives size={22} weight="duotone" />
+                </span>
+                <div>
+                  <small>{workspace.publishState.replaceAll("-", " ").toUpperCase()}</small>
+                  <strong>{workspace.label}</strong>
+                  <code>{workspace.branch}</code>
+                </div>
+                <span className={`status-pill ${workspace.git.state === "clean" ? "ready" : ""}`}>
+                  {workspace.git.state} · {workspace.git.aheadCommits} commit
+                  {workspace.git.aheadCommits === 1 ? "" : "s"}
+                </span>
+              </header>
+              <p title={workspace.workspacePath}>{workspace.workspacePath}</p>
+              <div className="workspace-metadata">
+                <span>{workspaceBytes(workspace.allocatedBytes)}</span>
+                <span>Base {workspace.baseCommit.slice(0, 8)}</span>
+                <span>{workspace.git.changedFiles} changed files</span>
+                {workspace.publishedCommit !== undefined && (
+                  <span>Published {workspace.publishedCommit.slice(0, 8)}</span>
+                )}
+              </div>
+              {workspace.message !== undefined && (
+                <p className="workspace-warning">
+                  <Warning size={15} /> {workspace.message}
+                </p>
+              )}
+              <footer className="workspace-actions">
+                <button
+                  className="secondary"
+                  onClick={() => void openWorkspace(workspace.workspaceId, "terminal")}
+                >
+                  <TerminalWindow size={15} /> Terminal
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void openWorkspace(workspace.workspaceId, "unity")}
+                >
+                  <Cpu size={15} /> Unity
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void openWorkspace(workspace.workspaceId, "agent")}
+                >
+                  <Robot size={15} /> AI Tool
+                </button>
+                <button
+                  className="secondary"
+                  onClick={() => void openWorkspace(workspace.workspaceId, "explorer")}
+                >
+                  <FolderOpen size={15} /> Files
+                </button>
+                <button
+                  className="primary"
+                  disabled={
+                    busy !== undefined ||
+                    workspace.git.state !== "clean" ||
+                    workspace.git.aheadCommits === 0 ||
+                    workspace.publishState === "diverged" ||
+                    workspace.publishState === "blocked"
+                  }
+                  onClick={() => void publishWorkspace(workspace.workspaceId, workspace.branch)}
+                >
+                  <UploadSimple size={15} />{" "}
+                  {workspace.publishState === "never" ? "Publish branch" : "Publish update"}
+                </button>
+                <button
+                  className="icon-button danger"
+                  aria-label={`Delete ${workspace.label}`}
+                  onClick={() => void deleteWorkspace(workspace.workspaceId, workspace.label)}
+                >
+                  <Trash size={15} />
+                </button>
+              </footer>
+            </article>
+          ))
+        )}
+      </div>
+    </section>
+  );
+}
+
+export function LegacyWorktreesView({
   profile,
   snapshot,
   onSelectRun,

@@ -17,6 +17,8 @@ import {
   DesktopStartRequestV2Schema,
   DesktopTerminalSnapshotRequestV1Schema,
   DesktopTerminalSnapshotV1Schema,
+  DesktopWorkspaceCreateRequestV1Schema,
+  DesktopWorkspacePublishRequestV1Schema,
   HoneyBeeCompatibilityManifestV1Schema,
 } from "./ipc.js";
 
@@ -334,6 +336,34 @@ describe("Desktop IPC contracts", () => {
         schemaVersion: 1,
         sessionId,
         evidencePath: "C:\\outside",
+      }).success,
+    ).toBe(false);
+  });
+
+  it("limits Workspace publishing to explicit HoneyBee branches", () => {
+    const profileId = "00000000-0000-4000-8000-000000000001";
+    const workspaceId = "00000000-0000-4000-8000-000000000002";
+    expect(
+      DesktopWorkspaceCreateRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        profileId,
+        label: "Combat tutorial",
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopWorkspacePublishRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        profileId,
+        workspaceId,
+        branch: "honeybee/combat-tutorial",
+      }).success,
+    ).toBe(true);
+    expect(
+      DesktopWorkspacePublishRequestV1Schema.safeParse({
+        schemaVersion: 1,
+        profileId,
+        workspaceId,
+        branch: "main",
       }).success,
     ).toBe(false);
   });

@@ -1,9 +1,9 @@
 {
   "name": "honey-bee",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "CLI-first runtime for handing work between real AI agent processes.",
+  "description": "CLI-first full-project CoW workspaces for Unity, Git, Codex, and Claude Code.",
   "license": "MIT",
   "repository": {
     "type": "git",

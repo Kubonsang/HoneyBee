@@ -6,8 +6,6 @@ import {
   Gear,
   GitBranch,
   Hexagon,
-  MapTrifold,
-  Plus,
   Robot,
   SquaresFour,
   TerminalWindow,
@@ -39,7 +37,6 @@ interface DesktopShellProps {
   readonly children: ReactNode;
   readonly onView: (view: DesktopView) => void;
   readonly onHub: () => void;
-  readonly onNewWork: () => void;
 }
 
 interface RailItem {
@@ -60,18 +57,21 @@ export function DesktopShell({
   children,
   onView,
   onHub,
-  onNewWork,
 }: DesktopShellProps) {
   const hubItems: readonly RailItem[] = [
     { view: "projects", label: "Projects", icon: <FolderSimple size={21} /> },
     { view: "agents", label: "Agents", icon: <Robot size={21} /> },
   ];
   const projectItems: readonly RailItem[] = [
-    { view: "workspace", label: "Workbench", icon: <TerminalWindow size={21} /> },
-    { view: "work-map", label: "Work Map", icon: <MapTrifold size={21} /> },
-    { view: "runs", label: "Runs", icon: <ClockCounterClockwise size={21} />, badge: runCount },
-    { view: "worktrees", label: "Worktrees", icon: <GitBranch size={21} /> },
+    { view: "worktrees", label: "Workspaces", icon: <GitBranch size={21} /> },
+    { view: "workspace", label: "Direct Tools", icon: <TerminalWindow size={21} /> },
     { view: "project", label: "Project", icon: <Wrench size={21} /> },
+    {
+      view: "runs",
+      label: "Legacy Archive",
+      icon: <ClockCounterClockwise size={21} />,
+      badge: runCount,
+    },
   ];
   const items = mode === "project" ? projectItems : hubItems;
 
@@ -107,12 +107,6 @@ export function DesktopShell({
         </nav>
 
         <div className="rail-spacer" />
-        {mode === "project" && (
-          <button className="rail-new-work" onClick={onNewWork} title="New Work">
-            <Plus size={21} weight="bold" />
-            <span>New Work</span>
-          </button>
-        )}
         <button
           className={view === "settings" ? "selected" : ""}
           onClick={() => onView("settings")}

@@ -25,7 +25,7 @@ import { CommandCenter } from "./CommandCenter.js";
 import { DesktopShell, type DesktopShellMode, type DesktopView } from "./DesktopShell.js";
 import { DogfoodMetricsPanel } from "./DogfoodMetricsPanel.js";
 import { DesktopPreferencesPanel } from "./DesktopPreferencesPanel.js";
-import { ProjectOperationsView, WorkMapView, WorktreesView } from "./ProjectViews.js";
+import { ProjectOperationsView, WorkMapView, WorkspacesView } from "./ProjectViews.js";
 import { ProjectWorkbench, WorkbenchTabs, type WorkbenchTab } from "./ProjectWorkbench.js";
 import { RawProtocolSettingsPanel } from "./RawProtocolSettingsPanel.js";
 import { SetupCenter } from "./SetupCenter.js";
@@ -202,7 +202,7 @@ export function App() {
             setPatch(undefined);
             setError(undefined);
             setShellMode(profileId === undefined ? "hub" : "project");
-            setView(profileId === undefined ? "projects" : "workspace");
+            setView(profileId === undefined ? "projects" : "worktrees");
             setNotice("Project setup changed. HoneyBee refreshed the active project profile.");
             return;
           } catch {
@@ -394,9 +394,9 @@ export function App() {
       setEditingProfileId(undefined);
       setSetupProjectPath(undefined);
       setShellMode("project");
-      setView("workspace");
-      setComposing(true);
-      setNotice(`${profile.label} is ready. Run Doctor before the first Work.`);
+      setView("worktrees");
+      setComposing(false);
+      setNotice(`${profile.label} is ready. Create an isolated Workspace when you need one.`);
     } catch (reason) {
       setError(readableError(reason));
     }
@@ -730,7 +730,6 @@ export function App() {
           setShellMode("hub");
           setView("projects");
         }}
-        onNewWork={beginNewWork}
       >
         {pageTitle !== undefined && (
           <header className="section-heading">
@@ -788,7 +787,7 @@ export function App() {
             onNewWork={beginNewWork}
           />
         ) : view === "worktrees" && selectedProfile !== undefined ? (
-          <WorktreesView
+          <WorkspacesView
             profile={selectedProfile}
             snapshot={snapshot}
             doctor={doctor}
@@ -886,7 +885,7 @@ export function App() {
                             } else {
                               activateProfile(profile.profileId);
                               setShellMode("project");
-                              setView("workspace");
+                              setView("worktrees");
                             }
                           }}
                         >

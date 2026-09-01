@@ -33,6 +33,10 @@ import {
   DesktopPtyWriteRequestV1Schema,
   DesktopStartRequestV2Schema,
   DesktopTerminalSnapshotRequestV1Schema,
+  DesktopWorkspaceCreateRequestV1Schema,
+  DesktopWorkspaceOpenRequestV1Schema,
+  DesktopWorkspacePublishRequestV1Schema,
+  DesktopWorkspaceRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
@@ -254,6 +258,41 @@ const api: HoneyBeeDesktopApi = {
       await ipcRenderer.invoke(
         DesktopIpcChannels.gitFinalizeIntegration,
         DesktopGitRunRequestV1Schema.parse(request),
+      ),
+    ),
+  workspaceSnapshot: async (request) =>
+    DesktopIpcResponseSchemas.workspaceSnapshot.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.workspaceSnapshot,
+        DesktopProfileIdRequestV1Schema.parse(request),
+      ),
+    ),
+  createWorkspace: async (request) =>
+    DesktopIpcResponseSchemas.workspaceCreate.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.workspaceCreate,
+        DesktopWorkspaceCreateRequestV1Schema.parse(request),
+      ),
+    ),
+  openWorkspace: async (request) =>
+    DesktopIpcResponseSchemas.workspaceOpen.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.workspaceOpen,
+        DesktopWorkspaceOpenRequestV1Schema.parse(request),
+      ),
+    ),
+  publishWorkspace: async (request) =>
+    DesktopIpcResponseSchemas.workspacePublish.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.workspacePublish,
+        DesktopWorkspacePublishRequestV1Schema.parse(request),
+      ),
+    ),
+  deleteWorkspace: async (request) =>
+    DesktopIpcResponseSchemas.workspaceDelete.parse(
+      await ipcRenderer.invoke(
+        DesktopIpcChannels.workspaceDelete,
+        DesktopWorkspaceRequestV1Schema.parse(request),
       ),
     ),
   readArtifact: async (request) =>

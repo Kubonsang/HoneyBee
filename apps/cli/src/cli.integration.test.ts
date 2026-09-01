@@ -59,6 +59,7 @@ const runCli = (
   new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [cliPath, ...args], {
       cwd,
+      env: { ...process.env, HONEYBEE_ENABLE_LEGACY_RUNS: "1" },
       shell: false,
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -75,6 +76,7 @@ const runCli = (
 const startCli = (args: readonly string[], cwd: string) => {
   const child = spawn(process.execPath, [cliPath, ...args], {
     cwd,
+    env: { ...process.env, HONEYBEE_ENABLE_LEGACY_RUNS: "1" },
     shell: false,
     stdio: ["ignore", "pipe", "pipe"],
   });

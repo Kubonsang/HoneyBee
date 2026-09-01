@@ -1058,6 +1058,112 @@ export const DesktopGitActionResultV1Schema = z
   .strict();
 export type DesktopGitActionResultV1 = z.infer<typeof DesktopGitActionResultV1Schema>;
 
+// Durable user-owned CoW workspaces are independent from legacy Run worktrees.
+export const DesktopWorkspaceRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    workspaceId: z.string().uuid(),
+  })
+  .strict();
+export type DesktopWorkspaceRequestV1 = z.infer<typeof DesktopWorkspaceRequestV1Schema>;
+
+export const DesktopWorkspaceCreateRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    label: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type DesktopWorkspaceCreateRequestV1 = z.infer<typeof DesktopWorkspaceCreateRequestV1Schema>;
+
+export const DesktopWorkspaceOpenRequestV1Schema = DesktopWorkspaceRequestV1Schema.extend({
+  target: z.enum(["terminal", "unity", "agent", "explorer"]),
+}).strict();
+export type DesktopWorkspaceOpenRequestV1 = z.infer<typeof DesktopWorkspaceOpenRequestV1Schema>;
+
+export const DesktopWorkspacePublishRequestV1Schema = DesktopWorkspaceRequestV1Schema.extend({
+  branch: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^honeybee\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u),
+}).strict();
+export type DesktopWorkspacePublishRequestV1 = z.infer<
+  typeof DesktopWorkspacePublishRequestV1Schema
+>;
+
+export const DesktopWorkspaceGitStatusV1Schema = z
+  .object({
+    state: z.enum(["clean", "dirty", "conflict", "unavailable"]),
+    head: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    aheadCommits: z.number().int().nonnegative(),
+    changedFiles: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const DesktopWorkspaceV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    workspaceId: z.string().uuid(),
+    label: z.string().min(1).max(80),
+    workspacePath: z.string().min(1),
+    branch: z.string().min(1).max(255),
+    baseCommit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    snapshotCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    parentId: z.string().min(1).max(128),
+    provider: z.string().min(1).max(64),
+    createdAt: z.string().datetime(),
+    lastOpenedAt: z.string().datetime(),
+    allocatedBytes: z.number().int().nonnegative().optional(),
+    git: DesktopWorkspaceGitStatusV1Schema,
+    publishState: z.enum(["never", "published", "ahead", "diverged", "blocked"]),
+    publishedBranch: z.string().min(1).max(255).optional(),
+    publishedCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    publishedAt: z.string().datetime().optional(),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type DesktopWorkspaceV1 = z.infer<typeof DesktopWorkspaceV1Schema>;
+
+export const DesktopWorkspaceSnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    supported: z.boolean(),
+    workspaces: z.array(DesktopWorkspaceV1Schema).max(128),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type DesktopWorkspaceSnapshotV1 = z.infer<typeof DesktopWorkspaceSnapshotV1Schema>;
+
+export const DesktopWorkspacePublishReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    workspaceId: z.string().uuid(),
+    repositoryRoot: z.string().min(1),
+    branch: z.string().min(1).max(255),
+    commit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    baseCommit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    publishedAt: z.string().datetime(),
+    workspace: DesktopWorkspaceV1Schema,
+  })
+  .strict();
+export type DesktopWorkspacePublishReceiptV1 = z.infer<
+  typeof DesktopWorkspacePublishReceiptV1Schema
+>;
+
 export const DesktopArtifactRequestV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -1209,6 +1315,11 @@ export const DesktopIpcChannels = {
   gitMaterializeRun: "desktop.git.materialize-run.v1",
   gitMergeRun: "desktop.git.merge-run.v1",
   gitFinalizeIntegration: "desktop.git.finalize-integration.v1",
+  workspaceSnapshot: "desktop.workspace.snapshot.v1",
+  workspaceCreate: "desktop.workspace.create.v1",
+  workspaceOpen: "desktop.workspace.open.v1",
+  workspacePublish: "desktop.workspace.publish.v1",
+  workspaceDelete: "desktop.workspace.delete.v1",
   artifactRead: "desktop.artifact.read.v1",
   runResume: "desktop.run.resume.v1",
   runCancel: "desktop.run.cancel.v1",
@@ -1275,6 +1386,13 @@ export interface HoneyBeeDesktopApi {
   materializeRunWorktree(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
   mergeRunWorktree(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
   finalizeIntegration(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
+  workspaceSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopWorkspaceSnapshotV1>;
+  createWorkspace(request: DesktopWorkspaceCreateRequestV1): Promise<DesktopWorkspaceV1>;
+  openWorkspace(request: DesktopWorkspaceOpenRequestV1): Promise<boolean>;
+  publishWorkspace(
+    request: DesktopWorkspacePublishRequestV1,
+  ): Promise<DesktopWorkspacePublishReceiptV1>;
+  deleteWorkspace(request: DesktopWorkspaceRequestV1): Promise<DesktopWorkspaceSnapshotV1>;
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
   resumeRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
   cancelRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
@@ -1341,6 +1459,11 @@ export const DesktopIpcResponseSchemas = {
   gitMaterializeRun: DesktopGitActionResultV1Schema,
   gitMergeRun: DesktopGitActionResultV1Schema,
   gitFinalizeIntegration: DesktopGitActionResultV1Schema,
+  workspaceSnapshot: DesktopWorkspaceSnapshotV1Schema,
+  workspaceCreate: DesktopWorkspaceV1Schema,
+  workspaceOpen: z.boolean(),
+  workspacePublish: DesktopWorkspacePublishReceiptV1Schema,
+  workspaceDelete: DesktopWorkspaceSnapshotV1Schema,
   artifactRead: ArtifactViewV1Schema,
   runResume: RunControlResultV1Schema,
   runCancel: RunControlResultV1Schema,
