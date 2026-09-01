@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted for HoneyBee Workspace Core v0.7.
+Superseded by ADR-031 after the GNF_ decision benchmark.
 
 ## Context
 

@@ -166,7 +166,7 @@ afterEach(async () => {
 });
 
 describe("HoneyBeeWorkspaceCore", () => {
-  it("mounts a full-project child as a real worktree and preserves its branch on removal", async () => {
+  it("mounts a Library-only child in a real Git worktree and preserves its branch on removal", async () => {
     const { source, core, project } = await fixture();
     await writeFile(path.join(source, "Assets", "SourceOnly.cs"), "dirty\n", "utf8");
 
@@ -178,12 +178,23 @@ describe("HoneyBeeWorkspaceCore", () => {
     });
 
     expect(created.available).toBe(true);
+    expect(created.layout).toBe("git-worktree-library-cow-v1");
     expect(created.git).toMatchObject({ branch: "feature/combat", dirty: false });
     expect(
       await import("node:fs/promises").then(({ readFile }) =>
         readFile(path.join(created.workspacePath, "Assets", "Gradient17сg.mat"), "utf8"),
       ),
     ).toBe("unicode path\n");
+    expect(
+      await import("node:fs/promises").then(({ readFile }) =>
+        readFile(path.join(created.workspacePath, "Library", "ArtifactDB"), "utf8"),
+      ),
+    ).toBe("shared-cache\n");
+    await expect(
+      import("node:fs/promises").then(({ access }) =>
+        access(path.join(created.mountPath, "Assets")),
+      ),
+    ).rejects.toBeDefined();
     await expect(
       import("node:fs/promises").then(({ access }) =>
         access(path.join(created.workspacePath, "Assets", "SourceOnly.cs")),

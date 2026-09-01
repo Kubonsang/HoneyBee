@@ -1,0 +1,55 @@
+{
+  "schemaVersion": 1,
+  "decision": "adopt-library-only-cow",
+  "fullProjectStatus": "rejected",
+  "sourceCommit": "8d743466c728828a695500c9c0001d02173bafe8",
+  "decisionRule": {
+    "requiredPrimaryWins": 2,
+    "maximumLossOnThirdMetricPct": 10,
+    "fullProjectPrimaryWins": 1,
+    "passed": false
+  },
+  "primary": {
+    "workspaceCreateMedianMs": {
+      "libraryOnly": 12345.826849999983,
+      "fullProjectNoRewrite": 13770.937799999985,
+      "fullProjectDeltaPct": 11.54,
+      "winner": "library-only"
+    },
+    "eightWorkspaceHostFreeDeltaBytes": {
+      "libraryOnly": 14714949632,
+      "fullProjectNoRewrite": 6140112896,
+      "fullProjectReductionPct": 58.27,
+      "winner": "full-project-no-rewrite"
+    },
+    "unityReadyMedianMs": {
+      "libraryOnly": 61862.1103,
+      "fullProjectNoRewrite": 62864.55040000001,
+      "fullProjectDeltaPct": 1.62,
+      "winner": "library-only"
+    }
+  },
+  "secondary": {
+    "workspaceRemoveMedianMs": {
+      "libraryOnly": 3143.276649999898,
+      "fullProjectNoRewrite": 2328.723050000008,
+      "fullProjectReductionPct": 25.91
+    },
+    "readyChildAllocatedBytes": {
+      "libraryOnly": 30408704,
+      "fullProjectNoRewrite": 617611264
+    },
+    "parentPreparationMs": {
+      "libraryOnly": 69510.395,
+      "fullProject": 80883.6698
+    }
+  },
+  "correctness": {
+    "createSamplesPerMode": 20,
+    "unitySamplesPerMode": 3,
+    "unitySuccessfulSamples": 6,
+    "rebootRepair": "failed-shared-broker-precondition",
+    "rebootFailureCode": "broker.validate-retained-mount.blocks-native-stale-cleanup",
+    "finalBrokerResiduals": 0
+  }
+}

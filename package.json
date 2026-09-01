@@ -3,7 +3,7 @@
   "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "CLI-first full-project CoW workspaces for Unity, Git, Codex, and Claude Code.",
+  "description": "CLI-first Git worktrees with Library-only CoW for Unity, Codex, and Claude Code.",
   "license": "MIT",
   "repository": {
     "type": "git",

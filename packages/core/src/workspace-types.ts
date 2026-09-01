@@ -6,6 +6,7 @@ export type WorkspaceState =
 export type WorkspaceTool = "codex" | "claude" | "unity" | "shell";
 
 export interface ProjectCacheV1 {
+  readonly kind: "library-only-v1";
   readonly parentId: string;
   readonly seedCommit: string;
   readonly preparedAt: string;
@@ -27,6 +28,7 @@ export interface ProjectRecordV1 {
 
 export interface WorkspaceRecordV1 {
   readonly schemaVersion: 1;
+  readonly layout: "git-worktree-library-cow-v1";
   readonly workspaceId: string;
   readonly projectId: string;
   readonly name: string;

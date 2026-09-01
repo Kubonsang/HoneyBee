@@ -1,9 +1,9 @@
 # HoneyBee
 
-HoneyBee 0.7 is a CLI-first Workspace Core for Unity on Windows. It creates full-project
-differencing-VHDX workspaces, registers each one as a real Git worktree, and can open Codex, Claude
-Code, Unity, or a shell in that directory. HoneyBee does not supervise agents or merge and publish
-their work.
+HoneyBee 0.7 is a CLI-first Workspace Core for Unity on Windows. It creates ordinary Git worktrees
+whose generated Unity `Library` directories use differencing VHDX storage, and can open Codex,
+Claude Code, Unity, or a shell in each worktree. HoneyBee does not supervise agents or merge and
+publish their work.
 
 ```powershell
 honeybee project init C:\Projects\Game --workspace-root D:\HoneyBee-Workspaces

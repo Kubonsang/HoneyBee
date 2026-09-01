@@ -1,0 +1,1364 @@
+{
+  "schemaVersion": 1,
+  "redactions": [
+    "Windows user SID replaced with <redacted-user-sid>"
+  ],
+  "phase": "complete-with-repair-failure",
+  "startedAt": "2026-09-01T15:45:42.329Z",
+  "source": {
+    "project": "GNF_",
+    "head": "8d743466c728828a695500c9c0001d02173bafe8",
+    "branch": "codex/cross-pc-checkpoint-20260721",
+    "dirtyEntries": 38
+  },
+  "machine": {
+    "platform": "win32",
+    "osRelease": "10.0.26200",
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor            ",
+    "logicalCpuCount": 32,
+    "totalMemoryBytes": 66124611584,
+    "node": "v24.13.1",
+    "unityEditorVersion": "6000.3.8f1"
+  },
+  "experiment": {
+    "createRuns": 20,
+    "unityRuns": 3,
+    "preflightOnly": false,
+    "parentPreparationProvenance": "same immutable GNF_ parents measured fresh on 2026-09-01",
+    "decisionRule": {
+      "correctness": "Both modes must complete 20/20 creates, Unity ready, remove, and reboot repair.",
+      "primary": [
+        "create median",
+        "8-workspace host free delta",
+        "Unity-ready median"
+      ],
+      "fullProjectPass": "B must win at least two primary metrics and be no more than 10% slower on the third; remove and reboot repair must also be no more than 10% slower."
+    }
+  },
+  "parents": {
+    "schemaVersion": 1,
+    "capturedAt": "2026-09-01",
+    "source": {
+      "project": "GNF_",
+      "commit": "8d743466c728828a695500c9c0001d02173bafe8",
+      "branch": "codex/cross-pc-checkpoint-20260721",
+      "workingTreeDirtyEntries": 38,
+      "trackedFilesPresent": 11474,
+      "trackedBytesPresent": 1541715971,
+      "libraryFiles": 55935,
+      "libraryBytes": 5857516216
+    },
+    "libraryOnly": {
+      "parentId": "c3fc50a91471f74a72c50bf792ac7a746d48c206cc4b8358e0f72bc56b38384b",
+      "createdAt": "2026-09-01T14:03:47.3062828Z",
+      "beginMs": 4634.3802,
+      "seedCopyMs": 53782.9887,
+      "commitMs": 11092.9882,
+      "totalMs": 69510.395,
+      "allocatedBytes": 5836374016
+    },
+    "fullProject": {
+      "parentId": "83547c504783b82b00586b6f89b0f1febc30168e0c7de5876aba5431df9df69b",
+      "createdAt": "2026-09-01T14:09:31.4369655Z",
+      "seedCommit": "8d743466c728828a695500c9c0001d02173bafe8",
+      "totalMs": 80883.6698,
+      "allocatedBytes": 7409238016
+    },
+    "caveat": "Parents were prepared sequentially during integration preflight without flushing the OS cache. These one-shot timings are diagnostic, not statistically comparable performance samples. Allocated byte values were re-read from the immutable broker parent metadata after the measured run."
+  },
+  "parentReuseValidation": {
+    "A": {
+      "value": {
+        "parentId": "c3fc50a91471f74a72c50bf792ac7a746d48c206cc4b8358e0f72bc56b38384b"
+      },
+      "ms": 166.53790000000004
+    },
+    "B": {
+      "value": {
+        "parentId": "83547c504783b82b00586b6f89b0f1febc30168e0c7de5876aba5431df9df69b"
+      },
+      "ms": 167.0702
+    }
+  },
+  "createRemove": [
+    {
+      "mode": "A",
+      "label": "warm",
+      "warmup": true,
+      "createMs": 12082.8595,
+      "removeMs": 3130.0082999999977,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910396,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319100,
+      "hostFreeDeltaBytes": 1598054400,
+      "hostFreeRecoveryBytes": 1589854208,
+      "segments": {
+        "gitWorktreeMs": 6291.8035,
+        "storageAcquireMs": 1992.753999999999,
+        "junctionMs": 0.4817000000002736,
+        "retainAttachMs": 3664.4512000000013,
+        "validationMs": 133.34150000000045
+      }
+    },
+    {
+      "mode": "B",
+      "label": "warm",
+      "warmup": true,
+      "createMs": 13647.190599999998,
+      "removeMs": 2241.4935000000005,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621211648,
+      "hostFreeRecoveryBytes": 618532864
+    },
+    {
+      "mode": "A",
+      "label": "sample-00",
+      "warmup": false,
+      "createMs": 12358.647700000001,
+      "removeMs": 3123.2664000000004,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1600843776,
+      "hostFreeRecoveryBytes": 1589952512,
+      "segments": {
+        "gitWorktreeMs": 6321.382799999999,
+        "storageAcquireMs": 1989.968399999998,
+        "junctionMs": 0.4635000000052969,
+        "retainAttachMs": 3802.533300000003,
+        "validationMs": 244.24399999999878
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-00",
+      "warmup": false,
+      "createMs": 13643.4038,
+      "removeMs": 2280.3728000000046,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621441024,
+      "hostFreeRecoveryBytes": 618475520
+    },
+    {
+      "mode": "B",
+      "label": "sample-01",
+      "warmup": false,
+      "createMs": 13757.276100000003,
+      "removeMs": 2327.9974000000075,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621342720,
+      "hostFreeRecoveryBytes": 618483712
+    },
+    {
+      "mode": "A",
+      "label": "sample-01",
+      "warmup": false,
+      "createMs": 12501.918600000005,
+      "removeMs": 3099.875899999999,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1590726656,
+      "hostFreeRecoveryBytes": 1590484992,
+      "segments": {
+        "gitWorktreeMs": 6342.960099999997,
+        "storageAcquireMs": 1985.114499999996,
+        "junctionMs": 0.3628000000026077,
+        "retainAttachMs": 3799.8744000000006,
+        "validationMs": 373.572800000009
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-02",
+      "warmup": false,
+      "createMs": 12244.178799999994,
+      "removeMs": 3070.7400999999954,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1598107648,
+      "hostFreeRecoveryBytes": 1590013952,
+      "segments": {
+        "gitWorktreeMs": 6393.41350000001,
+        "storageAcquireMs": 1983.3996000000043,
+        "junctionMs": 0.49169999999867287,
+        "retainAttachMs": 3686.807700000005,
+        "validationMs": 180.0356000000029
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-02",
+      "warmup": false,
+      "createMs": 13523.492600000012,
+      "removeMs": 2329.448700000008,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621092864,
+      "hostFreeRecoveryBytes": 652558336
+    },
+    {
+      "mode": "B",
+      "label": "sample-03",
+      "warmup": false,
+      "createMs": 13643.568099999975,
+      "removeMs": 2250.8364,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 616280064,
+      "hostFreeRecoveryBytes": 619192320
+    },
+    {
+      "mode": "A",
+      "label": "sample-03",
+      "warmup": false,
+      "createMs": 12293.104400000011,
+      "removeMs": 3241.2993000000133,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1590804480,
+      "hostFreeRecoveryBytes": 1590636544,
+      "segments": {
+        "gitWorktreeMs": 6360.586900000024,
+        "storageAcquireMs": 2022.9921000000031,
+        "junctionMs": 0.32359999997424893,
+        "retainAttachMs": 3793.505700000009,
+        "validationMs": 115.66049999999814
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-04",
+      "warmup": false,
+      "createMs": 12178.67730000001,
+      "removeMs": 3234.452400000009,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1590427648,
+      "hostFreeRecoveryBytes": 1590476800,
+      "segments": {
+        "gitWorktreeMs": 6215.8642999999865,
+        "storageAcquireMs": 2054.2661999999837,
+        "junctionMs": 0.3176999999850523,
+        "retainAttachMs": 3730.602899999998,
+        "validationMs": 177.59070000000065
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-04",
+      "warmup": false,
+      "createMs": 13749.752700000012,
+      "removeMs": 2323.5233000000007,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621461504,
+      "hostFreeRecoveryBytes": 618606592
+    },
+    {
+      "mode": "B",
+      "label": "sample-05",
+      "warmup": false,
+      "createMs": 13832.166499999992,
+      "removeMs": 2339.047099999996,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 622862336,
+      "hostFreeRecoveryBytes": 618500096
+    },
+    {
+      "mode": "A",
+      "label": "sample-05",
+      "warmup": false,
+      "createMs": 12311.13519999999,
+      "removeMs": 3140.093200000003,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1597739008,
+      "hostFreeRecoveryBytes": 1590063104,
+      "segments": {
+        "gitWorktreeMs": 6215.532799999986,
+        "storageAcquireMs": 2042.8085999999894,
+        "junctionMs": 0.3469000000040978,
+        "retainAttachMs": 3701.6079000000027,
+        "validationMs": 350.7991000000038
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-06",
+      "warmup": false,
+      "createMs": 12245.738799999992,
+      "removeMs": 3188.6805000000168,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1588658176,
+      "hostFreeRecoveryBytes": 1589964800,
+      "segments": {
+        "gitWorktreeMs": 6266.190399999992,
+        "storageAcquireMs": 2034.5134000000253,
+        "junctionMs": 0.3532999999879394,
+        "retainAttachMs": 3837.9783999999927,
+        "validationMs": 106.66140000001178
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-06",
+      "warmup": false,
+      "createMs": 13854.330399999977,
+      "removeMs": 2365.3403000000108,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621301760,
+      "hostFreeRecoveryBytes": 618504192
+    },
+    {
+      "mode": "B",
+      "label": "sample-07",
+      "warmup": false,
+      "createMs": 13760.431199999992,
+      "removeMs": 2329.734699999972,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 623022080,
+      "hostFreeRecoveryBytes": 618508288
+    },
+    {
+      "mode": "A",
+      "label": "sample-07",
+      "warmup": false,
+      "createMs": 12346.343500000017,
+      "removeMs": 3247.0133000000496,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1598160896,
+      "hostFreeRecoveryBytes": 1590448128,
+      "segments": {
+        "gitWorktreeMs": 6253.2696,
+        "storageAcquireMs": 2043.7885999999708,
+        "junctionMs": 0.30560000002151355,
+        "retainAttachMs": 3796.3266000000294,
+        "validationMs": 252.6147999999812
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-08",
+      "warmup": false,
+      "createMs": 12555.502399999998,
+      "removeMs": 3073.237300000037,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1587560448,
+      "hostFreeRecoveryBytes": 1590018048,
+      "segments": {
+        "gitWorktreeMs": 6220.772600000026,
+        "storageAcquireMs": 2070.0120999999926,
+        "junctionMs": 0.38550000003306195,
+        "retainAttachMs": 3861.6884999999893,
+        "validationMs": 402.6011999999755
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-08",
+      "warmup": false,
+      "createMs": 13796.246400000004,
+      "removeMs": 2571.017899999977,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 617648128,
+      "hostFreeRecoveryBytes": 618590208
+    },
+    {
+      "mode": "B",
+      "label": "sample-09",
+      "warmup": false,
+      "createMs": 13803.878899999952,
+      "removeMs": 2406.9042999999947,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621281280,
+      "hostFreeRecoveryBytes": 618807296
+    },
+    {
+      "mode": "A",
+      "label": "sample-09",
+      "warmup": false,
+      "createMs": 12335.030200000037,
+      "removeMs": 3394.350199999986,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1567715328,
+      "hostFreeRecoveryBytes": 1588908032,
+      "segments": {
+        "gitWorktreeMs": 6321.098699999973,
+        "storageAcquireMs": 2050.800900000031,
+        "junctionMs": 0.3558000000193715,
+        "retainAttachMs": 3867.492499999993,
+        "validationMs": 95.2390000000014
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-10",
+      "warmup": false,
+      "createMs": 12353.016300000018,
+      "removeMs": 3132.0083999999915,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1596375040,
+      "hostFreeRecoveryBytes": 1589792768,
+      "segments": {
+        "gitWorktreeMs": 6235.071200000006,
+        "storageAcquireMs": 2047.148600000015,
+        "junctionMs": 0.34729999996488914,
+        "retainAttachMs": 3829.8927999999723,
+        "validationMs": 240.5180999999866
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-10",
+      "warmup": false,
+      "createMs": 13724.197700000019,
+      "removeMs": 2323.038100000005,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 612208640,
+      "hostFreeRecoveryBytes": 617959424
+    },
+    {
+      "mode": "B",
+      "label": "sample-11",
+      "warmup": false,
+      "createMs": 13781.173999999999,
+      "removeMs": 2325.2264999999898,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621568000,
+      "hostFreeRecoveryBytes": 616304640
+    },
+    {
+      "mode": "A",
+      "label": "sample-11",
+      "warmup": false,
+      "createMs": 12488.7598,
+      "removeMs": 3122.3090000000084,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1597632512,
+      "hostFreeRecoveryBytes": 1590018048,
+      "segments": {
+        "gitWorktreeMs": 6245.872700000007,
+        "storageAcquireMs": 2030.1543999999994,
+        "junctionMs": 0.33770000003278255,
+        "retainAttachMs": 3795.265000000014,
+        "validationMs": 417.0887999999686
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-12",
+      "warmup": false,
+      "createMs": 12139.480500000005,
+      "removeMs": 3135.190399999963,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1588654080,
+      "hostFreeRecoveryBytes": 1590546432,
+      "segments": {
+        "gitWorktreeMs": 6171.751600000018,
+        "storageAcquireMs": 2048.1955999999773,
+        "junctionMs": 0.33000000001629815,
+        "retainAttachMs": 3732.3531000000075,
+        "validationMs": 186.81010000000242
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-12",
+      "warmup": false,
+      "createMs": 13849.48609999998,
+      "removeMs": 2366.5496000000276,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621842432,
+      "hostFreeRecoveryBytes": 618520576
+    },
+    {
+      "mode": "B",
+      "label": "sample-13",
+      "warmup": false,
+      "createMs": 13778.732000000018,
+      "removeMs": 2325.4964000000036,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621613056,
+      "hostFreeRecoveryBytes": 618520576
+    },
+    {
+      "mode": "A",
+      "label": "sample-13",
+      "warmup": false,
+      "createMs": 12465.066499999957,
+      "removeMs": 3192.4841000000015,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1597976576,
+      "hostFreeRecoveryBytes": 1589911552,
+      "segments": {
+        "gitWorktreeMs": 6228.99530000001,
+        "storageAcquireMs": 2073.313599999994,
+        "junctionMs": 0.34000000002561137,
+        "retainAttachMs": 3764.639300000039,
+        "validationMs": 397.7375999999931
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-14",
+      "warmup": false,
+      "createMs": 12255.234100000001,
+      "removeMs": 3139.218499999959,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1588240384,
+      "hostFreeRecoveryBytes": 1590063104,
+      "segments": {
+        "gitWorktreeMs": 6230.792499999981,
+        "storageAcquireMs": 2054.748499999987,
+        "junctionMs": 0.37260000000242144,
+        "retainAttachMs": 3767.810700000031,
+        "validationMs": 201.46770000003744
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-14",
+      "warmup": false,
+      "createMs": 13764.812800000014,
+      "removeMs": 2340.4963999999454,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621645824,
+      "hostFreeRecoveryBytes": 618532864
+    },
+    {
+      "mode": "B",
+      "label": "sample-15",
+      "warmup": false,
+      "createMs": 13668.06640000001,
+      "removeMs": 2319.8299000000115,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 622706688,
+      "hostFreeRecoveryBytes": 618561536
+    },
+    {
+      "mode": "A",
+      "label": "sample-15",
+      "warmup": false,
+      "createMs": 12368.328300000052,
+      "removeMs": 3140.1778999998933,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1590910976,
+      "hostFreeRecoveryBytes": 1590480896,
+      "segments": {
+        "gitWorktreeMs": 6246.300799999968,
+        "storageAcquireMs": 2023.187300000107,
+        "junctionMs": 0.33059999998658895,
+        "retainAttachMs": 3803.4118000000017,
+        "validationMs": 295.05690000008326
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-16",
+      "warmup": false,
+      "createMs": 12267.397400000016,
+      "removeMs": 3146.3753999999026,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1531052032,
+      "hostFreeRecoveryBytes": 1590038528,
+      "segments": {
+        "gitWorktreeMs": 6246.84580000001,
+        "storageAcquireMs": 2073.803500000038,
+        "junctionMs": 0.3421000000089407,
+        "retainAttachMs": 3869.103800000041,
+        "validationMs": 77.27080000005662
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-16",
+      "warmup": false,
+      "createMs": 13777.062799999956,
+      "removeMs": 2339.7825000000885,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 624693248,
+      "hostFreeRecoveryBytes": 616935424
+    },
+    {
+      "mode": "B",
+      "label": "sample-17",
+      "warmup": false,
+      "createMs": 13893.123699999996,
+      "removeMs": 2419.5918999999994,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 622972928,
+      "hostFreeRecoveryBytes": 618475520
+    },
+    {
+      "mode": "A",
+      "label": "sample-17",
+      "warmup": false,
+      "createMs": 12345.310199999949,
+      "removeMs": 3160.4704999999376,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1588707328,
+      "hostFreeRecoveryBytes": 1589919744,
+      "segments": {
+        "gitWorktreeMs": 6217.011300000013,
+        "storageAcquireMs": 2002.7532000000356,
+        "junctionMs": 0.33290000003762543,
+        "retainAttachMs": 3866.4949999999953,
+        "validationMs": 258.7013000000734
+      }
+    },
+    {
+      "mode": "A",
+      "label": "sample-18",
+      "warmup": false,
+      "createMs": 12457.231000000029,
+      "removeMs": 3152.0753999999724,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1591992320,
+      "hostFreeRecoveryBytes": 1590505472,
+      "segments": {
+        "gitWorktreeMs": 6211.646700000041,
+        "storageAcquireMs": 2089.8976999999722,
+        "junctionMs": 0.32909999997355044,
+        "retainAttachMs": 3738.813400000101,
+        "validationMs": 416.5254999999888
+      }
+    },
+    {
+      "mode": "B",
+      "label": "sample-18",
+      "warmup": false,
+      "createMs": 13731.953799999901,
+      "removeMs": 2289.0557000000263,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621473792,
+      "hostFreeRecoveryBytes": 618672128
+    },
+    {
+      "mode": "B",
+      "label": "sample-19",
+      "warmup": false,
+      "createMs": 14008.807499999995,
+      "removeMs": 2322.2680999999866,
+      "childAllocatedBytes": 617611264,
+      "hostWorktreeLogicalBytes": 0,
+      "hostWorktreeFiles": 0,
+      "estimatedWorkspaceBytes": 617611264,
+      "hostFreeDeltaBytes": 621334528,
+      "hostFreeRecoveryBytes": 618418176
+    },
+    {
+      "mode": "A",
+      "label": "sample-19",
+      "warmup": false,
+      "createMs": 12442.306400000001,
+      "removeMs": 3188.4172000000253,
+      "childAllocatedBytes": 30408704,
+      "hostWorktreeLogicalBytes": 1541910401,
+      "hostWorktreeFiles": 11479,
+      "estimatedWorkspaceBytes": 1572319105,
+      "hostFreeDeltaBytes": 1610944512,
+      "hostFreeRecoveryBytes": 1589911552,
+      "segments": {
+        "gitWorktreeMs": 6225.283199999947,
+        "storageAcquireMs": 2080.0609000000404,
+        "junctionMs": 0.45570000004954636,
+        "retainAttachMs": 3809.0527,
+        "validationMs": 327.4381000000285
+      }
+    }
+  ],
+  "cumulative": [
+    {
+      "mode": "A",
+      "checkpoints": [
+        {
+          "workspaceCount": 4,
+          "childAllocatedBytes": 121634816,
+          "hostWorktreeLogicalBytes": 6167641596,
+          "hostWorktreeFiles": 45916,
+          "estimatedWorkspaceBytes": 6289276412,
+          "hostFreeDeltaBytes": 6400364544,
+          "brokerStatus": {
+            "activeChildCount": 0,
+            "retainedChildCount": 4
+          }
+        },
+        {
+          "workspaceCount": 8,
+          "childAllocatedBytes": 243269632,
+          "hostWorktreeLogicalBytes": 12335283192,
+          "hostWorktreeFiles": 91832,
+          "estimatedWorkspaceBytes": 12578552824,
+          "hostFreeDeltaBytes": 14714949632,
+          "brokerStatus": {
+            "activeChildCount": 0,
+            "retainedChildCount": 8
+          }
+        }
+      ],
+      "removalMs": [
+        3346.0544000000227,
+        3324.947499999893,
+        3286.5620000000345,
+        3430.7565000000177,
+        3329.1480000000447,
+        3191.2261999999173,
+        3204.5836000000127,
+        3264.204000000027
+      ]
+    },
+    {
+      "mode": "B",
+      "checkpoints": [
+        {
+          "workspaceCount": 4,
+          "childAllocatedBytes": 2470445056,
+          "hostWorktreeLogicalBytes": 0,
+          "hostWorktreeFiles": 0,
+          "estimatedWorkspaceBytes": 2470445056,
+          "hostFreeDeltaBytes": 3660980224,
+          "brokerStatus": {
+            "activeChildCount": 0,
+            "retainedChildCount": 4
+          }
+        },
+        {
+          "workspaceCount": 8,
+          "childAllocatedBytes": 4940890112,
+          "hostWorktreeLogicalBytes": 0,
+          "hostWorktreeFiles": 0,
+          "estimatedWorkspaceBytes": 4940890112,
+          "hostFreeDeltaBytes": 6140112896,
+          "brokerStatus": {
+            "activeChildCount": 0,
+            "retainedChildCount": 8
+          }
+        }
+      ],
+      "removalMs": [
+        2495.338800000027,
+        2471.913499999908,
+        2378.8198000000557,
+        2510.03469999996,
+        2468.031799999997,
+        2357.2361999999266,
+        2374.869900000049,
+        2360.886700000032
+      ]
+    }
+  ],
+  "unityReady": [
+    {
+      "mode": "A",
+      "index": 0,
+      "unityReadyMs": 77456.29909999995,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 1070596096,
+      "logSha256": "f023a88ed1f24d28c4dc8fae89d3cc954b36fec253c6d5524a40ca10549a2c43"
+    },
+    {
+      "mode": "B",
+      "index": 0,
+      "unityReadyMs": 62864.55040000001,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 1624244224,
+      "logSha256": "7623b1b9bf339f0b4b69c94a7ecc2440603886516560cc7c559961230d5b3ebd",
+      "gitCleanup": {
+        "before": "M Packages/packages-lock.json",
+        "after": "",
+        "ms": 190.00759999999718
+      },
+      "removeMs": 3184.6612000000023
+    },
+    {
+      "mode": "B",
+      "index": 1,
+      "unityReadyMs": 62574.48280000001,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 1657798656,
+      "logSha256": "b7f22047c8315abd6c93d8928b64bf76b969c9f26483adaaed660b764344f81f",
+      "gitCleanup": {
+        "before": "M Packages/packages-lock.json",
+        "after": "",
+        "ms": 176.81260000000475
+      },
+      "removeMs": 3237.0129000000015
+    },
+    {
+      "mode": "A",
+      "index": 1,
+      "unityReadyMs": 61862.1103,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 1104150528,
+      "logSha256": "ad01c1f2a22349c1323ffe434b8b6e78fe841d74494d0ac35c0ab08ffffa4f63",
+      "gitCleanup": {
+        "before": "M Packages/packages-lock.json",
+        "after": "",
+        "ms": 189.3299999999872
+      },
+      "removeMs": 3834.8413
+    },
+    {
+      "mode": "A",
+      "index": 2,
+      "unityReadyMs": 61841.267500000016,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 902823936,
+      "logSha256": "ad7856893d6d135cfac903db12612eaf5040946fcaebb46ddef25b78b506126a",
+      "gitCleanup": {
+        "before": "M Packages/packages-lock.json",
+        "after": "",
+        "ms": 172.99729999998817
+      },
+      "removeMs": 3865.8408000000054
+    },
+    {
+      "mode": "B",
+      "index": 2,
+      "unityReadyMs": 63456.14660000004,
+      "exitCode": 0,
+      "successMarker": true,
+      "compilerErrorCount": 0,
+      "trackedStatusAfterUnity": "M Packages/packages-lock.json",
+      "childAllocatedBytesAfterUnity": 1523580928,
+      "logSha256": "8618312d54b94ed92e9e28d77d024cc45744989a169e0f61d0216559c6996d1a",
+      "gitCleanup": {
+        "before": "M Packages/packages-lock.json",
+        "after": "",
+        "ms": 177.46779999998398
+      },
+      "removeMs": 3437.5398000000278
+    }
+  ],
+  "storageBefore": {
+    "provider": "vhdx-differencing",
+    "bootSessionId": "system-process-01dd29f187cfa41f",
+    "parentTTLSeconds": 2592000,
+    "userSid": "<redacted-user-sid>",
+    "parentCount": 5,
+    "activeChildCount": 0,
+    "retainedChildCount": 0,
+    "pendingCount": 0,
+    "quarantineCount": 0,
+    "parentAllocatedBytes": 22284337152,
+    "parentLogicalBytes": 22284337152,
+    "activeChildAllocatedBytes": 0,
+    "activeChildLogicalBytes": 0,
+    "retainedChildAllocatedBytes": 0,
+    "retainedChildLogicalBytes": 0,
+    "quarantineAllocatedBytes": 0,
+    "quarantineLogicalBytes": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false,
+    "capacity": {
+      "quotaBytes": 34359738368,
+      "allocatedBytes": 22284337152,
+      "reclaimableBytes": 0,
+      "hostFreeBytes": 55293476864,
+      "hostFloorBytes": 21474836480,
+      "reserveBytes": 0
+    }
+  },
+  "interruptions": [
+    {
+      "stage": "unity-removal",
+      "mode": "B",
+      "workspace": "unity-b-0",
+      "error": "workspace.dirty",
+      "trackedStatusAfterUnity": " M Packages/packages-lock.json",
+      "statusEvidenceSource": "captured-before-first-resume-attempt",
+      "childAllocatedBytesAfterUnity": 2328887296,
+      "cleanupPreparationMs": 80.56060000000002,
+      "removeMs": 2977.221
+    }
+  ],
+  "summary": {
+    "A": {
+      "createMs": {
+        "count": 20,
+        "median": 12345.826849999983,
+        "min": 12139.480500000005,
+        "max": 12555.502399999998,
+        "mean": 12347.620370000004,
+        "raw": [
+          12358.647700000001,
+          12501.918600000005,
+          12244.178799999994,
+          12293.104400000011,
+          12178.67730000001,
+          12311.13519999999,
+          12245.738799999992,
+          12346.343500000017,
+          12555.502399999998,
+          12335.030200000037,
+          12353.016300000018,
+          12488.7598,
+          12139.480500000005,
+          12465.066499999957,
+          12255.234100000001,
+          12368.328300000052,
+          12267.397400000016,
+          12345.310199999949,
+          12457.231000000029,
+          12442.306400000001
+        ]
+      },
+      "removeMs": {
+        "count": 20,
+        "median": 3143.276649999898,
+        "min": 3070.7400999999954,
+        "max": 3394.350199999986,
+        "mean": 3166.086769999988,
+        "raw": [
+          3123.2664000000004,
+          3099.875899999999,
+          3070.7400999999954,
+          3241.2993000000133,
+          3234.452400000009,
+          3140.093200000003,
+          3188.6805000000168,
+          3247.0133000000496,
+          3073.237300000037,
+          3394.350199999986,
+          3132.0083999999915,
+          3122.3090000000084,
+          3135.190399999963,
+          3192.4841000000015,
+          3139.218499999959,
+          3140.1778999998933,
+          3146.3753999999026,
+          3160.4704999999376,
+          3152.0753999999724,
+          3188.4172000000253
+        ]
+      },
+      "childAllocatedBytes": {
+        "count": 20,
+        "median": 30408704,
+        "min": 30408704,
+        "max": 30408704,
+        "mean": 30408704,
+        "raw": [
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704,
+          30408704
+        ]
+      },
+      "estimatedWorkspaceBytes": {
+        "count": 20,
+        "median": 1572319105,
+        "min": 1572319105,
+        "max": 1572319105,
+        "mean": 1572319105,
+        "raw": [
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105,
+          1572319105
+        ]
+      },
+      "hostFreeDeltaBytes": {
+        "count": 20,
+        "median": 1590857728,
+        "min": 1531052032,
+        "max": 1610944512,
+        "mean": 1589661491.2,
+        "raw": [
+          1600843776,
+          1590726656,
+          1598107648,
+          1590804480,
+          1590427648,
+          1597739008,
+          1588658176,
+          1598160896,
+          1587560448,
+          1567715328,
+          1596375040,
+          1597632512,
+          1588654080,
+          1597976576,
+          1588240384,
+          1590910976,
+          1531052032,
+          1588707328,
+          1591992320,
+          1610944512
+        ]
+      },
+      "unityReadyMs": {
+        "count": 3,
+        "median": 61862.1103,
+        "min": 61841.267500000016,
+        "max": 77456.29909999995,
+        "mean": 67053.22563333332,
+        "raw": [
+          77456.29909999995,
+          61862.1103,
+          61841.267500000016
+        ]
+      }
+    },
+    "B": {
+      "createMs": {
+        "count": 20,
+        "median": 13770.937799999985,
+        "min": 13523.492600000012,
+        "max": 14008.807499999995,
+        "mean": 13767.098174999992,
+        "raw": [
+          13643.4038,
+          13757.276100000003,
+          13523.492600000012,
+          13643.568099999975,
+          13749.752700000012,
+          13832.166499999992,
+          13854.330399999977,
+          13760.431199999992,
+          13796.246400000004,
+          13803.878899999952,
+          13724.197700000019,
+          13781.173999999999,
+          13849.48609999998,
+          13778.732000000018,
+          13764.812800000014,
+          13668.06640000001,
+          13777.062799999956,
+          13893.123699999996,
+          13731.953799999901,
+          14008.807499999995
+        ]
+      },
+      "removeMs": {
+        "count": 20,
+        "median": 2328.723050000008,
+        "min": 2250.8364,
+        "max": 2571.017899999977,
+        "mean": 2344.777900000003,
+        "raw": [
+          2280.3728000000046,
+          2327.9974000000075,
+          2329.448700000008,
+          2250.8364,
+          2323.5233000000007,
+          2339.047099999996,
+          2365.3403000000108,
+          2329.734699999972,
+          2571.017899999977,
+          2406.9042999999947,
+          2323.038100000005,
+          2325.2264999999898,
+          2366.5496000000276,
+          2325.4964000000036,
+          2340.4963999999454,
+          2319.8299000000115,
+          2339.7825000000885,
+          2419.5918999999994,
+          2289.0557000000263,
+          2322.2680999999866
+        ]
+      },
+      "childAllocatedBytes": {
+        "count": 20,
+        "median": 617611264,
+        "min": 617611264,
+        "max": 617611264,
+        "mean": 617611264,
+        "raw": [
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264
+        ]
+      },
+      "estimatedWorkspaceBytes": {
+        "count": 20,
+        "median": 617611264,
+        "min": 617611264,
+        "max": 617611264,
+        "mean": 617611264,
+        "raw": [
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264,
+          617611264
+        ]
+      },
+      "hostFreeDeltaBytes": {
+        "count": 20,
+        "median": 621467648,
+        "min": 612208640,
+        "max": 624693248,
+        "mean": 620989644.8,
+        "raw": [
+          621441024,
+          621342720,
+          621092864,
+          616280064,
+          621461504,
+          622862336,
+          621301760,
+          623022080,
+          617648128,
+          621281280,
+          612208640,
+          621568000,
+          621842432,
+          621613056,
+          621645824,
+          622706688,
+          624693248,
+          622972928,
+          621473792,
+          621334528
+        ]
+      },
+      "unityReadyMs": {
+        "count": 3,
+        "median": 62864.55040000001,
+        "min": 62574.48280000001,
+        "max": 63456.14660000004,
+        "mean": 62965.059933333345,
+        "raw": [
+          62864.55040000001,
+          62574.48280000001,
+          63456.14660000004
+        ]
+      }
+    }
+  },
+  "reboot": {
+    "status": "failed",
+    "code": "broker.validate-retained-mount.blocks-native-stale-cleanup",
+    "bootSessionBefore": "system-process-01dd29f187cfa41f",
+    "bootSessionAfter": "system-process-01dd3a2dd52e448f",
+    "retainedChildrenObserved": 2,
+    "A": {
+      "repair": "failed",
+      "cleanupMs": 5974.5776000000005
+    },
+    "B": {
+      "repair": "not-measured-after-A-failure",
+      "cleanupMs": 4841.7082
+    }
+  },
+  "completedPreRebootAt": "2026-09-01T16:18:51.647Z",
+  "storageAfter": {
+    "provider": "vhdx-differencing",
+    "bootSessionId": "system-process-01dd3a2dd52e448f",
+    "parentTTLSeconds": 2592000,
+    "userSid": "<redacted-user-sid>",
+    "parentCount": 5,
+    "activeChildCount": 0,
+    "retainedChildCount": 0,
+    "pendingCount": 0,
+    "quarantineCount": 0,
+    "parentAllocatedBytes": 22284337152,
+    "parentLogicalBytes": 22284337152,
+    "activeChildAllocatedBytes": 0,
+    "activeChildLogicalBytes": 0,
+    "retainedChildAllocatedBytes": 0,
+    "retainedChildLogicalBytes": 0,
+    "quarantineAllocatedBytes": 0,
+    "quarantineLogicalBytes": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false,
+    "capacity": {
+      "quotaBytes": 34359738368,
+      "allocatedBytes": 22284337152,
+      "reclaimableBytes": 0,
+      "hostFreeBytes": 50271240192,
+      "hostFloorBytes": 21474836480,
+      "reserveBytes": 0
+    }
+  },
+  "completedAt": "2026-09-01T16:36:56.650Z"
+}

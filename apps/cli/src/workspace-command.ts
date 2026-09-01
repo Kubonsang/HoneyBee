@@ -188,7 +188,7 @@ const executeCache = async (args: readonly string[]): Promise<void> => {
     output(
       json
         ? { ok: true, projectId: project.projectId, cache: project.cache }
-        : `Prepared full-project parent ${project.cache?.parentId ?? "unknown"}.`,
+        : `Prepared Library-only parent ${project.cache?.parentId ?? "unknown"}.`,
       json,
     );
     return;

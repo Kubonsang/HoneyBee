@@ -146,7 +146,8 @@ export function WorkspacesView({ profile }: ProjectViewProps) {
           <h1>CoW Workspaces</h1>
           <p>
             HoneyBee Desktop no longer creates, supervises, or publishes work. Use the CLI to make a
-            full-project VHDX-backed Git worktree, then open Codex, Claude, Unity, or a shell.
+            Git worktree with a VHDX-backed Unity Library, then open Codex, Claude, Unity, or a
+            shell.
           </p>
         </div>
       </header>
