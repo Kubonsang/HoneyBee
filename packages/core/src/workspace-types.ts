@@ -90,9 +90,9 @@ export interface WorkspaceStoragePort {
       clientPid: number;
     }>,
   ): Promise<StorageLease>;
-  retain(leaseId: string): Promise<void>;
-  attachRetained(consumerId: string, workspaceId: string): Promise<StorageLease>;
-  removeRetained(consumerId: string): Promise<void>;
+  retain(command: string, leaseId: string): Promise<void>;
+  attachRetained(command: string, consumerId: string, workspaceId: string): Promise<StorageLease>;
+  removeRetained(command: string, consumerId: string): Promise<void>;
 }
 
 export interface WorkspaceToolLauncher {

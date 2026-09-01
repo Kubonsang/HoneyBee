@@ -83,15 +83,19 @@ class FakeStorage implements WorkspaceStoragePort {
     return lease;
   }
 
-  public async retain(_leaseId: string): Promise<void> {}
+  public async retain(_command: string, _leaseId: string): Promise<void> {}
 
-  public async attachRetained(consumerId: string, _workspaceId: string): Promise<StorageLease> {
+  public async attachRetained(
+    _command: string,
+    consumerId: string,
+    _workspaceId: string,
+  ): Promise<StorageLease> {
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) throw new Error("missing retained lease");
     return lease;
   }
 
-  public async removeRetained(consumerId: string): Promise<void> {
+  public async removeRetained(_command: string, consumerId: string): Promise<void> {
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) throw new Error("missing retained lease");
     await rm(lease.workspacePath, { recursive: true, force: true });
@@ -118,6 +122,7 @@ const fixture = async () => {
   await Promise.all([
     writeFile(path.join(source, ".gitignore"), "/Library/\n", "utf8"),
     writeFile(path.join(source, "Assets", "Player.cs"), "class Player {}\n", "utf8"),
+    writeFile(path.join(source, "Assets", "Gradient17сg.mat"), "unicode path\n", "utf8"),
     writeFile(path.join(source, "Packages", "manifest.json"), "{}\n", "utf8"),
     writeFile(
       path.join(source, "ProjectSettings", "ProjectVersion.txt"),
@@ -174,6 +179,11 @@ describe("HoneyBeeWorkspaceCore", () => {
 
     expect(created.available).toBe(true);
     expect(created.git).toMatchObject({ branch: "feature/combat", dirty: false });
+    expect(
+      await import("node:fs/promises").then(({ readFile }) =>
+        readFile(path.join(created.workspacePath, "Assets", "Gradient17сg.mat"), "utf8"),
+      ),
+    ).toBe("unicode path\n");
     await expect(
       import("node:fs/promises").then(({ access }) =>
         access(path.join(created.workspacePath, "Assets", "SourceOnly.cs")),

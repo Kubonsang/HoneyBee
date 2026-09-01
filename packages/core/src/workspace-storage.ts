@@ -1,6 +1,6 @@
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { createConnection } from "node:net";
+import { access, lstat, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -11,8 +11,8 @@ import {
   type WorkspaceToolLauncher,
 } from "./workspace-types.js";
 
-const DEFAULT_PIPE = String.raw`\\.\pipe\unity-workspace-storage-v2`;
 const COMMAND_TIMEOUT_MS = 120_000;
+const WORKSPACE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 type JsonObject = Record<string, unknown>;
 
@@ -69,6 +69,16 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
       },
       (error, stdout, stderr) => {
         if (error !== null) {
+          if (stdout.trim().length > 0) {
+            try {
+              parseResponse(stdout, args.join(" "));
+            } catch (responseError) {
+              if (responseError instanceof WorkspaceCoreError) {
+                reject(responseError);
+                return;
+              }
+            }
+          }
           reject(
             new WorkspaceCoreError(
               "storage.command-failed",
@@ -89,12 +99,6 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
   });
 
 export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
-  readonly #pipeName: string;
-
-  public constructor(pipeName = DEFAULT_PIPE) {
-    this.#pipeName = pipeName;
-  }
-
   public async beginParent(command: string, compatibilityKey: string): Promise<StorageParentBuild> {
     const response = await run(command, [
       "parent",
@@ -162,25 +166,38 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       clientPid: number;
     }>,
   ): Promise<StorageLease> {
+    const workspacePath = await this.#prepareWorkspace(input.workspaceId);
     const requestId = `hb-acquire-${randomUUID()}`;
-    const response = await run(
-      command,
-      ["workspace", "acquire", "--request", "-"],
-      JSON.stringify({
-        schemaVersion: 2,
-        operation: "workspace-acquire",
-        requestId,
-        consumerId: input.consumerId,
-        workspaceId: input.workspaceId,
-        parentId: input.parentId,
-        clientPid: input.clientPid,
-      }),
-    );
-    return this.#lease(response);
+    try {
+      const response = await run(
+        command,
+        ["workspace", "acquire", "--request", "-"],
+        JSON.stringify({
+          schemaVersion: 2,
+          operation: "workspace-acquire",
+          requestId,
+          consumerId: input.consumerId,
+          workspaceId: input.workspaceId,
+          parentId: input.parentId,
+          clientPid: input.clientPid,
+        }),
+      );
+      const lease = this.#lease(response);
+      if (path.resolve(lease.workspacePath).toLowerCase() !== workspacePath.toLowerCase()) {
+        throw new WorkspaceCoreError(
+          "storage.invalid-response",
+          "Workspace broker returned an unexpected workspace path.",
+        );
+      }
+      return lease;
+    } catch (error) {
+      await rm(workspacePath).catch(() => undefined);
+      throw error;
+    }
   }
 
-  public async retain(leaseId: string): Promise<void> {
-    await this.#pipe({
+  public async retain(command: string, leaseId: string): Promise<void> {
+    await this.#control(command, {
       schemaVersion: 2,
       operation: "release",
       requestId: `hb-retain-${randomUUID()}`,
@@ -189,9 +206,13 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     });
   }
 
-  public async attachRetained(consumerId: string, workspaceId: string): Promise<StorageLease> {
+  public async attachRetained(
+    command: string,
+    consumerId: string,
+    workspaceId: string,
+  ): Promise<StorageLease> {
     return this.#lease(
-      await this.#pipe({
+      await this.#control(command, {
         schemaVersion: 2,
         operation: "attach-retained",
         requestId: `hb-attach-${randomUUID()}`,
@@ -201,8 +222,8 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
-  public async removeRetained(consumerId: string): Promise<void> {
-    await this.#pipe({
+  public async removeRetained(command: string, consumerId: string): Promise<void> {
+    await this.#control(command, {
       schemaVersion: 2,
       operation: "remove-retained",
       requestId: `hb-remove-${randomUUID()}`,
@@ -228,48 +249,64 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     };
   }
 
-  #pipe(request: JsonObject): Promise<JsonObject> {
-    return new Promise((resolve, reject) => {
-      const socket = createConnection(this.#pipeName);
-      let received = "";
-      let settled = false;
-      const fail = (error: unknown): void => {
-        if (settled) return;
-        settled = true;
-        socket.destroy();
-        reject(
-          error instanceof WorkspaceCoreError
-            ? error
-            : new WorkspaceCoreError(
-                "storage.broker-unavailable",
-                "Workspace broker unavailable.",
-                {
-                  cause: error,
-                },
-              ),
-        );
-      };
-      socket.setEncoding("utf8");
-      socket.setTimeout(COMMAND_TIMEOUT_MS, () => fail(new Error("Workspace broker timed out.")));
-      socket.once("connect", () => socket.write(`${JSON.stringify(request)}\n`));
-      socket.on("data", (chunk: string) => {
-        received += chunk;
-        const newline = received.indexOf("\n");
-        if (newline < 0 || settled) return;
-        try {
-          const response = parseResponse(received.slice(0, newline), String(request.operation));
-          settled = true;
-          socket.end();
-          resolve(response);
-        } catch (error) {
-          fail(error);
-        }
-      });
-      socket.once("error", fail);
-      socket.once("end", () => {
-        if (!settled) fail(new Error("Workspace broker closed without a response."));
-      });
-    });
+  async #prepareWorkspace(workspaceId: string): Promise<string> {
+    if (!WORKSPACE_ID.test(workspaceId)) {
+      throw new WorkspaceCoreError("storage.invalid-workspace", "Workspace ID is invalid.");
+    }
+    const programData = process.env.ProgramData ?? String.raw`C:\ProgramData`;
+    const receiptPath =
+      process.env.HONEYBEE_WORKSPACE_STORAGE_RECEIPT ??
+      path.join(programData, "UnityWorkspaceStorage", "install-receipt.json");
+    let receipt: JsonObject;
+    try {
+      receipt = object(JSON.parse(await readFile(receiptPath, "utf8")), "install receipt");
+    } catch (error) {
+      throw new WorkspaceCoreError(
+        "storage.install-receipt-invalid",
+        "Workspace broker install receipt could not be read.",
+        { cause: error },
+      );
+    }
+    const workspaceRoot = path.resolve(text(receipt.workspaceRoot, "workspaceRoot"));
+    const rootInfo = await lstat(workspaceRoot).catch(() => undefined);
+    if (rootInfo?.isDirectory() !== true || rootInfo.isSymbolicLink()) {
+      throw new WorkspaceCoreError(
+        "storage.workspace-root-invalid",
+        "Workspace broker root must be a real directory.",
+      );
+    }
+    const workspacePath = path.resolve(workspaceRoot, workspaceId);
+    if (path.dirname(workspacePath).toLowerCase() !== workspaceRoot.toLowerCase()) {
+      throw new WorkspaceCoreError("storage.invalid-workspace", "Workspace ID escaped its root.");
+    }
+    try {
+      await mkdir(workspacePath, { recursive: false });
+    } catch (error) {
+      throw new WorkspaceCoreError(
+        "storage.workspace-exists",
+        "Workspace broker shell already exists.",
+        { cause: error },
+      );
+    }
+    return workspacePath;
+  }
+
+  async #control(command: string, request: JsonObject): Promise<JsonObject> {
+    const explicit = process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL;
+    const controlCommand =
+      explicit === undefined
+        ? path.join(path.dirname(path.resolve(command)), "honeybee-workspace-storage-host.exe")
+        : path.resolve(explicit);
+    try {
+      await access(controlCommand);
+    } catch (error) {
+      throw new WorkspaceCoreError(
+        "storage.control-command-missing",
+        "HoneyBee workspace storage control companion was not found.",
+        { cause: error },
+      );
+    }
+    return run(controlCommand, ["control"], JSON.stringify(request));
   }
 }
 

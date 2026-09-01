@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -71,7 +72,7 @@ func main() {
 
 func execute(args []string) (any, error) {
 	if len(args) == 0 {
-		return nil, errors.New("usage: install|broker-run|version")
+		return nil, errors.New("usage: install|broker-run|control|version")
 	}
 	switch args[0] {
 	case "version":
@@ -84,6 +85,27 @@ func execute(args []string) (any, error) {
 			return nil, errors.New("broker-run requires --service-config")
 		}
 		return nil, workspace.RunWindowsService(*configPath)
+	case "control":
+		if len(args) != 1 {
+			return nil, errors.New("control accepts one JSON request on stdin")
+		}
+		var request workspace.Request
+		decoder := json.NewDecoder(os.Stdin)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&request); err != nil {
+			return nil, fmt.Errorf("decode control request: %w", err)
+		}
+		var trailing any
+		if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+			return nil, errors.New("control request contains trailing JSON")
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		response, callErr := workspace.DefaultClient().Call(ctx, request)
+		if callErr != nil && response.Error == nil {
+			return nil, callErr
+		}
+		return response, nil
 	case "install":
 		flags := flag.NewFlagSet("install", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
