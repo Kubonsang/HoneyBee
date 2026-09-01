@@ -1,0 +1,260 @@
+{
+  "schemaVersion": 1,
+  "redactions": [
+    "Local user-profile absolute paths were replaced with stable labels.",
+    "The Windows user SID was replaced with <redacted>."
+  ],
+  "startedAt": "2026-09-01T14:43:14.214Z",
+  "projectPath": "<local-projects>\\GNF_",
+  "storageCommand": "<honeybee>\\apps\\desktop\\.tools\\win32-x64\\unity-workspace-storage.exe",
+  "workspaceRoot": "<local-app-data>\\HoneyBee\\Workspaces",
+  "benchmarkRoot": "<temporary>\\HoneyBee-GNF-CoW-20260901144314",
+  "runToken": "20260901144314",
+  "measuredRuns": 6,
+  "libraryParentOverride": "c3fc50a91471f74a72c50bf792ac7a746d48c206cc4b8358e0f72bc56b38384b",
+  "fullParentOverride": "83547c504783b82b00586b6f89b0f1febc30168e0c7de5876aba5431df9df69b",
+  "machine": {
+    "platform": "win32",
+    "osRelease": "10.0.26200",
+    "cpu": "AMD Ryzen 9 9950X 16-Core Processor            ",
+    "logicalCpuCount": 32,
+    "totalMemoryBytes": 66124611584,
+    "node": "v24.13.1"
+  },
+  "records": [
+    {
+      "mode": "library-only",
+      "index": -1,
+      "warmup": true,
+      "readyMs": 9583.650399999999,
+      "sourceCopyMs": 7425.6834,
+      "storageAcquireMs": 2157.9473000000016,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "full-project",
+      "index": -1,
+      "warmup": true,
+      "readyMs": 13275.2323,
+      "storageAllocatedBytes": 2215641088,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-warm",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "library-only",
+      "index": 0,
+      "warmup": false,
+      "readyMs": 9147.5081,
+      "sourceCopyMs": 7083.427600000003,
+      "storageAcquireMs": 2064.0662999999986,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "full-project",
+      "index": 0,
+      "warmup": false,
+      "readyMs": 13555.9816,
+      "storageAllocatedBytes": 2211446784,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-0",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "full-project",
+      "index": 1,
+      "warmup": false,
+      "readyMs": 15224.280400000003,
+      "storageAllocatedBytes": 2215641088,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-1",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "library-only",
+      "index": 1,
+      "warmup": false,
+      "readyMs": 9258.520999999993,
+      "sourceCopyMs": 7284.015299999999,
+      "storageAcquireMs": 1974.5,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "library-only",
+      "index": 2,
+      "warmup": false,
+      "readyMs": 9186.291000000012,
+      "sourceCopyMs": 7204.8399999999965,
+      "storageAcquireMs": 1981.4445000000123,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "full-project",
+      "index": 2,
+      "warmup": false,
+      "readyMs": 12982.847999999998,
+      "storageAllocatedBytes": 2179989504,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-2",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "full-project",
+      "index": 3,
+      "warmup": false,
+      "readyMs": 13471.448499999999,
+      "storageAllocatedBytes": 2179989504,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-3",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "library-only",
+      "index": 3,
+      "warmup": false,
+      "readyMs": 9256.011899999983,
+      "sourceCopyMs": 7286.970399999991,
+      "storageAcquireMs": 1969.0167000000074,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "library-only",
+      "index": 4,
+      "warmup": false,
+      "readyMs": 9310.517900000006,
+      "sourceCopyMs": 7353.87579999998,
+      "storageAcquireMs": 1956.632100000017,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    },
+    {
+      "mode": "full-project",
+      "index": 4,
+      "warmup": false,
+      "readyMs": 13371.20080000002,
+      "storageAllocatedBytes": 2179989504,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-4",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "full-project",
+      "index": 5,
+      "warmup": false,
+      "readyMs": 13243.253400000016,
+      "storageAllocatedBytes": 2215641088,
+      "branch": "hb-bench/gnf-cow-20260901144314-full-5",
+      "head": "8d743466c728828a695500c9c0001d02173bafe8"
+    },
+    {
+      "mode": "library-only",
+      "index": 5,
+      "warmup": false,
+      "readyMs": 9227.912799999991,
+      "sourceCopyMs": 7231.175300000003,
+      "storageAcquireMs": 1996.7288000000117,
+      "storageMetrics": null,
+      "storageAllocatedBytes": 37748736
+    }
+  ],
+  "head": "8d743466c728828a695500c9c0001d02173bafe8",
+  "sourceBranch": "codex/cross-pc-checkpoint-20260721",
+  "sourceDirtyEntries": 38,
+  "library": {
+    "files": 55935,
+    "bytes": 5857516216
+  },
+  "storageBefore": {
+    "provider": "vhdx-differencing",
+    "bootSessionId": "system-process-01dd29f187cfa41f",
+    "parentTTLSeconds": 2592000,
+    "userSid": "<redacted>",
+    "parentCount": 5,
+    "activeChildCount": 0,
+    "retainedChildCount": 0,
+    "pendingCount": 0,
+    "quarantineCount": 0,
+    "parentAllocatedBytes": 22284337152,
+    "parentLogicalBytes": 22284337152,
+    "activeChildAllocatedBytes": 0,
+    "activeChildLogicalBytes": 0,
+    "retainedChildAllocatedBytes": 0,
+    "retainedChildLogicalBytes": 0,
+    "quarantineAllocatedBytes": 0,
+    "quarantineLogicalBytes": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false,
+    "capacity": {
+      "quotaBytes": 34359738368,
+      "allocatedBytes": 22284337152,
+      "reclaimableBytes": 0,
+      "hostFreeBytes": 55751434240,
+      "hostFloorBytes": 21474836480,
+      "reserveBytes": 0
+    }
+  },
+  "libraryParent": {
+    "parentId": "c3fc50a91471f74a72c50bf792ac7a746d48c206cc4b8358e0f72bc56b38384b",
+    "allocatedBytes": null,
+    "reused": true,
+    "beginMs": 0,
+    "seedCopyMs": 0,
+    "commitMs": 0,
+    "totalMs": 0
+  },
+  "fullParent": {
+    "parentId": "83547c504783b82b00586b6f89b0f1febc30168e0c7de5876aba5431df9df69b",
+    "allocatedBytes": null,
+    "totalMs": 0,
+    "seedCommit": "8d743466c728828a695500c9c0001d02173bafe8",
+    "reused": true
+  },
+  "summary": {
+    "libraryOnly": {
+      "count": 6,
+      "medianReadyMs": 9241.962349999987,
+      "minReadyMs": 9147.5081,
+      "maxReadyMs": 9310.517900000006,
+      "p95ReadyMs": 9310.517900000006,
+      "medianStorageAllocatedBytes": 37748736
+    },
+    "fullProject": {
+      "count": 6,
+      "medianReadyMs": 13421.32465000001,
+      "minReadyMs": 12982.847999999998,
+      "maxReadyMs": 15224.280400000003,
+      "p95ReadyMs": 15224.280400000003,
+      "medianStorageAllocatedBytes": 2195718144
+    },
+    "medianSpeedup": 0.688602845919533
+  },
+  "storageAfter": {
+    "provider": "vhdx-differencing",
+    "bootSessionId": "system-process-01dd29f187cfa41f",
+    "parentTTLSeconds": 2592000,
+    "userSid": "<redacted>",
+    "parentCount": 5,
+    "activeChildCount": 0,
+    "retainedChildCount": 0,
+    "pendingCount": 0,
+    "quarantineCount": 0,
+    "parentAllocatedBytes": 22284337152,
+    "parentLogicalBytes": 22284337152,
+    "activeChildAllocatedBytes": 0,
+    "activeChildLogicalBytes": 0,
+    "retainedChildAllocatedBytes": 0,
+    "retainedChildLogicalBytes": 0,
+    "quarantineAllocatedBytes": 0,
+    "quarantineLogicalBytes": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false,
+    "capacity": {
+      "quotaBytes": 34359738368,
+      "allocatedBytes": 22284337152,
+      "reclaimableBytes": 0,
+      "hostFreeBytes": 54201430016,
+      "hostFloorBytes": 21474836480,
+      "reserveBytes": 0
+    }
+  },
+  "completedAt": "2026-09-01T14:46:43.325Z"
+}
