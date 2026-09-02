@@ -1,0 +1,26 @@
+[
+  {
+    "condition": "controlled-single",
+    "captured": true,
+    "width": 1296,
+    "height": 759,
+    "path": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\evidence\\controlled-single.png",
+    "pngBytes": 128278
+  },
+  {
+    "condition": "e2e-honeybee",
+    "captured": true,
+    "width": 1296,
+    "height": 759,
+    "path": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\evidence\\e2e-honeybee.png",
+    "pngBytes": 114131
+  },
+  {
+    "condition": "e2e-direct",
+    "captured": true,
+    "width": 1296,
+    "height": 759,
+    "path": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\evidence\\e2e-direct.png",
+    "pngBytes": 98449
+  }
+]

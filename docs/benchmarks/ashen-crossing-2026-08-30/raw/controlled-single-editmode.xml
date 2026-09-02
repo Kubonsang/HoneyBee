@@ -1,0 +1,294 @@
+<?xml version="1.0" encoding="utf-8"?>
+<test-run id="2" testcasecount="41" result="Passed" total="41" passed="41" failed="0" inconclusive="0" skipped="0" asserts="0" engine-version="3.5.0.0" clr-version="4.0.30319.42000" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.0443438">
+  <test-suite type="TestSuite" id="1000" name="test" fullname="test" runstate="Runnable" testcasecount="41" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.044344" total="41" passed="41" failed="0" inconclusive="0" skipped="0" asserts="0">
+    <properties>
+      <property name="platform" value="EditMode" />
+    </properties>
+    <test-suite type="Assembly" id="1047" name="Assembly-CSharp-Editor.dll" fullname="C:/tmp/HoneyBee-Ashen-Crossing-Comparison-V2-20260830/projects/controlled-single/Library/ScriptAssemblies/Assembly-CSharp-Editor.dll" runstate="Runnable" testcasecount="41" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.039338" total="41" passed="41" failed="0" inconclusive="0" skipped="0" asserts="0">
+      <properties>
+        <property name="_PID" value="31608" />
+        <property name="_APPDOMAIN" value="Unity Child Domain" />
+        <property name="platform" value="EditMode" />
+        <property name="EditorOnly" value="True" />
+      </properties>
+      <test-suite type="TestSuite" id="1048" name="AshenCrossing" fullname="AshenCrossing" runstate="Runnable" testcasecount="41" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.038760" total="41" passed="41" failed="0" inconclusive="0" skipped="0" asserts="0">
+        <properties />
+        <test-suite type="TestSuite" id="1049" name="Tests" fullname="AshenCrossing.Tests" runstate="Runnable" testcasecount="41" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.038553" total="41" passed="41" failed="0" inconclusive="0" skipped="0" asserts="0">
+          <properties />
+          <test-suite type="TestSuite" id="1052" name="Presentation" fullname="AshenCrossing.Tests.Presentation" runstate="Runnable" testcasecount="6" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.021063" total="6" passed="6" failed="0" inconclusive="0" skipped="0" asserts="0">
+            <properties />
+            <test-suite type="TestFixture" id="1040" name="PresentationTests" fullname="AshenCrossing.Tests.Presentation.PresentationTests" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" testcasecount="6" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.020359" total="6" passed="6" failed="0" inconclusive="0" skipped="0" asserts="0">
+              <properties />
+              <test-case id="1045" name="CooldownFormatsTenths" fullname="AshenCrossing.Tests.Presentation.PresentationTests.CooldownFormatsTenths" methodname="CooldownFormatsTenths" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="1542557398" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.009984" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1044" name="CooldownReady" fullname="AshenCrossing.Tests.Presentation.PresentationTests.CooldownReady" methodname="CooldownReady" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="1300798024" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000126" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1043" name="CountClampsHigh" fullname="AshenCrossing.Tests.Presentation.PresentationTests.CountClampsHigh" methodname="CountClampsHigh" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="1133531185" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000179" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1042" name="CountClampsLow" fullname="AshenCrossing.Tests.Presentation.PresentationTests.CountClampsLow" methodname="CountClampsLow" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="365573004" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000055" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1041" name="CountFormats" fullname="AshenCrossing.Tests.Presentation.PresentationTests.CountFormats" methodname="CountFormats" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="663863987" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000042" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1046" name="NormalizedClamps" fullname="AshenCrossing.Tests.Presentation.PresentationTests.NormalizedClamps" methodname="NormalizedClamps" classname="AshenCrossing.Tests.Presentation.PresentationTests" runstate="Runnable" seed="684969708" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000673" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+            </test-suite>
+          </test-suite>
+          <test-suite type="TestSuite" id="1051" name="Runtime" fullname="AshenCrossing.Tests.Runtime" runstate="Runnable" testcasecount="6" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.007372" total="6" passed="6" failed="0" inconclusive="0" skipped="0" asserts="0">
+            <properties />
+            <test-suite type="TestFixture" id="1033" name="RuntimeContractTests" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" testcasecount="6" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.006460" total="6" passed="6" failed="0" inconclusive="0" skipped="0" asserts="0">
+              <properties />
+              <test-case id="1034" name="BootstrapExists" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.BootstrapExists" methodname="BootstrapExists" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="1934191307" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.001642" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1039" name="BossPhaseAtBelowHalf" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.BossPhaseAtBelowHalf" methodname="BossPhaseAtBelowHalf" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="470815787" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.002796" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1037" name="CombatTargetDefaults" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.CombatTargetDefaults" methodname="CombatTargetDefaults" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="1258944050" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000394" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1038" name="CombatTargetDies" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.CombatTargetDies" methodname="CombatTargetDies" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="1799865269" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000503" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1036" name="PublicAutoplayMethodsExist" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.PublicAutoplayMethodsExist" methodname="PublicAutoplayMethodsExist" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="427523252" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000144" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1035" name="TutorialGameIsComponent" fullname="AshenCrossing.Tests.Runtime.RuntimeContractTests.TutorialGameIsComponent" methodname="TutorialGameIsComponent" classname="AshenCrossing.Tests.Runtime.RuntimeContractTests" runstate="Runnable" seed="2026837186" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000081" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+            </test-suite>
+          </test-suite>
+          <test-suite type="TestSuite" id="1050" name="Systems" fullname="AshenCrossing.Tests.Systems" runstate="Runnable" testcasecount="29" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.009843" total="29" passed="29" failed="0" inconclusive="0" skipped="0" asserts="0">
+            <properties />
+            <test-suite type="TestFixture" id="1026" name="CooldownTests" fullname="AshenCrossing.Tests.Systems.CooldownTests" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" testcasecount="6" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.001462" total="6" passed="6" failed="0" inconclusive="0" skipped="0" asserts="0">
+              <properties />
+              <test-case id="1029" name="CannotDoubleConsume" fullname="AshenCrossing.Tests.Systems.CooldownTests.CannotDoubleConsume" methodname="CannotDoubleConsume" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="8381603" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000274" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1028" name="PrimaryConsumes" fullname="AshenCrossing.Tests.Systems.CooldownTests.PrimaryConsumes" methodname="PrimaryConsumes" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="2122619519" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000092" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1032" name="ResetReadiesAll" fullname="AshenCrossing.Tests.Systems.CooldownTests.ResetReadiesAll" methodname="ResetReadiesAll" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="1985228820" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000124" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1027" name="StartsReady" fullname="AshenCrossing.Tests.Systems.CooldownTests.StartsReady" methodname="StartsReady" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="1297525089" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000061" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1031" name="TickNeverNegative" fullname="AshenCrossing.Tests.Systems.CooldownTests.TickNeverNegative" methodname="TickNeverNegative" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="931722700" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000118" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1030" name="TickReadies" fullname="AshenCrossing.Tests.Systems.CooldownTests.TickReadies" methodname="TickReadies" classname="AshenCrossing.Tests.Systems.CooldownTests" runstate="Runnable" seed="544305035" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000053" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+            </test-suite>
+            <test-suite type="TestFixture" id="1001" name="ProgressTests" fullname="AshenCrossing.Tests.Systems.ProgressTests" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" testcasecount="14" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.005499" total="14" passed="14" failed="0" inconclusive="0" skipped="0" asserts="0">
+              <properties />
+              <test-case id="1004" name="AcceptAdvances" fullname="AshenCrossing.Tests.Systems.ProgressTests.AcceptAdvances" methodname="AcceptAdvances" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1413055261" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.001598" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1008" name="BeaconCannotOvercount" fullname="AshenCrossing.Tests.Systems.ProgressTests.BeaconCannotOvercount" methodname="BeaconCannotOvercount" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="2143399221" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000654" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1006" name="BeaconRequiresAccept" fullname="AshenCrossing.Tests.Systems.ProgressTests.BeaconRequiresAccept" methodname="BeaconRequiresAccept" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="2105701117" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000086" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1012" name="BossOrdered" fullname="AshenCrossing.Tests.Systems.ProgressTests.BossOrdered" methodname="BossOrdered" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="696273183" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000083" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1011" name="BridgeOrdered" fullname="AshenCrossing.Tests.Systems.ProgressTests.BridgeOrdered" methodname="BridgeOrdered" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1122350968" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000069" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1005" name="CannotDoubleAccept" fullname="AshenCrossing.Tests.Systems.ProgressTests.CannotDoubleAccept" methodname="CannotDoubleAccept" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="2069226940" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000152" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1014" name="CompletionOnce" fullname="AshenCrossing.Tests.Systems.ProgressTests.CompletionOnce" methodname="CompletionOnce" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="993883369" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000330" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1009" name="FiveInvadersAdvance" fullname="AshenCrossing.Tests.Systems.ProgressTests.FiveInvadersAdvance" methodname="FiveInvadersAdvance" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1131926806" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000142" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1013" name="FullFlowRewardsExactly" fullname="AshenCrossing.Tests.Systems.ProgressTests.FullFlowRewardsExactly" methodname="FullFlowRewardsExactly" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1396426505" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000146" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1010" name="InvaderCannotOvercount" fullname="AshenCrossing.Tests.Systems.ProgressTests.InvaderCannotOvercount" methodname="InvaderCannotOvercount" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="2002184847" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000081" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1015" name="ResetClearsAll" fullname="AshenCrossing.Tests.Systems.ProgressTests.ResetClearsAll" methodname="ResetClearsAll" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1452311327" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000073" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1002" name="StartsAtWarden" fullname="AshenCrossing.Tests.Systems.ProgressTests.StartsAtWarden" methodname="StartsAtWarden" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1312387862" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000050" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1003" name="StartsLevelOne" fullname="AshenCrossing.Tests.Systems.ProgressTests.StartsLevelOne" methodname="StartsLevelOne" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1558686994" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000060" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1007" name="ThreeBeaconsAdvance" fullname="AshenCrossing.Tests.Systems.ProgressTests.ThreeBeaconsAdvance" methodname="ThreeBeaconsAdvance" classname="AshenCrossing.Tests.Systems.ProgressTests" runstate="Runnable" seed="1956425678" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000138" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+            </test-suite>
+            <test-suite type="TestFixture" id="1016" name="ResourceTests" fullname="AshenCrossing.Tests.Systems.ResourceTests" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" testcasecount="9" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.001924" total="9" passed="9" failed="0" inconclusive="0" skipped="0" asserts="0">
+              <properties />
+              <test-case id="1022" name="CannotOverspend" fullname="AshenCrossing.Tests.Systems.ResourceTests.CannotOverspend" methodname="CannotOverspend" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="980811609" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000238" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1018" name="DamageClamps" fullname="AshenCrossing.Tests.Systems.ResourceTests.DamageClamps" methodname="DamageClamps" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="2135320036" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000109" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1017" name="Defaults" fullname="AshenCrossing.Tests.Systems.ResourceTests.Defaults" methodname="Defaults" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="1147858899" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000071" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1020" name="HealClamps" fullname="AshenCrossing.Tests.Systems.ResourceTests.HealClamps" methodname="HealClamps" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="1458444467" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000081" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1019" name="NegativeDamageIgnored" fullname="AshenCrossing.Tests.Systems.ResourceTests.NegativeDamageIgnored" methodname="NegativeDamageIgnored" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="450414598" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000046" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1025" name="NormalizedValues" fullname="AshenCrossing.Tests.Systems.ResourceTests.NormalizedValues" methodname="NormalizedValues" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="443910569" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000103" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1024" name="PotionAtFullRejected" fullname="AshenCrossing.Tests.Systems.ResourceTests.PotionAtFullRejected" methodname="PotionAtFullRejected" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="428061013" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000105" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1023" name="PotionHealsAndConsumes" fullname="AshenCrossing.Tests.Systems.ResourceTests.PotionHealsAndConsumes" methodname="PotionHealsAndConsumes" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="1951506923" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000080" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+              </test-case>
+              <test-case id="1021" name="SpendMana" fullname="AshenCrossing.Tests.Systems.ResourceTests.SpendMana" methodname="SpendMana" classname="AshenCrossing.Tests.Systems.ResourceTests" runstate="Runnable" seed="158379004" result="Passed" start-time="2026-08-30 14:26:55Z" end-time="2026-08-30 14:26:55Z" duration="0.000052" asserts="0">
+                <properties>
+                  <property name="retryIteration" value="0" />
+                  <property name="repeatIteration" value="0" />
+                </properties>
+                <output><![CDATA[Saving results to: C:/Users/user/AppData/LocalLow/DefaultCompany/test\TestResults.xml
+]]></output>
+              </test-case>
+            </test-suite>
+          </test-suite>
+        </test-suite>
+      </test-suite>
+    </test-suite>
+  </test-suite>
+</test-run>

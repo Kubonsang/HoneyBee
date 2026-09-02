@@ -1,0 +1,34 @@
+[
+  {
+    "condition": "controlled-multi",
+    "exitCode": 6,
+    "elapsedMs": 4776,
+    "resultExists": false,
+    "resultBytes": null,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\controlled-multi-editmode-cli.log"
+  },
+  {
+    "condition": "controlled-single",
+    "exitCode": 0,
+    "elapsedMs": 11044,
+    "resultExists": true,
+    "resultBytes": 29913,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\controlled-single-editmode-cli.log"
+  },
+  {
+    "condition": "e2e-honeybee",
+    "exitCode": 0,
+    "elapsedMs": 10580,
+    "resultExists": true,
+    "resultBytes": 31098,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-honeybee-editmode-cli.log"
+  },
+  {
+    "condition": "e2e-direct",
+    "exitCode": 0,
+    "elapsedMs": 10471,
+    "resultExists": true,
+    "resultBytes": 710,
+    "log": "C:\\tmp\\HoneyBee-Ashen-Crossing-Comparison-V2-20260830\\raw\\e2e-direct-editmode-cli.log"
+  }
+]

@@ -1,0 +1,27 @@
+
+Aborting batchmode due to failure:
+Scripts have compiler errors.
+
+에디터 로그에 다음 오류가 보고되었습니다:
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(17,56): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(18,50): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Runtime\TutorialGame.cs(90,84): Argument 1: cannot convert from 'float' to 'int'
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(17,56): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(18,50): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Runtime\TutorialGame.cs(90,84): Argument 1: cannot convert from 'float' to 'int'
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(17,56): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Presentation\WorldFactory.cs(18,50): Argument 2: cannot convert from 'double' to 'float'
+  CS1503 Assets\AshenCrossing\Runtime\TutorialGame.cs(90,84): Argument 1: cannot convert from 'float' to 'int'
+  [크래시] Scripts have compiler errors.
+{
+  "success": false,
+  "command": "test",
+  "data": null,
+  "errors": [
+    {
+      "code": "TEST_RUN_ERROR",
+      "message": "테스트 실행이 완료되지 않았습니다. Unity가 결과를 보고하기 전에 코드 1(으)로 종료되었습니다."
+    }
+  ],
+  "warnings": []
+}

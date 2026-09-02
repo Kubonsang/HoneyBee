@@ -1,0 +1,56 @@
+[
+  {
+    "runId": "ef2413e1-2e6d-4b31-93b9-50f805603633",
+    "workId": "systems-builder",
+    "childRunId": "4199ee0b-cf49-541d-a0e7-87efe4e74ec3",
+    "started": "2026-08-30T13:30:32.72Z",
+    "finished": "2026-08-30T13:32:22.929Z",
+    "status": "completed",
+    "elapsedMs": 110209.0
+  },
+  {
+    "runId": "ef2413e1-2e6d-4b31-93b9-50f805603633",
+    "workId": "presentation-builder",
+    "childRunId": "118dcab6-15c5-5dfb-9737-3aa0cf9f65b4",
+    "started": "2026-08-30T13:30:32.728Z",
+    "finished": "2026-08-30T13:33:41.592Z",
+    "status": "completed",
+    "elapsedMs": 188864.0
+  },
+  {
+    "runId": "ef2413e1-2e6d-4b31-93b9-50f805603633",
+    "workId": "runtime-builder",
+    "childRunId": "79893846-36c5-5ba8-8618-7eac958f3583",
+    "started": "2026-08-30T13:30:32.734Z",
+    "finished": "2026-08-30T13:33:08.36Z",
+    "status": "completed",
+    "elapsedMs": 155626.0
+  },
+  {
+    "runId": "cb48b0f7-a7b6-4c66-916a-63158c366447",
+    "workId": "e2e-systems",
+    "childRunId": "46a01b82-19ff-513f-9c75-0263d3a2523b",
+    "started": "2026-08-30T13:47:28.941Z",
+    "finished": "2026-08-30T13:49:48.568Z",
+    "status": "completed",
+    "elapsedMs": 139627.0
+  },
+  {
+    "runId": "cb48b0f7-a7b6-4c66-916a-63158c366447",
+    "workId": "e2e-presentation",
+    "childRunId": "c12296b4-e52e-5a36-b343-df1ece66f162",
+    "started": "2026-08-30T13:47:28.946Z",
+    "finished": "2026-08-30T13:52:29.724Z",
+    "status": "completed",
+    "elapsedMs": 300778.0
+  },
+  {
+    "runId": "cb48b0f7-a7b6-4c66-916a-63158c366447",
+    "workId": "e2e-runtime",
+    "childRunId": "8c5afa9e-8a59-5554-be37-2afbcedacc6b",
+    "started": "2026-08-30T13:47:28.952Z",
+    "finished": "2026-08-30T13:50:22.417Z",
+    "status": "completed",
+    "elapsedMs": 173465.0
+  }
+]
