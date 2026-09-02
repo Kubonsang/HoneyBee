@@ -27,6 +27,8 @@ describe("DesktopGitWorktrees", () => {
   it("commits a verified text patch to a Work branch and merges it into integration", async () => {
     const repository = await mkdtemp(path.join(tmpdir(), "honeybee-git-source-"));
     const userData = await mkdtemp(path.join(tmpdir(), "honeybee-git-data-"));
+    const userDataAlias = `${userData}-alias`;
+    await symlink(userData, userDataAlias, process.platform === "win32" ? "junction" : "dir");
     await mkdir(path.join(repository, "Assets"), { recursive: true });
     const before = "public class Player {}\n";
     const after = "public class Player { public int Level = 1; }\n";
@@ -88,7 +90,7 @@ describe("DesktopGitWorktrees", () => {
       ],
       allowedActions: ["apply", "reject"],
     });
-    const worktrees = new DesktopGitWorktrees(userData);
+    const worktrees = new DesktopGitWorktrees(userDataAlias);
 
     const materialized = await worktrees.materialize(repositoryAlias, runId, groupRunId, patch);
     expect(materialized.disposition).toBe("materialized");

@@ -415,7 +415,11 @@ export class DesktopGitWorktrees {
   async #removeWorktree(root: string, branch: string): Promise<void> {
     const worktreePath = await this.#worktreeForBranch(root, branch);
     if (worktreePath === undefined) return;
-    if (!inside(this.#root, path.resolve(worktreePath))) {
+    const [ownedRoot, resolvedWorktree] = await Promise.all([
+      realpath(this.#root),
+      realpath(worktreePath),
+    ]);
+    if (!inside(ownedRoot, resolvedWorktree)) {
       throw codedError(
         "desktop.git-path-invalid",
         "HoneyBee refuses to remove an unowned worktree.",
