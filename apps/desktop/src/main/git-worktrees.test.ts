@@ -44,6 +44,8 @@ describe("DesktopGitWorktrees", () => {
       "-m",
       "initial",
     );
+    await git(repository, "config", "user.name", "");
+    await git(repository, "config", "user.email", "");
     const repositoryAlias = path.join(userData, "source-alias");
     await symlink(repository, repositoryAlias, process.platform === "win32" ? "junction" : "dir");
     const runId = "11111111-1111-4111-8111-111111111111";

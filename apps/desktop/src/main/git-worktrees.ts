@@ -211,7 +211,16 @@ export class DesktopGitWorktrees {
     }
     await this.#assertClean(integrationPath);
     try {
-      await this.#git(integrationPath, ["merge", "--no-ff", "--no-edit", branch]);
+      await this.#git(integrationPath, [
+        "-c",
+        "user.name=HoneyBee",
+        "-c",
+        "user.email=honeybee@local",
+        "merge",
+        "--no-ff",
+        "--no-edit",
+        branch,
+      ]);
       await this.#removeWorktree(repository.root, branch);
       return this.#result("merged", branch, integration, [], projectPath);
     } catch (error) {
