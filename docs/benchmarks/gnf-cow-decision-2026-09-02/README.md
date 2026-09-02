@@ -6,11 +6,11 @@
 won capacity and removal time, but it lost the two time-oriented primary metrics and failed the
 pre-registered acceptance rule.
 
-| Primary metric | A: Git worktree + Library CoW | B: Full-project CoW, no rewrite | Result |
-| --- | ---: | ---: | --- |
-| Workspace create, median of 20 | 12.346 s | 13.771 s | A; B was 11.54% slower |
-| Eight-workspace host space delta | 13.704 GiB | 5.718 GiB | B; 58.27% less |
-| Unity batch-ready, median of 3 | 61.862 s | 62.865 s | A; B was 1.62% slower |
+| Primary metric                   | A: Git worktree + Library CoW | B: Full-project CoW, no rewrite | Result                 |
+| -------------------------------- | ----------------------------: | ------------------------------: | ---------------------- |
+| Workspace create, median of 20   |                      12.346 s |                        13.771 s | A; B was 11.54% slower |
+| Eight-workspace host space delta |                    13.704 GiB |                       5.718 GiB | B; 58.27% less         |
+| Unity batch-ready, median of 3   |                      61.862 s |                        62.865 s | A; B was 1.62% slower  |
 
 The rule fixed before measurement required B to win at least two primary metrics and be no more than
 10% slower on the third. B won one metric and was 11.54% slower on create, so it failed both parts.
@@ -19,19 +19,19 @@ real and intentionally accepted rather than hidden.
 
 ## Full result
 
-| Metric | A | B | Difference |
-| --- | ---: | ---: | ---: |
-| Parent preparation, one observation | 69.510 s | 80.884 s | B +16.36% |
-| Immutable parent allocation | 5.436 GiB | 6.900 GiB | B +26.95% |
-| Existing-parent reuse validation | 166.5 ms | 167.1 ms | effectively equal |
-| Workspace create, median of 20 | 12.346 s | 13.771 s | B +11.54% |
-| Workspace remove, median of 20 | 3.143 s | 2.329 s | B 25.91% faster |
-| Ready child allocation | 29 MiB | 589 MiB | B 20.31× A |
-| One-workspace host space delta, median | 1.482 GiB | 0.579 GiB | B 60.94% less |
-| Four-workspace host space delta | 5.961 GiB | 3.410 GiB | B 42.80% less |
-| Eight-workspace host space delta | 13.704 GiB | 5.718 GiB | B 58.27% less |
-| Unity batch-ready, median of 3 | 61.862 s | 62.865 s | B +1.62% |
-| Child allocation after Unity, median | 1,021 MiB | 1,549 MiB | B +51.71% |
+| Metric                                 |          A |         B |        Difference |
+| -------------------------------------- | ---------: | --------: | ----------------: |
+| Parent preparation, one observation    |   69.510 s |  80.884 s |         B +16.36% |
+| Immutable parent allocation            |  5.436 GiB | 6.900 GiB |         B +26.95% |
+| Existing-parent reuse validation       |   166.5 ms |  167.1 ms | effectively equal |
+| Workspace create, median of 20         |   12.346 s |  13.771 s |         B +11.54% |
+| Workspace remove, median of 20         |    3.143 s |   2.329 s |   B 25.91% faster |
+| Ready child allocation                 |     29 MiB |   589 MiB |        B 20.31× A |
+| One-workspace host space delta, median |  1.482 GiB | 0.579 GiB |     B 60.94% less |
+| Four-workspace host space delta        |  5.961 GiB | 3.410 GiB |     B 42.80% less |
+| Eight-workspace host space delta       | 13.704 GiB | 5.718 GiB |     B 58.27% less |
+| Unity batch-ready, median of 3         |   61.862 s |  62.865 s |          B +1.62% |
+| Child allocation after Unity, median   |  1,021 MiB | 1,549 MiB |         B +51.71% |
 
 A's 29 MiB child contains only generated Library blocks; its ordinary Git checkout accounts for most
 of the host footprint. B avoids that checkout copy but pays a roughly 589 MiB NTFS/VHDX child cost on
