@@ -6,6 +6,8 @@ coverage/
 *.tsbuildinfo
 /apps/desktop/release/
 /apps/desktop/release*/
+/apps/cli/release/
+/apps/cli/release*/
 /output/
 /tmp/
 /dogfood/evidence/

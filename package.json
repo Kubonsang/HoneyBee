@@ -1,6 +1,6 @@
 {
   "name": "honey-bee",
-  "version": "0.7.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",
   "description": "Windows Unity Workspace provider using Git worktrees and Library-only CoW.",
@@ -25,6 +25,7 @@
     "format:check": "prettier --check .",
     "honeybee": "node apps/cli/dist/cli.js",
     "licenses:check": "node scripts/security/check-licenses.mjs",
+    "package:release": "corepack pnpm --filter honeybee-cli package:smoke && corepack pnpm --filter honeybee-desktop package:smoke",
     "lint": "eslint . --max-warnings 0",
     "security:install-hooks": "git config core.hooksPath .githooks",
     "security:scan": "node scripts/security/check-no-secrets.mjs --all",

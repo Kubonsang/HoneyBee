@@ -39,6 +39,9 @@ describe("Workspace CLI", () => {
   it("registers and lists a Unity project without activating legacy Run behavior", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-workspace-cli-"));
     roots.push(root);
+    const version = await runCli(["--version"], root);
+    expect(version).toEqual({ stdout: "0.1.0-beta.1\n", stderr: "", exitCode: 0 });
+
     const source = path.join(root, "source");
     const workspaces = path.join(root, "workspaces");
     const dataRoot = path.join(root, "registry");
