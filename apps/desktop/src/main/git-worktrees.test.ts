@@ -92,9 +92,17 @@ describe("DesktopGitWorktrees", () => {
     });
     const worktrees = new DesktopGitWorktrees(userDataAlias);
 
+    await git(repository, "branch", `honeybee/work/${runId}`);
+    await expect(
+      worktrees.materialize(repositoryAlias, runId, groupRunId, patch),
+    ).rejects.toMatchObject({ code: "desktop.git-work-branch-invalid" });
+    await git(repository, "branch", "-D", `honeybee/work/${runId}`);
+
     const materialized = await worktrees.materialize(repositoryAlias, runId, groupRunId, patch);
     expect(materialized.disposition).toBe("materialized");
     expect(materialized.snapshot.worktrees.some((entry) => entry.kind === "work")).toBe(true);
+    const repeated = await worktrees.materialize(repositoryAlias, runId, groupRunId, patch);
+    expect(repeated.disposition).toBe("already-complete");
 
     const merged = await worktrees.merge(repositoryAlias, runId, groupRunId);
     expect(merged.disposition).toBe("merged");

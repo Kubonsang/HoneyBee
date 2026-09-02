@@ -2,6 +2,10 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
+import { RunIdSchema } from "@honeybee/orchestration-contracts";
+
+import { HoneyBeeCoreError } from "./errors.js";
+import { FileRunControl } from "./file-run-control.js";
 import {
   WORKSPACE_REGISTRY_SCHEMA_VERSION,
   WorkspaceCoreError,
@@ -10,6 +14,13 @@ import {
   type WorkspaceRegistryV1,
   type WorkspaceTool,
 } from "./workspace-types.js";
+
+const REGISTRY_LOCK_ID = RunIdSchema.parse("00000000-0000-4000-8000-000000000001");
+const REGISTRY_LOCK_TIMEOUT_MS = 30_000;
+const REGISTRY_LOCK_POLL_MS = 25;
+
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
 const emptyRegistry = (): WorkspaceRegistryV1 => ({
   schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
@@ -39,9 +50,12 @@ const assertRegistry = (value: unknown): WorkspaceRegistryV1 => {
 
 export class WorkspaceRegistryStore {
   readonly #registryPath: string;
+  readonly #locks: FileRunControl;
 
   public constructor(dataRoot: string) {
-    this.#registryPath = path.resolve(dataRoot, "workspace-registry-v1.json");
+    const resolvedRoot = path.resolve(dataRoot);
+    this.#registryPath = path.join(resolvedRoot, "workspace-registry-v1.json");
+    this.#locks = new FileRunControl(path.join(resolvedRoot, ".workspace-registry-lock"));
   }
 
   public get path(): string {
@@ -81,9 +95,36 @@ export class WorkspaceRegistryStore {
   public async update(
     change: (current: WorkspaceRegistryV1) => WorkspaceRegistryV1,
   ): Promise<WorkspaceRegistryV1> {
-    const next = change(await this.read());
-    await this.write(next);
-    return next;
+    const deadline = Date.now() + REGISTRY_LOCK_TIMEOUT_MS;
+    for (;;) {
+      try {
+        const lease = await this.#locks.acquire(REGISTRY_LOCK_ID);
+        try {
+          const next = change(await this.read());
+          await this.write(next);
+          return next;
+        } finally {
+          await lease.release();
+        }
+      } catch (error) {
+        if (
+          error instanceof HoneyBeeCoreError &&
+          error.code === "run.already-running" &&
+          Date.now() < deadline
+        ) {
+          await delay(REGISTRY_LOCK_POLL_MS);
+          continue;
+        }
+        if (error instanceof WorkspaceCoreError) throw error;
+        throw new WorkspaceCoreError(
+          error instanceof HoneyBeeCoreError && error.code === "run.already-running"
+            ? "registry.lock-timeout"
+            : "registry.lock-failed",
+          "Could not serialize the HoneyBee Workspace registry update.",
+          { cause: error },
+        );
+      }
+    }
   }
 
   public async putProject(project: ProjectRecordV1): Promise<void> {

@@ -133,7 +133,13 @@ export class DesktopGitWorktrees {
     const integration = integrationBranch(groupRunId);
     const existing = await this.#branchExists(repository.root, branch);
     if (existing) {
-      return this.#result("already-complete", branch, integration, [], projectPath);
+      if (await this.#workBranchMatchesPatch(repository, branch, integration, patch)) {
+        return this.#result("already-complete", branch, integration, [], projectPath);
+      }
+      throw codedError(
+        "desktop.git-work-branch-invalid",
+        "The existing Work branch does not exactly contain this verified patch.",
+      );
     }
     const integrationPath = this.#ownedPath(repository, "integration", groupRunId);
     if (!(await this.#branchExists(repository.root, integration))) {
@@ -318,6 +324,100 @@ export class DesktopGitWorktrees {
         "Git integration requires a clean worktree so HoneyBee never mixes user changes.",
       );
     }
+  }
+
+  async #workBranchMatchesPatch(
+    repository: GitRepository,
+    branch: string,
+    integration: string,
+    patch: VerifiedPatchViewV1,
+  ): Promise<boolean> {
+    try {
+      if (!(await this.#branchExists(repository.root, integration))) return false;
+      const head = (await this.#git(repository.root, ["rev-parse", `${branch}^{commit}`])).trim();
+      const ancestry = (
+        await this.#git(repository.root, ["rev-list", "--parents", "-n", "1", head])
+      )
+        .trim()
+        .split(/\s+/u);
+      if (ancestry.length !== 2 || ancestry[0] !== head) return false;
+      const parent = ancestry[1];
+      if (parent === undefined || !(await this.#isAncestor(repository.root, parent, integration))) {
+        return false;
+      }
+      const expectedPaths = patch.files
+        .map((file) => this.#repositoryPatchPath(repository, file.path))
+        .sort();
+      const changedPaths = (
+        await this.#git(repository.root, [
+          "diff-tree",
+          "--no-commit-id",
+          "--name-only",
+          "-r",
+          parent,
+          head,
+        ])
+      )
+        .trim()
+        .split(/\r?\n/u)
+        .filter(Boolean)
+        .sort();
+      if (
+        changedPaths.length !== expectedPaths.length ||
+        changedPaths.some((value, index) => value !== expectedPaths[index])
+      ) {
+        return false;
+      }
+      for (const file of patch.files) {
+        const filePath = this.#repositoryPatchPath(repository, file.path);
+        const before = await this.#gitBlob(repository.root, `${parent}:${filePath}`);
+        const after = await this.#gitBlob(repository.root, `${head}:${filePath}`);
+        if (file.operation === "add") {
+          if (before !== undefined) return false;
+        } else if (
+          before === undefined ||
+          file.before === undefined ||
+          contentDigest(before) !== file.before.contentDigest
+        ) {
+          return false;
+        }
+        if (file.operation === "delete") {
+          if (after !== undefined) return false;
+        } else if (
+          after === undefined ||
+          file.after === undefined ||
+          contentDigest(after) !== file.after.contentDigest
+        ) {
+          return false;
+        }
+      }
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  #repositoryPatchPath(repository: GitRepository, patchPath: string): string {
+    return path.posix.join(
+      repository.projectRelativePath.replaceAll("\\", "/"),
+      patchPath.replaceAll("\\", "/"),
+    );
+  }
+
+  async #gitBlob(root: string, objectPath: string): Promise<Buffer | undefined> {
+    try {
+      await this.#git(root, ["cat-file", "-e", objectPath]);
+    } catch {
+      return undefined;
+    }
+    const result = await execFileAsync("git.exe", ["show", objectPath], {
+      cwd: root,
+      timeout: GIT_TIMEOUT_MS,
+      maxBuffer: MAX_GIT_OUTPUT,
+      windowsHide: true,
+      encoding: "buffer",
+    });
+    return Buffer.from(result.stdout);
   }
 
   async #applyPreview(projectRoot: string, patch: VerifiedPatchViewV1): Promise<void> {

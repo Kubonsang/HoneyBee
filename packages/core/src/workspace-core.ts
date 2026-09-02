@@ -458,9 +458,7 @@ export class HoneyBeeWorkspaceCore {
       );
     }
     const workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
-    if (!(await this.#exists(workspaceLibrary))) {
-      await symlink(mountPath, workspaceLibrary, "junction");
-    }
+    await this.#ensureLibraryJunction(workspaceLibrary, mountPath);
     await this.#git(project.repositoryRoot, ["worktree", "repair", record.workspacePath]);
     await this.#git(record.workspacePath, ["status", "--porcelain=v1"]);
     record = {
@@ -527,12 +525,7 @@ export class HoneyBeeWorkspaceCore {
         }
       }
       await this.#storage.removeRetained(project.storageCommand, record.consumerId);
-      await this.#git(project.repositoryRoot, [
-        "worktree",
-        "remove",
-        "--force",
-        record.workspacePath,
-      ]);
+      await this.#git(project.repositoryRoot, ["worktree", "remove", record.workspacePath]);
       await this.#registry.removeWorkspace(record.workspaceId);
     } catch (error) {
       await this.#registry.putWorkspace({
@@ -596,6 +589,45 @@ export class HoneyBeeWorkspaceCore {
     ]).catch(() => undefined);
   }
 
+  async #libraryJunctionMatches(workspaceLibrary: string, mountPath: string): Promise<boolean> {
+    try {
+      const entry = await lstat(workspaceLibrary);
+      if (!entry.isSymbolicLink()) return false;
+      const [libraryTarget, storageTarget] = await Promise.all([
+        realpath(workspaceLibrary),
+        realpath(mountPath),
+      ]);
+      return pathKey(libraryTarget) === pathKey(storageTarget);
+    } catch {
+      return false;
+    }
+  }
+
+  async #ensureLibraryJunction(workspaceLibrary: string, mountPath: string): Promise<void> {
+    const entry = await lstat(workspaceLibrary).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (entry !== undefined && !entry.isSymbolicLink()) {
+      throw new WorkspaceCoreError(
+        "workspace.library-not-junction",
+        "Workspace Library exists but is not the retained storage junction.",
+      );
+    }
+    if (entry !== undefined && !(await this.#libraryJunctionMatches(workspaceLibrary, mountPath))) {
+      await unlink(workspaceLibrary);
+    }
+    if (!(await this.#exists(workspaceLibrary))) {
+      await symlink(mountPath, workspaceLibrary, "junction");
+    }
+    if (!(await this.#libraryJunctionMatches(workspaceLibrary, mountPath))) {
+      throw new WorkspaceCoreError(
+        "workspace.library-target-invalid",
+        "Workspace Library does not resolve to the retained storage mount.",
+      );
+    }
+  }
+
   async #view(record: WorkspaceRecordV1): Promise<WorkspaceViewV1> {
     if (!(await this.#exists(record.workspacePath))) {
       return { ...record, available: false, state: "repair-required" };
@@ -617,9 +649,7 @@ export class HoneyBeeWorkspaceCore {
           project.unityRelativePath,
           "Library",
         );
-        available = await Promise.all([stat(record.mountPath), stat(workspaceLibrary)])
-          .then(() => true)
-          .catch(() => false);
+        available = await this.#libraryJunctionMatches(workspaceLibrary, record.mountPath);
       }
       return {
         ...record,

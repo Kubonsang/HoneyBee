@@ -1,5 +1,15 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -32,6 +42,7 @@ class FakeStorage implements WorkspaceStoragePort {
   readonly #parents = new Map<string, string>();
   readonly #transactions = new Map<string, { key: string; path: string }>();
   readonly #leases = new Map<string, StorageLease & { consumerId: string; workspaceId: string }>();
+  public beforeRemoveRetained: (() => Promise<void>) | undefined;
 
   public constructor(root: string) {
     this.#root = root;
@@ -96,6 +107,7 @@ class FakeStorage implements WorkspaceStoragePort {
   }
 
   public async removeRetained(_command: string, consumerId: string): Promise<void> {
+    await this.beforeRemoveRetained?.();
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) throw new Error("missing retained lease");
     await rm(lease.workspacePath, { recursive: true, force: true });
@@ -147,9 +159,10 @@ const fixture = async () => {
   const sourceAlias = path.join(root, "source-alias");
   await symlink(source, sourceAlias, process.platform === "win32" ? "junction" : "dir");
   const launcher = new FakeLauncher();
+  const storage = new FakeStorage(path.join(root, "provider"));
   const core = new HoneyBeeWorkspaceCore({
     dataRoot: path.join(root, "registry"),
-    storage: new FakeStorage(path.join(root, "provider")),
+    storage,
     launcher,
   });
   const project = await core.initProject({
@@ -158,7 +171,7 @@ const fixture = async () => {
     storageCommand: process.execPath,
   });
   await core.prepareCache(project.projectId);
-  return { root, source, workspaceRoot, core, project, launcher };
+  return { root, source, workspaceRoot, core, project, launcher, storage };
 };
 
 afterEach(async () => {
@@ -229,7 +242,7 @@ describe("HoneyBeeWorkspaceCore", () => {
   }, 30_000);
 
   it("attaches an existing branch, refuses dirty removal, and launches from the workspace", async () => {
-    const { source, core, project, launcher } = await fixture();
+    const { root, source, core, project, launcher } = await fixture();
     await git(source, "branch", "feature/existing");
     const created = await core.createWorkspace({
       project: project.projectId,
@@ -244,9 +257,46 @@ describe("HoneyBeeWorkspaceCore", () => {
       cwd: created.workspacePath,
     });
 
+    const workspaceLibrary = path.join(created.workspacePath, "Library");
+    await unlink(workspaceLibrary);
+    await mkdir(workspaceLibrary);
+    await writeFile(path.join(workspaceLibrary, "user-data.txt"), "preserve\n", "utf8");
+    await expect(core.repairWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.library-not-junction",
+    });
+    expect(await readFile(path.join(workspaceLibrary, "user-data.txt"), "utf8")).toBe("preserve\n");
+
+    await rm(workspaceLibrary, { recursive: true, force: true });
+    const wrongTarget = path.join(root, "wrong-library");
+    await mkdir(wrongTarget);
+    await symlink(wrongTarget, workspaceLibrary, "junction");
+    const repaired = await core.repairWorkspace(created.workspaceId);
+    expect(await realpath(workspaceLibrary)).toBe(await realpath(repaired.mountPath));
+
     await writeFile(path.join(created.workspacePath, "Assets", "Dirty.cs"), "dirty\n", "utf8");
     await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
       code: "workspace.dirty",
     });
+  }, 30_000);
+
+  it("preserves a file written after the final status check during removal", async () => {
+    const { source, core, project, storage } = await fixture();
+    const created = await core.createWorkspace({
+      project: project.projectId,
+      name: "late-write",
+      branch: "feature/late-write",
+      base: "main",
+    });
+    const lateFile = path.join(created.workspacePath, "Assets", "Late.cs");
+    storage.beforeRemoveRetained = () => writeFile(lateFile, "class Late {}\n", "utf8");
+
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "git.command-failed",
+    });
+
+    expect(await readFile(lateFile, "utf8")).toBe("class Late {}\n");
+    expect(await git(source, "worktree", "list", "--porcelain")).toContain(
+      created.workspacePath.replaceAll("\\", "/"),
+    );
   }, 30_000);
 });
