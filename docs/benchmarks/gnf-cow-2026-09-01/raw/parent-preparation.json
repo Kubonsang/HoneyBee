@@ -1,0 +1,31 @@
+{
+  "schemaVersion": 1,
+  "capturedAt": "2026-09-01",
+  "source": {
+    "project": "GNF_",
+    "commit": "8d743466c728828a695500c9c0001d02173bafe8",
+    "branch": "codex/cross-pc-checkpoint-20260721",
+    "workingTreeDirtyEntries": 38,
+    "trackedFilesPresent": 11474,
+    "trackedBytesPresent": 1541715971,
+    "libraryFiles": 55935,
+    "libraryBytes": 5857516216
+  },
+  "libraryOnly": {
+    "parentId": "c3fc50a91471f74a72c50bf792ac7a746d48c206cc4b8358e0f72bc56b38384b",
+    "createdAt": "2026-09-01T14:03:47.3062828Z",
+    "beginMs": 4634.3802,
+    "seedCopyMs": 53782.9887,
+    "commitMs": 11092.9882,
+    "totalMs": 69510.395,
+    "allocatedBytes": 5836374016
+  },
+  "fullProject": {
+    "parentId": "83547c504783b82b00586b6f89b0f1febc30168e0c7de5876aba5431df9df69b",
+    "createdAt": "2026-09-01T14:09:31.4369655Z",
+    "seedCommit": "8d743466c728828a695500c9c0001d02173bafe8",
+    "totalMs": 80883.6698,
+    "allocatedBytes": 7409238016
+  },
+  "caveat": "Parents were prepared sequentially during integration preflight without flushing the OS cache. These one-shot timings are diagnostic, not statistically comparable performance samples. Allocated byte values were re-read from the immutable broker parent metadata after the measured run."
+}

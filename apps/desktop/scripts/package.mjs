@@ -2,15 +2,23 @@ import { access, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
 
 import { packager } from "@electron/packager";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const staging = path.join(appRoot, "dist", "package");
-const output = path.join(appRoot, "release");
+const outputDirectory = process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release";
+if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".") {
+  throw new Error("Packaging output must be one directory inside the Desktop app.");
+}
+const output = path.join(appRoot, outputDirectory);
 const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 const compatibilityManifest = path.join(appRoot, "resources", "component-compatibility-v1.json");
 const nativeAgentHostManifest = path.join(appRoot, "resources", "native-agent-host-v1.json");
+const require = createRequire(import.meta.url);
+const nodePtyRoot = path.dirname(require.resolve("node-pty/package.json"));
+const nodeAddonApiRoot = path.join(path.dirname(nodePtyRoot), "node-addon-api");
 
 const assertOwned = (target, parent) => {
   const relative = path.relative(parent, target);
@@ -64,6 +72,29 @@ for (const directory of ["main", "preload", "renderer"]) {
   });
 }
 
+const stagedNodePty = path.join(staging, "node_modules", "node-pty");
+await mkdir(stagedNodePty, { recursive: true });
+await cp(path.join(nodePtyRoot, "lib"), path.join(stagedNodePty, "lib"), { recursive: true });
+await cp(
+  path.join(nodePtyRoot, "prebuilds", "win32-x64"),
+  path.join(stagedNodePty, "prebuilds", "win32-x64"),
+  { recursive: true },
+);
+for (const fileName of ["package.json", "LICENSE"]) {
+  await cp(path.join(nodePtyRoot, fileName), path.join(stagedNodePty, fileName));
+}
+await cp(nodeAddonApiRoot, path.join(staging, "node_modules", "node-addon-api"), {
+  recursive: true,
+  dereference: true,
+});
+for (const entry of await (
+  await import("node:fs/promises")
+).readdir(path.join(stagedNodePty, "prebuilds", "win32-x64"), { recursive: true })) {
+  if (entry.toLowerCase().endsWith(".pdb")) {
+    await rm(path.join(stagedNodePty, "prebuilds", "win32-x64", entry), { force: true });
+  }
+}
+
 const desktopPackage = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
 const electronVersion = String(desktopPackage.devDependencies.electron).replace(/^[^\d]*/u, "");
 await writeFile(
@@ -76,6 +107,7 @@ await writeFile(
       private: true,
       type: "module",
       main: "main/main/main.js",
+      dependencies: { "node-pty": desktopPackage.dependencies["node-pty"] },
     },
     null,
     2,
@@ -91,7 +123,7 @@ const paths = await packager({
   electronVersion,
   out: output,
   overwrite: true,
-  asar: true,
+  asar: { unpack: "**/node_modules/node-pty/prebuilds/win32-x64/**/*" },
   extraResource: [bundledTools, compatibilityManifest, nativeAgentHostManifest],
   appCopyright: "Copyright HoneyBee contributors",
   win32metadata: {

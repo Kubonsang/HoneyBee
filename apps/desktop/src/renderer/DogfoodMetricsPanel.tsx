@@ -62,10 +62,12 @@ export function DogfoodMetricsPanel({
   const toggle = async (enabled: boolean): Promise<void> => {
     setBusy("toggle");
     try {
+      const current = await window.honeybee.developerSettings();
       setSettings(
         await window.honeybee.updateDeveloperSettings({
           schemaVersion: 1,
           dogfoodMetricsEnabled: enabled,
+          rawAgentProtocolEnabled: current.rawAgentProtocolEnabled,
         }),
       );
       await refresh();

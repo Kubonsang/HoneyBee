@@ -5,7 +5,13 @@ export const WORK_STAGES = ["Brief", "Build", "Test", "Review"] as const;
 export const runStage = (run: RunSummaryV1 | undefined): number => {
   if (run === undefined) return 0;
   const phase = run.phase.toLowerCase();
-  if (run.terminal || phase.includes("verify") || phase.includes("evidence")) return 3;
+  if (
+    run.status.toLowerCase() === "completed" ||
+    phase.includes("verify") ||
+    phase.includes("evidence")
+  ) {
+    return 3;
+  }
   if (phase.includes("test") || phase.includes("warm") || phase.includes("compile")) return 2;
   if (
     phase.includes("agent") ||
@@ -26,10 +32,18 @@ export const runTitle = (run: RunSummaryV1 | undefined): string => {
     .replace(/\b\w/gu, (character) => character.toUpperCase());
 };
 
-export const runNeedsAttention = (run: RunSummaryV1): boolean =>
-  run.status.includes("fail") ||
-  run.status.includes("indeterminate") ||
-  run.status.includes("cleanup");
+export const runNeedsAttention = (run: RunSummaryV1): boolean => {
+  const status = run.status.toLowerCase();
+  return (
+    status.includes("fail") ||
+    status.includes("indeterminate") ||
+    status.includes("cleanup") ||
+    status.includes("cancel")
+  );
+};
+
+export const capabilityToggleDisabled = (testplayAvailable: boolean, checked: boolean): boolean =>
+  !testplayAvailable && !checked;
 
 export const runEvidenceSummary = (detail: RunDetailV1 | undefined): string => {
   if (detail === undefined) return "Reading durable Run evidence…";

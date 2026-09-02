@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowClockwise,
   CheckCircle,
@@ -19,11 +19,13 @@ import {
   type DesktopProjectProfile,
   type DesktopSetupStatusV1,
 } from "../shared/ipc.js";
+import { observeSetupStatusUntilTerminal } from "./setup-status-poller.js";
 
 interface SetupCenterProps {
   readonly onComplete: (profile: DesktopProjectProfile) => void;
   readonly onError: (message: string) => void;
   readonly initialProfile?: DesktopProjectProfile;
+  readonly initialProjectPath?: string;
   readonly agents: readonly DesktopAgentProfileV1[];
   readonly preferredAgentId?: string;
   readonly onManageAgents: () => void;
@@ -36,6 +38,7 @@ export function SetupCenter({
   onComplete,
   onError,
   initialProfile,
+  initialProjectPath,
   agents,
   preferredAgentId,
   onManageAgents,
@@ -49,7 +52,9 @@ export function SetupCenter({
   const [status, setStatus] = useState<DesktopSetupStatusV1>();
   const [busy, setBusy] = useState<"discover" | "start" | "import" | "install-testplay">();
   const [localPhase, setLocalPhase] = useState<string>();
-  const [projectPath, setProjectPath] = useState(initialProfile?.projectPath ?? "");
+  const [projectPath, setProjectPath] = useState(
+    initialProfile?.projectPath ?? initialProjectPath ?? "",
+  );
   const [unityPath, setUnityPath] = useState(managed?.unity.path ?? "");
   const [agentId, setAgentId] = useState(
     preferredAgentId ?? agents.find((agent) => agent.enabled)?.agentId ?? "",
@@ -57,6 +62,19 @@ export function SetupCenter({
   const [testplayVersion, setTestplayVersion] = useState(
     initialProfile?.schemaVersion === 3 ? (initialProfile.environment.testplay?.version ?? "") : "",
   );
+  const onCompleteRef = useRef(onComplete);
+  const onErrorRef = useRef(onError);
+  const completedSetupIdRef = useRef<string | undefined>(undefined);
+  onCompleteRef.current = onComplete;
+  onErrorRef.current = onError;
+
+  const notifyIfCompleted = useCallback((next: DesktopSetupStatusV1): boolean => {
+    if (next.state !== "completed" || next.profile === undefined) return false;
+    if (completedSetupIdRef.current === next.setupId) return true;
+    completedSetupIdRef.current = next.setupId;
+    onCompleteRef.current(next.profile);
+    return true;
+  }, []);
 
   useEffect(() => {
     void window.honeybee
@@ -69,25 +87,22 @@ export function SetupCenter({
 
   useEffect(() => {
     if (status?.state !== "running") return;
-    let stopped = false;
-    const timer = setInterval(() => {
-      void window.honeybee
-        .setupStatus({ schemaVersion: 1, setupId: status.setupId })
-        .then((next) => {
-          if (stopped) return;
-          setStatus(next);
-          setLocalPhase(undefined);
-          if (next.state === "completed" && next.profile !== undefined) onComplete(next.profile);
-        })
-        .catch((error: unknown) => {
-          if (!stopped) onError(readableError(error));
-        });
-    }, 750);
+    const aborter = new AbortController();
+    void observeSetupStatusUntilTerminal({
+      setupId: status.setupId,
+      signal: aborter.signal,
+      readStatus: (setupId) => window.honeybee.setupStatus({ schemaVersion: 1, setupId }),
+      onStatus: (next) => {
+        setStatus(next);
+        setLocalPhase(undefined);
+        notifyIfCompleted(next);
+      },
+      onError: (error) => onErrorRef.current(readableError(error)),
+    });
     return () => {
-      stopped = true;
-      clearInterval(timer);
+      aborter.abort();
     };
-  }, [onComplete, onError, status?.setupId, status?.state]);
+  }, [notifyIfCompleted, status?.setupId, status?.state]);
 
   const loadProject = async (selectedProject: string): Promise<void> => {
     setBusy("discover");
@@ -109,6 +124,12 @@ export function SetupCenter({
       setLocalPhase(undefined);
     }
   };
+
+  useEffect(() => {
+    if (initialProfile !== undefined || initialProjectPath === undefined || discovery !== undefined)
+      return;
+    void loadProject(initialProjectPath);
+  }, [discovery, initialProfile, initialProjectPath]);
 
   const choose = async (
     kind: "project" | "unity",
@@ -149,8 +170,10 @@ export function SetupCenter({
         preferredAgentId: agentId,
         ...(testplayVersion.length === 0 ? {} : { testplayVersion }),
       });
-      setStatus(await window.honeybee.addProject(request));
-      setLocalPhase("Preparing Unity cache…");
+      const next = await window.honeybee.addProject(request);
+      setStatus(next);
+      if (notifyIfCompleted(next)) setLocalPhase(undefined);
+      else setLocalPhase("Preparing Unity cache…");
     } catch (error) {
       setLocalPhase(undefined);
       onError(readableError(error));

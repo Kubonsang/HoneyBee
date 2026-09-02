@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 import {
   CheckCircle,
   Circle,
-  ClockCountdown,
   Cpu,
   HardDrives,
   HourglassMedium,
@@ -26,9 +25,6 @@ interface CommandCenterProps {
 
 const stages = ["Prepare", "Agent", "Compile", "Test", "Verify"] as const;
 const shortId = (value: string): string => value.slice(0, 8);
-const runVisible = (run: RunSummaryV1, historyOnly: boolean): boolean =>
-  historyOnly ? run.terminal || run.status === "indeterminate" : !run.terminal;
-
 const runProgress = (run: RunSummaryV1): number => {
   if (run.terminal && run.status === "completed") return stages.length;
   const phase = run.phase.toLowerCase();
@@ -148,9 +144,14 @@ export function CommandCenter({
   composer,
   onSelectRun,
 }: CommandCenterProps) {
-  const runs = snapshot?.runs.filter((run) => runVisible(run, historyOnly)) ?? [];
+  const allRuns = [...(snapshot?.runs ?? [])].sort((left, right) =>
+    (right.updatedAt ?? "").localeCompare(left.updatedAt ?? ""),
+  );
+  const runs = historyOnly ? allRuns : allRuns.filter((run) => !run.terminal);
   const activeRuns = snapshot?.runs.filter((run) => !run.terminal) ?? [];
   const completedRuns = snapshot?.runs.filter((run) => run.status === "completed") ?? [];
+  const attentionRuns =
+    snapshot?.runs.filter((run) => run.terminal && run.status !== "completed") ?? [];
   const residualRuns =
     snapshot?.runs.filter(
       (run) => run.status.includes("cleanup") || run.status === "indeterminate",
@@ -168,16 +169,16 @@ export function CommandCenter({
       <section className="command-view history-view">
         <div className="dashboard-metrics">
           <Metric
-            icon={<ShieldCheck size={21} />}
-            value={completedRuns.length}
-            label="Verified Runs"
-            tone="green"
+            icon={<Pulse size={21} />}
+            value={activeRuns.length}
+            label="Active Runs"
+            tone={activeRuns.length === 0 ? "neutral" : "green"}
           />
           <Metric
             icon={<WarningCircle size={21} />}
-            value={residualRuns.length}
+            value={attentionRuns.length}
             label="Needs Attention"
-            tone={residualRuns.length === 0 ? "green" : "amber"}
+            tone={attentionRuns.length === 0 ? "green" : "amber"}
           />
           <Metric
             icon={<HardDrives size={21} />}
@@ -185,18 +186,17 @@ export function CommandCenter({
             label="Durable Runs"
           />
           <Metric
-            icon={<ClockCountdown size={21} />}
-            value={
-              snapshot === undefined ? "—" : new Date(snapshot.observedAt).toLocaleTimeString()
-            }
-            label="Last Observed"
+            icon={<ShieldCheck size={21} />}
+            value={completedRuns.length}
+            label="Verified Runs"
+            tone="green"
           />
         </div>
         <section className="surface run-board">
           <div className="dashboard-section-head">
             <div>
               <h2>Run History</h2>
-              <p>Completed, failed, and diagnostic runs for this project.</p>
+              <p>Active, completed, failed, and diagnostic Runs for this project.</p>
             </div>
           </div>
           <div className="work-run-list">

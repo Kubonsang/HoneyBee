@@ -15,6 +15,7 @@ import {
   FileRunRepository,
   HarnessIdSchema,
   HoneyBeeCoreError,
+  WorkspaceCoreError,
   RunIdSchema,
   StepIdSchema,
   WorkflowConfigV3Schema,
@@ -31,6 +32,7 @@ import {
   type OrchestrationEventV4,
   type OrchestrationEventV5,
 } from "@honeybee/core";
+import { tryRunWorkspaceCli } from "./workspace-command.js";
 
 import { loadUnityBatchConfig, loadUnityWorkConfig, loadWorkflowConfig } from "./config.js";
 import {
@@ -1269,7 +1271,15 @@ const deleteRun = async (args: Extract<ParsedArguments, { command: "delete" }>):
 };
 
 const main = async (): Promise<void> => {
-  const args = parseArguments(process.argv.slice(2));
+  const rawArguments = process.argv.slice(2);
+  if (await tryRunWorkspaceCli(rawArguments)) return;
+  if (process.env.HONEYBEE_ENABLE_LEGACY_RUNS !== "1") {
+    throw new WorkspaceCoreError(
+      "cli.unknown-command",
+      "HoneyBee 0.7 exposes only project, cache, workspace, config, and version commands.",
+    );
+  }
+  const args = parseArguments(rawArguments);
   if (args.command === "help") return void process.stdout.write(HELP);
   if (args.command === "version") return void process.stdout.write(`${VERSION}\n`);
   if (args.command === "execute") return execute(args);
@@ -1296,14 +1306,20 @@ void main().catch((error: unknown) => {
             ? {}
             : { runId: runError.runId, journalPath: runError.journalPath }),
         }
-      : {
-          ok: false,
-          code: "cli.invalid-request",
-          message: cause instanceof Error ? cause.message : String(cause),
-          ...(runError === undefined
-            ? {}
-            : { runId: runError.runId, journalPath: runError.journalPath }),
-        };
+      : cause instanceof WorkspaceCoreError
+        ? {
+            ok: false,
+            code: cause.code,
+            message: cause.message,
+          }
+        : {
+            ok: false,
+            code: "cli.invalid-request",
+            message: cause instanceof Error ? cause.message : String(cause),
+            ...(runError === undefined
+              ? {}
+              : { runId: runError.runId, journalPath: runError.journalPath }),
+          };
   process.stderr.write(`${JSON.stringify(payload)}\n`);
   process.exitCode = 1;
 });

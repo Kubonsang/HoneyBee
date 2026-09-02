@@ -39,8 +39,10 @@ import type {
   DesktopRuntimeSnapshotV1,
 } from "../shared/ipc.js";
 import { buildLineDiff } from "./diff-lines.js";
+import { TerminalPanel } from "./TerminalPanel.js";
 import {
   WORK_STAGES,
+  capabilityToggleDisabled,
   runEvidenceSummary,
   runNeedsAttention,
   runStage,
@@ -59,7 +61,7 @@ export interface WorkDraft {
   readonly unavailableAgent: string | undefined;
 }
 
-export type UtilityTab = "runs" | "pool" | "doctor" | "activity";
+export type UtilityTab = "runs" | "pool" | "doctor" | "terminal" | "activity";
 
 interface WorkspaceViewProps {
   readonly profile: DesktopProjectProfile;
@@ -93,15 +95,16 @@ interface WorkspaceViewProps {
   readonly onPatchControl: (action: PatchActionV1) => void;
   readonly onCloneRun: () => void;
   readonly onUtility: (tab: UtilityTab, open?: boolean) => void;
+  readonly onTerminalError: (message: string) => void;
 }
 
 function StageRail({ detail }: { readonly detail?: RunDetailV1 | undefined }) {
   const current = runStage(detail?.summary);
+  const successfulTerminal = detail?.summary.status.toLowerCase() === "completed";
   return (
     <div className="focus-stage-rail" aria-label="Work progress">
       {WORK_STAGES.map((stage, index) => {
-        const complete =
-          index < current || (index === current && detail?.summary.terminal === true);
+        const complete = index < current || (index === current && successfulTerminal);
         const active = index === current && !complete;
         return (
           <div
@@ -295,7 +298,7 @@ function WorkComposer({
                   <input
                     type="checkbox"
                     checked={work.compile}
-                    disabled={!testplayAvailable}
+                    disabled={capabilityToggleDisabled(testplayAvailable, work.compile)}
                     onChange={(event) => onUpdateWork(work.key, { compile: event.target.checked })}
                   />
                   Compile
@@ -304,7 +307,7 @@ function WorkComposer({
                   <input
                     type="checkbox"
                     checked={work.warmTest}
-                    disabled={!testplayAvailable}
+                    disabled={capabilityToggleDisabled(testplayAvailable, work.warmTest)}
                     onChange={(event) => onUpdateWork(work.key, { warmTest: event.target.checked })}
                   />
                   Warm Test
@@ -475,8 +478,18 @@ function PatchReview({
     [patch.patch.artifactId, patch.files],
   );
   const file = patch.files.find((candidate) => candidate.path === selectedPath) ?? patch.files[0];
-  const before = file?.before?.format === "text" ? (file.before.text ?? "") : undefined;
-  const after = file?.after?.format === "text" ? (file.after.text ?? "") : undefined;
+  const before =
+    file?.operation === "add"
+      ? ""
+      : file?.before?.format === "text"
+        ? (file.before.text ?? "")
+        : undefined;
+  const after =
+    file?.operation === "delete"
+      ? ""
+      : file?.after?.format === "text"
+        ? (file.after.text ?? "")
+        : undefined;
 
   return (
     <>
@@ -594,10 +607,38 @@ function RunWorkspace({
       </section>
     );
   }
+  const active = !detail.summary.terminal;
+  const latestEvent = detail.events[detail.events.length - 1];
   return (
     <section className="focus-workspace run-workspace">
       <FocusHeader title={runTitle(detail.summary)} detail={detail} />
       <StageRail detail={detail} />
+      {active && (
+        <section className="live-run-banner" aria-live="polite">
+          <span className="live-run-indicator">
+            <span className="live-run-pulse" />
+            Live Run
+          </span>
+          <div className="live-run-copy">
+            <strong>{latestEvent?.summary ?? `Agent is ${detail.summary.phase}`}</strong>
+            <small>
+              {latestEvent === undefined
+                ? "Waiting for the first durable event…"
+                : `Updated ${new Date(latestEvent.timestamp).toLocaleTimeString()} · event #${latestEvent.sequence}`}
+            </small>
+          </div>
+          <div className="live-run-actions">
+            <button onClick={() => onUtility("terminal", true)}>
+              <TerminalWindow size={16} />
+              Live CLI
+            </button>
+            <button onClick={() => onUtility("activity", true)}>
+              <ListBullets size={16} />
+              Activity
+            </button>
+          </div>
+        </section>
+      )}
       {patch !== undefined ? (
         <PatchReview
           detail={detail}
@@ -668,26 +709,31 @@ function RunWorkspace({
                 ))}
               </div>
             </section>
-            <section className="recent-events">
+            <section className={`recent-events ${active ? "live" : ""}`} aria-live="polite">
               <header>
                 <ListBullets size={18} />
-                <strong>Recent activity</strong>
+                <strong>{active ? "Live activity" : "Recent activity"}</strong>
+                {active && <span className="live-event-count">{detail.events.length} events</span>}
                 <button onClick={() => onUtility("activity", true)}>View all</button>
               </header>
-              {detail.events
-                .slice(-6)
-                .reverse()
-                .map((event) => (
-                  <article key={event.sequence}>
-                    <span className="event-dot" />
-                    <div>
-                      <strong>{event.summary}</strong>
-                      <small>
-                        {new Date(event.timestamp).toLocaleTimeString()} · #{event.sequence}
-                      </small>
-                    </div>
-                  </article>
-                ))}
+              {detail.events.length === 0 ? (
+                <p className="empty-live-events">Waiting for the first durable event…</p>
+              ) : (
+                detail.events
+                  .slice(-6)
+                  .reverse()
+                  .map((event) => (
+                    <article key={event.sequence}>
+                      <span className="event-dot" />
+                      <div>
+                        <strong>{event.summary}</strong>
+                        <small>
+                          {new Date(event.timestamp).toLocaleTimeString()} · #{event.sequence}
+                        </small>
+                      </div>
+                    </article>
+                  ))
+              )}
             </section>
           </div>
           {detail.artifacts.length > 0 && (
@@ -697,7 +743,7 @@ function RunWorkspace({
                 <strong>Evidence & outputs</strong>
               </header>
               <div>
-                {detail.artifacts.slice(0, 5).map((item) => (
+                {detail.artifacts.map((item) => (
                   <button
                     key={item.artifactId}
                     onClick={() => onReadArtifact(item.artifactId)}
@@ -727,15 +773,30 @@ function RunWorkspace({
 function UtilityDrawer({
   snapshot,
   selectedRunId,
+  detail,
+  artifact,
   doctor,
+  detailBusy,
   open,
   tab,
   onSelectRun,
+  onReadArtifact,
   onRunDoctor,
   onUtility,
+  onTerminalError,
 }: Pick<
   WorkspaceViewProps,
-  "snapshot" | "selectedRunId" | "doctor" | "onSelectRun" | "onRunDoctor" | "onUtility"
+  | "snapshot"
+  | "selectedRunId"
+  | "detail"
+  | "artifact"
+  | "doctor"
+  | "detailBusy"
+  | "onSelectRun"
+  | "onReadArtifact"
+  | "onRunDoctor"
+  | "onUtility"
+  | "onTerminalError"
 > & {
   readonly open: boolean;
   readonly tab: UtilityTab;
@@ -744,6 +805,7 @@ function UtilityDrawer({
     ["runs", <ClockCounterClockwise size={16} key="runs" />, "Runs"],
     ["pool", <Cpu size={16} key="pool" />, "Editor Pool"],
     ["doctor", <Stethoscope size={16} key="doctor" />, "Doctor"],
+    ["terminal", <Code size={16} key="terminal" />, "Live CLI"],
     ["activity", <TerminalWindow size={16} key="activity" />, "Activity"],
   ];
   return (
@@ -754,8 +816,12 @@ function UtilityDrawer({
         aria-expanded={open}
       >
         <CaretDown size={16} />
-        <span>Utilities</span>
-        <small>runs, editor pool, queue, doctor, activity</small>
+        <span>Runs & diagnostics</span>
+        <small>
+          {snapshot === undefined
+            ? "Connecting to durable runtime…"
+            : `${snapshot.runs.length} durable Runs · history, editor pool, live CLI, activity`}
+        </small>
         <span className="status-spacer" />
         <i className="live-dot" />
         <strong>
@@ -895,21 +961,78 @@ function UtilityDrawer({
               )}
             </div>
           )}
+          {tab === "terminal" &&
+            (selectedRunId === undefined ? (
+              <p className="quiet">Select or start a Run to view its Agent session.</p>
+            ) : (
+              <TerminalPanel runId={selectedRunId} onError={onTerminalError} />
+            ))}
           {tab === "activity" && (
             <div className="utility-activity">
-              {(snapshot?.runs ?? []).flatMap((run) =>
-                run.updatedAt === undefined
-                  ? []
-                  : [
-                      <article key={run.runId}>
-                        <time>{new Date(run.updatedAt).toLocaleTimeString()}</time>
-                        <Circle size={9} weight="fill" />
-                        <span>
-                          <strong>{runTitle(run)}</strong>
-                          {run.phase}
-                        </span>
-                      </article>,
-                    ],
+              {detail === undefined ? (
+                (snapshot?.runs ?? []).flatMap((run) =>
+                  run.updatedAt === undefined
+                    ? []
+                    : [
+                        <article key={run.runId}>
+                          <time>{new Date(run.updatedAt).toLocaleTimeString()}</time>
+                          <Circle size={9} weight="fill" />
+                          <span>
+                            <strong>{runTitle(run)}</strong>
+                            {run.phase}
+                          </span>
+                        </article>,
+                      ],
+                )
+              ) : (
+                <>
+                  <section className="utility-event-timeline" aria-label="Selected Run activity">
+                    {detail.events.length === 0 ? (
+                      <p className="quiet">This Run has no recorded activity yet.</p>
+                    ) : (
+                      [...detail.events].reverse().map((event) => (
+                        <article key={event.sequence}>
+                          <time>{new Date(event.timestamp).toLocaleTimeString()}</time>
+                          <Circle size={9} weight="fill" />
+                          <span>
+                            <strong>#{event.sequence}</strong>
+                            {event.summary}
+                          </span>
+                        </article>
+                      ))
+                    )}
+                  </section>
+                  <section className="evidence-strip utility-evidence">
+                    <header>
+                      <FirstAidKit size={18} />
+                      <strong>Evidence & outputs</strong>
+                    </header>
+                    {detail.artifacts.length === 0 ? (
+                      <p className="quiet">This Run has no readable Artifacts yet.</p>
+                    ) : (
+                      <div>
+                        {detail.artifacts.map((item) => (
+                          <button
+                            key={item.artifactId}
+                            onClick={() => onReadArtifact(item.artifactId)}
+                            disabled={detailBusy !== undefined}
+                          >
+                            <FileCode size={16} />
+                            <span>{item.kind}</span>
+                            <small>{item.byteLength.toLocaleString()} B</small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {artifact !== undefined && (
+                      <pre className="artifact-inline">
+                        {artifact.encoding === "utf8"
+                          ? artifact.content.slice(0, 20_000)
+                          : "Binary Artifact preview is intentionally disabled."}
+                      </pre>
+                    )}
+                  </section>
+                </>
               )}
             </div>
           )}
@@ -930,12 +1053,17 @@ export function WorkspaceView(props: WorkspaceViewProps) {
       <UtilityDrawer
         snapshot={props.snapshot}
         selectedRunId={props.selectedRunId}
+        detail={props.detail}
+        artifact={props.artifact}
         doctor={props.doctor}
+        detailBusy={props.detailBusy}
         open={props.utilityOpen}
         tab={props.utilityTab}
         onSelectRun={props.onSelectRun}
+        onReadArtifact={props.onReadArtifact}
         onRunDoctor={props.onRunDoctor}
         onUtility={props.onUtility}
+        onTerminalError={props.onTerminalError}
       />
     </>
   );

@@ -863,6 +863,7 @@ export class UnityWorkTransaction {
     let result: AgentProcessResult;
     let startedEventId: EventId | undefined;
     let deferred = false;
+    let exited = false;
     try {
       result = await this.runner.run(
         {
@@ -899,10 +900,16 @@ export class UnityWorkTransaction {
           },
           onRegistered: () =>
             this.#emitContainmentRegistered(writer, "agent", startedEventId, UNITY_STEP_ID),
-          onExited: (observation) => writer.emit("agent.exited", observation, UNITY_STEP_ID),
+          onExited: async (observation) => {
+            await writer.emit("agent.exited", observation, UNITY_STEP_ID);
+            exited = true;
+          },
         },
       );
     } catch (error) {
+      if (deferred && exited) {
+        await this.#emitProcessDrainCompleted(writer, "agent", startedEventId, UNITY_STEP_ID);
+      }
       if (error instanceof HoneyBeeCoreError && error.code === "agent.input-write-failed") {
         await writer.emit("agent.input-write-failed", failureMetadata(error), UNITY_STEP_ID);
       }

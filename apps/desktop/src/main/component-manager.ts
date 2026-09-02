@@ -41,7 +41,7 @@ const ALLOWED_DOWNLOAD_ORIGINS = new Set([
   "https://release-assets.githubusercontent.com",
 ]);
 export const PACKAGED_COMPATIBILITY_MANIFEST_SHA256 =
-  "b344c0e167c3935e51df943373a2bf501bd35406d18d0ef87eedce5c3c9407f4";
+  "a92127f684f3f4ff09a9b5da05e2754acb201e03f78df25f3c8aa9e9fbc9a96b";
 
 type ComponentPayload = ComponentPayloadV1;
 type Download = (url: string, target: string, maximumBytes: number) => Promise<void>;

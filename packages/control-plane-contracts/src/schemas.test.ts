@@ -1,12 +1,29 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  RunSummaryV1Schema,
   RuntimeInfoV1Schema,
   StartUnityWorksRequestV1Schema,
   StartUnityWorksRequestV2Schema,
 } from "./schemas.js";
 
 describe("control-plane contracts", () => {
+  it("accepts current schema-6 Run summaries", () => {
+    expect(
+      RunSummaryV1Schema.safeParse({
+        schemaVersion: 1,
+        runId: "11111111-1111-4111-8111-111111111111",
+        journalSchemaVersion: 6,
+        mode: "unity-work-v3",
+        status: "completed",
+        phase: "completed",
+        terminal: true,
+        executorPresent: false,
+        allowedActions: [],
+      }).success,
+    ).toBe(true);
+  });
+
   it("rejects unknown fields at the public boundary", () => {
     expect(() =>
       RuntimeInfoV1Schema.parse({

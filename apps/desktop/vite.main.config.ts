@@ -16,7 +16,7 @@ export default defineConfig({
     minify: false,
     outDir: "dist/main/main",
     rollupOptions: {
-      external: (id) => id === "electron" || builtins.has(id),
+      external: (id) => id === "electron" || id === "node-pty" || builtins.has(id),
     },
   },
 });

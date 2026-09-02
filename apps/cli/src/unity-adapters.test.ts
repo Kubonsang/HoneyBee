@@ -187,12 +187,14 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
     const digest = createHash("sha256").update("pinned").digest("hex");
     const calls: readonly string[][] = [];
     const mutableCalls = calls as string[][];
+    const workingDirectories: string[] = [];
     const executor: ConstructorParameters<typeof UnityWorkspaceStorageCliAdapter>[3] = async (
       _command,
       args,
       options,
     ) => {
       mutableCalls.push([...args]);
+      workingDirectories.push(options.cwd);
       const requestId = args[args.indexOf("--request-id") + 1];
       let response: Record<string, unknown>;
       if (args[1] === "acquire") {
@@ -281,7 +283,7 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
         workspace,
       ),
     ).resolves.toMatchObject({ lease: { leaseId: "lease-v2", runId: "consumer-v2" } });
-    await expect(adapter.release("lease-v2", "release-v2", workspace)).resolves.toMatchObject({
+    await expect(adapter.release("lease-v2", "release-v2", root)).resolves.toMatchObject({
       metrics: { cleanupState: "released" },
     });
     await expect(adapter.status("status-v2", workspace)).resolves.toMatchObject({
@@ -299,6 +301,7 @@ describe("UnityWorkspaceStorageCliAdapter", () => {
       "release-v2",
     ]);
     expect(calls[2]).toEqual(["workspace", "status", "--schema", "2", "--request-id", "status-v2"]);
+    expect(workingDirectories[1]).toBe(root);
   });
 
   it.each([

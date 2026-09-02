@@ -20,9 +20,16 @@ export default tseslint.config(
     files: ["**/*.cjs"],
     languageOptions: {
       globals: {
+        __filename: "readonly",
+        clearTimeout: "readonly",
         module: "readonly",
+        process: "readonly",
         require: "readonly",
+        setTimeout: "readonly",
       },
+    },
+    rules: {
+      "@typescript-eslint/no-require-imports": "off",
     },
   },
   {

@@ -547,6 +547,37 @@ export const DesktopBootstrapV2Schema = z
   .strict();
 export type DesktopBootstrapV2 = z.infer<typeof DesktopBootstrapV2Schema>;
 
+export const DesktopProjectCatalogEntryV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    projectPath: z.string().min(1),
+    label: z.string().trim().min(1).max(120),
+    source: z.enum(["managed", "unity-hub"]),
+    profileId: z.string().uuid().optional(),
+    projectVersion: z.string().trim().min(1).max(120).optional(),
+    lastOpenedAt: z.string().datetime().optional(),
+  })
+  .strict()
+  .superRefine((entry, context) => {
+    if (entry.source === "managed" && entry.profileId === undefined) {
+      context.addIssue({
+        code: "custom",
+        path: ["profileId"],
+        message: "Managed catalog entries require a project profile ID.",
+      });
+    }
+  });
+export type DesktopProjectCatalogEntryV1 = z.infer<typeof DesktopProjectCatalogEntryV1Schema>;
+
+export const DesktopProjectCatalogV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    observedAt: z.string().datetime(),
+    projects: z.array(DesktopProjectCatalogEntryV1Schema).max(200),
+  })
+  .strict();
+export type DesktopProjectCatalogV1 = z.infer<typeof DesktopProjectCatalogV1Schema>;
+
 export const SetupCandidateV1Schema = z
   .object({
     path: z.string().min(1),
@@ -788,6 +819,351 @@ export const DesktopRunRequestV1Schema = z
   .strict();
 export type DesktopRunRequestV1 = z.infer<typeof DesktopRunRequestV1Schema>;
 
+export const DesktopTerminalModeV1Schema = z.enum(["readable", "raw"]);
+export type DesktopTerminalModeV1 = z.infer<typeof DesktopTerminalModeV1Schema>;
+
+export const DesktopTerminalSnapshotRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    runId: z.string().uuid(),
+    afterCursor: z.number().int().nonnegative(),
+    mode: DesktopTerminalModeV1Schema,
+  })
+  .strict();
+export type DesktopTerminalSnapshotRequestV1 = z.infer<
+  typeof DesktopTerminalSnapshotRequestV1Schema
+>;
+
+export const DesktopTerminalEntryV1Schema = z
+  .object({
+    cursor: z.number().int().positive(),
+    runId: z.string().uuid(),
+    stepId: z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u),
+    timestamp: z.string().datetime(),
+    channel: z.enum(["system", "assistant", "tool", "approval", "stderr", "raw"]),
+    mode: DesktopTerminalModeV1Schema,
+    text: z.string().max(16_384),
+    direction: z.enum(["provider", "honeybee"]).optional(),
+  })
+  .strict();
+export type DesktopTerminalEntryV1 = z.infer<typeof DesktopTerminalEntryV1Schema>;
+
+export const DesktopTerminalSnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    instanceId: z.string().uuid(),
+    cursor: z.number().int().nonnegative(),
+    state: z.enum(["running", "completed", "unavailable"]),
+    entries: z.array(DesktopTerminalEntryV1Schema).max(5_000),
+    truncated: z.boolean(),
+    rawAvailable: z.boolean(),
+  })
+  .strict();
+export type DesktopTerminalSnapshotV1 = z.infer<typeof DesktopTerminalSnapshotV1Schema>;
+
+const DesktopRelativePathV1Schema = z
+  .string()
+  .max(1_024)
+  .refine((value) => !value.includes("\\0"), "Paths cannot contain NUL bytes.");
+
+export const DesktopProjectTreeRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    relativePath: DesktopRelativePathV1Schema,
+  })
+  .strict();
+export type DesktopProjectTreeRequestV1 = z.infer<typeof DesktopProjectTreeRequestV1Schema>;
+
+export const DesktopProjectTreeEntryV1Schema = z
+  .object({
+    name: z.string().min(1).max(255),
+    relativePath: z.string().min(1).max(1_024),
+    kind: z.enum(["file", "directory"]),
+    byteLength: z.number().int().nonnegative().optional(),
+  })
+  .strict();
+export type DesktopProjectTreeEntryV1 = z.infer<typeof DesktopProjectTreeEntryV1Schema>;
+
+export const DesktopProjectTreeV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    relativePath: DesktopRelativePathV1Schema,
+    entries: z.array(DesktopProjectTreeEntryV1Schema).max(1_000),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type DesktopProjectTreeV1 = z.infer<typeof DesktopProjectTreeV1Schema>;
+
+export const DesktopProjectFileRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    relativePath: DesktopRelativePathV1Schema.min(1),
+  })
+  .strict();
+export type DesktopProjectFileRequestV1 = z.infer<typeof DesktopProjectFileRequestV1Schema>;
+
+export const DesktopProjectFileV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    relativePath: z.string().min(1).max(1_024),
+    encoding: z.literal("utf8"),
+    content: z.string().max(1_048_576),
+    byteLength: z.number().int().nonnegative(),
+    truncated: z.boolean(),
+    language: z.string().min(1).max(32),
+  })
+  .strict();
+export type DesktopProjectFileV1 = z.infer<typeof DesktopProjectFileV1Schema>;
+
+export const DesktopProjectSearchRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    query: z.string().trim().min(1).max(120),
+    maxResults: z.number().int().min(1).max(200).default(100),
+  })
+  .strict();
+export type DesktopProjectSearchRequestV1 = z.infer<typeof DesktopProjectSearchRequestV1Schema>;
+
+export const DesktopProjectSearchV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    query: z.string().min(1).max(120),
+    matches: z.array(DesktopProjectTreeEntryV1Schema).max(200),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type DesktopProjectSearchV1 = z.infer<typeof DesktopProjectSearchV1Schema>;
+
+export const DesktopPtyKindV1Schema = z.enum(["agent", "shell"]);
+export type DesktopPtyKindV1 = z.infer<typeof DesktopPtyKindV1Schema>;
+
+export const DesktopPtyCreateRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    kind: DesktopPtyKindV1Schema,
+    agentId: z.string().uuid().optional(),
+    columns: z.number().int().min(20).max(500),
+    rows: z.number().int().min(5).max(200),
+  })
+  .strict()
+  .superRefine((request, context) => {
+    if ((request.kind === "agent") !== (request.agentId !== undefined)) {
+      context.addIssue({
+        code: "custom",
+        path: ["agentId"],
+        message: "Agent PTYs require one Agent; shell PTYs forbid Agent IDs.",
+      });
+    }
+  });
+export type DesktopPtyCreateRequestV1 = z.infer<typeof DesktopPtyCreateRequestV1Schema>;
+
+export const DesktopPtySessionRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), sessionId: z.string().uuid() })
+  .strict();
+export type DesktopPtySessionRequestV1 = z.infer<typeof DesktopPtySessionRequestV1Schema>;
+
+export const DesktopPtySnapshotRequestV1Schema = DesktopPtySessionRequestV1Schema.extend({
+  afterCursor: z.number().int().nonnegative(),
+}).strict();
+export type DesktopPtySnapshotRequestV1 = z.infer<typeof DesktopPtySnapshotRequestV1Schema>;
+
+export const DesktopPtyWriteRequestV1Schema = DesktopPtySessionRequestV1Schema.extend({
+  data: z.string().min(1).max(65_536),
+}).strict();
+export type DesktopPtyWriteRequestV1 = z.infer<typeof DesktopPtyWriteRequestV1Schema>;
+
+export const DesktopPtyResizeRequestV1Schema = DesktopPtySessionRequestV1Schema.extend({
+  columns: z.number().int().min(20).max(500),
+  rows: z.number().int().min(5).max(200),
+}).strict();
+export type DesktopPtyResizeRequestV1 = z.infer<typeof DesktopPtyResizeRequestV1Schema>;
+
+export const DesktopPtySessionV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    sessionId: z.string().uuid(),
+    profileId: z.string().uuid(),
+    kind: DesktopPtyKindV1Schema,
+    label: z.string().min(1).max(120),
+    state: z.enum(["running", "exited"]),
+    exitCode: z.number().int().nullable().optional(),
+    createdAt: z.string().datetime(),
+  })
+  .strict();
+export type DesktopPtySessionV1 = z.infer<typeof DesktopPtySessionV1Schema>;
+
+export const DesktopPtyChunkV1Schema = z
+  .object({ cursor: z.number().int().positive(), data: z.string().max(65_536) })
+  .strict();
+
+export const DesktopPtySnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    session: DesktopPtySessionV1Schema,
+    cursor: z.number().int().nonnegative(),
+    chunks: z.array(DesktopPtyChunkV1Schema).max(1_000),
+    truncated: z.boolean(),
+  })
+  .strict();
+export type DesktopPtySnapshotV1 = z.infer<typeof DesktopPtySnapshotV1Schema>;
+
+export const DesktopGitSnapshotRequestV1Schema = z
+  .object({ schemaVersion: z.literal(1), profileId: z.string().uuid() })
+  .strict();
+export type DesktopGitSnapshotRequestV1 = z.infer<typeof DesktopGitSnapshotRequestV1Schema>;
+
+export const DesktopGitRunRequestV1Schema = DesktopGitSnapshotRequestV1Schema.extend({
+  runId: z.string().uuid(),
+}).strict();
+export type DesktopGitRunRequestV1 = z.infer<typeof DesktopGitRunRequestV1Schema>;
+
+export const DesktopGitWorktreeV1Schema = z
+  .object({
+    path: z.string().min(1),
+    branch: z.string().min(1).max(255),
+    head: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    kind: z.enum(["source", "integration", "work", "other"]),
+    runId: z.string().uuid().optional(),
+    status: z.enum(["clean", "dirty", "conflict"]),
+  })
+  .strict();
+export type DesktopGitWorktreeV1 = z.infer<typeof DesktopGitWorktreeV1Schema>;
+
+export const DesktopGitSnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    available: z.boolean(),
+    projectPath: z.string().min(1),
+    repositoryRoot: z.string().min(1).optional(),
+    currentBranch: z.string().min(1).max(255).optional(),
+    worktrees: z.array(DesktopGitWorktreeV1Schema).max(128),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type DesktopGitSnapshotV1 = z.infer<typeof DesktopGitSnapshotV1Schema>;
+
+export const DesktopGitActionResultV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    disposition: z.enum(["materialized", "merged", "integrated", "conflict", "already-complete"]),
+    branch: z.string().min(1).max(255),
+    integrationBranch: z.string().min(1).max(255),
+    conflictPaths: z.array(z.string().min(1).max(4_096)),
+    snapshot: DesktopGitSnapshotV1Schema,
+  })
+  .strict();
+export type DesktopGitActionResultV1 = z.infer<typeof DesktopGitActionResultV1Schema>;
+
+// Durable user-owned CoW workspaces are independent from legacy Run worktrees.
+export const DesktopWorkspaceRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    workspaceId: z.string().uuid(),
+  })
+  .strict();
+export type DesktopWorkspaceRequestV1 = z.infer<typeof DesktopWorkspaceRequestV1Schema>;
+
+export const DesktopWorkspaceCreateRequestV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    label: z.string().trim().min(1).max(80),
+  })
+  .strict();
+export type DesktopWorkspaceCreateRequestV1 = z.infer<typeof DesktopWorkspaceCreateRequestV1Schema>;
+
+export const DesktopWorkspaceOpenRequestV1Schema = DesktopWorkspaceRequestV1Schema.extend({
+  target: z.enum(["terminal", "unity", "agent", "explorer"]),
+}).strict();
+export type DesktopWorkspaceOpenRequestV1 = z.infer<typeof DesktopWorkspaceOpenRequestV1Schema>;
+
+export const DesktopWorkspacePublishRequestV1Schema = DesktopWorkspaceRequestV1Schema.extend({
+  branch: z
+    .string()
+    .trim()
+    .min(1)
+    .max(200)
+    .regex(/^honeybee\/[A-Za-z0-9][A-Za-z0-9._/-]*$/u),
+}).strict();
+export type DesktopWorkspacePublishRequestV1 = z.infer<
+  typeof DesktopWorkspacePublishRequestV1Schema
+>;
+
+export const DesktopWorkspaceGitStatusV1Schema = z
+  .object({
+    state: z.enum(["clean", "dirty", "conflict", "unavailable"]),
+    head: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    aheadCommits: z.number().int().nonnegative(),
+    changedFiles: z.number().int().nonnegative(),
+  })
+  .strict();
+
+export const DesktopWorkspaceV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    workspaceId: z.string().uuid(),
+    label: z.string().min(1).max(80),
+    workspacePath: z.string().min(1),
+    branch: z.string().min(1).max(255),
+    baseCommit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    snapshotCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    parentId: z.string().min(1).max(128),
+    provider: z.string().min(1).max(64),
+    createdAt: z.string().datetime(),
+    lastOpenedAt: z.string().datetime(),
+    allocatedBytes: z.number().int().nonnegative().optional(),
+    git: DesktopWorkspaceGitStatusV1Schema,
+    publishState: z.enum(["never", "published", "ahead", "diverged", "blocked"]),
+    publishedBranch: z.string().min(1).max(255).optional(),
+    publishedCommit: z
+      .string()
+      .regex(/^[0-9a-f]{40,64}$/u)
+      .optional(),
+    publishedAt: z.string().datetime().optional(),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type DesktopWorkspaceV1 = z.infer<typeof DesktopWorkspaceV1Schema>;
+
+export const DesktopWorkspaceSnapshotV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    profileId: z.string().uuid(),
+    supported: z.boolean(),
+    workspaces: z.array(DesktopWorkspaceV1Schema).max(128),
+    message: z.string().min(1).max(512).optional(),
+  })
+  .strict();
+export type DesktopWorkspaceSnapshotV1 = z.infer<typeof DesktopWorkspaceSnapshotV1Schema>;
+
+export const DesktopWorkspacePublishReceiptV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    workspaceId: z.string().uuid(),
+    repositoryRoot: z.string().min(1),
+    branch: z.string().min(1).max(255),
+    commit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    baseCommit: z.string().regex(/^[0-9a-f]{40,64}$/u),
+    publishedAt: z.string().datetime(),
+    workspace: DesktopWorkspaceV1Schema,
+  })
+  .strict();
+export type DesktopWorkspacePublishReceiptV1 = z.infer<
+  typeof DesktopWorkspacePublishReceiptV1Schema
+>;
+
 export const DesktopArtifactRequestV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -832,9 +1208,22 @@ export const DesktopDeveloperSettingsV1Schema = z
   .object({
     schemaVersion: z.literal(1),
     dogfoodMetricsEnabled: z.boolean(),
+    rawAgentProtocolEnabled: z.boolean(),
   })
   .strict();
 export type DesktopDeveloperSettingsV1 = z.infer<typeof DesktopDeveloperSettingsV1Schema>;
+
+export const DesktopPreferencesV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    density: z.enum(["comfortable", "compact"]),
+    terminalFontSize: z.number().int().min(10).max(18),
+    fileExplorerWidth: z.number().int().min(220).max(420),
+    workbenchDefault: z.enum(["files", "agent", "shell", "work"]),
+    reducedMotion: z.boolean(),
+  })
+  .strict();
+export type DesktopPreferencesV1 = z.infer<typeof DesktopPreferencesV1Schema>;
 
 export const DesktopDeveloperSettingsUpdateV1Schema = DesktopDeveloperSettingsV1Schema;
 
@@ -894,6 +1283,7 @@ export type DesktopDogfoodStatusV1 = z.infer<typeof DesktopDogfoodStatusV1Schema
 
 export const DesktopIpcChannels = {
   bootstrap: "desktop.bootstrap.v1",
+  projectCatalog: "desktop.project-catalog.v1",
   chooseProfile: "desktop.profile.choose.v1",
   chooseSetupPath: "desktop.setup.path.choose.v1",
   projectDiscover: "desktop.project.discover.v1",
@@ -911,6 +1301,25 @@ export const DesktopIpcChannels = {
   cloneRunDraft: "desktop.run.clone-draft.v1",
   runtimeSnapshot: "desktop.runtime.snapshot.v1",
   runDetail: "desktop.run.detail.v1",
+  terminalSnapshot: "desktop.terminal.snapshot.v1",
+  terminalWindowOpen: "desktop.terminal.window.open.v1",
+  projectTree: "desktop.project.tree.v1",
+  projectFileRead: "desktop.project.file.read.v1",
+  projectSearch: "desktop.project.search.v1",
+  ptyCreate: "desktop.pty.create.v1",
+  ptySnapshot: "desktop.pty.snapshot.v1",
+  ptyWrite: "desktop.pty.write.v1",
+  ptyResize: "desktop.pty.resize.v1",
+  ptyClose: "desktop.pty.close.v1",
+  gitSnapshot: "desktop.git.snapshot.v1",
+  gitMaterializeRun: "desktop.git.materialize-run.v1",
+  gitMergeRun: "desktop.git.merge-run.v1",
+  gitFinalizeIntegration: "desktop.git.finalize-integration.v1",
+  workspaceSnapshot: "desktop.workspace.snapshot.v1",
+  workspaceCreate: "desktop.workspace.create.v1",
+  workspaceOpen: "desktop.workspace.open.v1",
+  workspacePublish: "desktop.workspace.publish.v1",
+  workspaceDelete: "desktop.workspace.delete.v1",
   artifactRead: "desktop.artifact.read.v1",
   runResume: "desktop.run.resume.v1",
   runCancel: "desktop.run.cancel.v1",
@@ -925,6 +1334,8 @@ export const DesktopIpcChannels = {
   projectAgentPreference: "desktop.project.agent-preference.v1",
   developerSettingsGet: "desktop.developer-settings.get.v1",
   developerSettingsUpdate: "desktop.developer-settings.update.v1",
+  preferencesGet: "desktop.preferences.get.v1",
+  preferencesUpdate: "desktop.preferences.update.v1",
   dogfoodStatus: "desktop.dogfood.status.v1",
   dogfoodStart: "desktop.dogfood.start.v1",
   dogfoodFinalize: "desktop.dogfood.finalize.v1",
@@ -933,6 +1344,7 @@ export const DesktopIpcChannels = {
 
 export interface HoneyBeeDesktopApi {
   bootstrap(): Promise<DesktopBootstrapV2>;
+  projectCatalog(): Promise<DesktopProjectCatalogV1>;
   chooseProfile(): Promise<DesktopProjectProfile | null>;
   chooseSetupPath(request: z.infer<typeof DesktopSetupPathRequestV1Schema>): Promise<string | null>;
   discoverProject(
@@ -960,6 +1372,27 @@ export interface HoneyBeeDesktopApi {
   cloneRunDraft(request: DesktopCloneRunDraftRequestV1): Promise<DesktopClonedRunDraftV1>;
   runtimeSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopRuntimeSnapshotV1>;
   runDetail(request: DesktopRunRequestV1): Promise<RunDetailV1>;
+  terminalSnapshot(request: DesktopTerminalSnapshotRequestV1): Promise<DesktopTerminalSnapshotV1>;
+  openTerminalWindow(request: DesktopRunRequestV1): Promise<boolean>;
+  projectTree(request: DesktopProjectTreeRequestV1): Promise<DesktopProjectTreeV1>;
+  readProjectFile(request: DesktopProjectFileRequestV1): Promise<DesktopProjectFileV1>;
+  searchProject(request: DesktopProjectSearchRequestV1): Promise<DesktopProjectSearchV1>;
+  createPty(request: DesktopPtyCreateRequestV1): Promise<DesktopPtySessionV1>;
+  ptySnapshot(request: DesktopPtySnapshotRequestV1): Promise<DesktopPtySnapshotV1>;
+  writePty(request: DesktopPtyWriteRequestV1): Promise<boolean>;
+  resizePty(request: DesktopPtyResizeRequestV1): Promise<boolean>;
+  closePty(request: DesktopPtySessionRequestV1): Promise<boolean>;
+  gitSnapshot(request: DesktopGitSnapshotRequestV1): Promise<DesktopGitSnapshotV1>;
+  materializeRunWorktree(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
+  mergeRunWorktree(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
+  finalizeIntegration(request: DesktopGitRunRequestV1): Promise<DesktopGitActionResultV1>;
+  workspaceSnapshot(request: DesktopProfileIdRequestV1): Promise<DesktopWorkspaceSnapshotV1>;
+  createWorkspace(request: DesktopWorkspaceCreateRequestV1): Promise<DesktopWorkspaceV1>;
+  openWorkspace(request: DesktopWorkspaceOpenRequestV1): Promise<boolean>;
+  publishWorkspace(
+    request: DesktopWorkspacePublishRequestV1,
+  ): Promise<DesktopWorkspacePublishReceiptV1>;
+  deleteWorkspace(request: DesktopWorkspaceRequestV1): Promise<DesktopWorkspaceSnapshotV1>;
   readArtifact(request: DesktopArtifactRequestV1): Promise<ArtifactViewV1>;
   resumeRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
   cancelRun(request: DesktopRunRequestV1): Promise<RunControlResultV1>;
@@ -978,6 +1411,8 @@ export interface HoneyBeeDesktopApi {
   ): Promise<DesktopBootstrapV2>;
   developerSettings(): Promise<DesktopDeveloperSettingsV1>;
   updateDeveloperSettings(request: DesktopDeveloperSettingsV1): Promise<DesktopDeveloperSettingsV1>;
+  preferences(): Promise<DesktopPreferencesV1>;
+  updatePreferences(request: DesktopPreferencesV1): Promise<DesktopPreferencesV1>;
   dogfoodStatus(): Promise<DesktopDogfoodStatusV1>;
   startDogfood(
     request: z.infer<typeof DesktopDogfoodStartRequestV1Schema>,
@@ -992,6 +1427,7 @@ export interface HoneyBeeDesktopApi {
 
 export const DesktopIpcResponseSchemas = {
   bootstrap: DesktopBootstrapV2Schema,
+  projectCatalog: DesktopProjectCatalogV1Schema,
   chooseProfile: DesktopProjectProfileSchema.nullable(),
   chooseSetupPath: z.string().min(1).nullable(),
   projectDiscover: DesktopProjectDiscoveryV1Schema,
@@ -1009,6 +1445,25 @@ export const DesktopIpcResponseSchemas = {
   cloneRunDraft: DesktopClonedRunDraftV1Schema,
   runtimeSnapshot: DesktopRuntimeSnapshotV1Schema,
   runDetail: RunDetailV1Schema,
+  terminalSnapshot: DesktopTerminalSnapshotV1Schema,
+  terminalWindowOpen: z.boolean(),
+  projectTree: DesktopProjectTreeV1Schema,
+  projectFileRead: DesktopProjectFileV1Schema,
+  projectSearch: DesktopProjectSearchV1Schema,
+  ptyCreate: DesktopPtySessionV1Schema,
+  ptySnapshot: DesktopPtySnapshotV1Schema,
+  ptyWrite: z.boolean(),
+  ptyResize: z.boolean(),
+  ptyClose: z.boolean(),
+  gitSnapshot: DesktopGitSnapshotV1Schema,
+  gitMaterializeRun: DesktopGitActionResultV1Schema,
+  gitMergeRun: DesktopGitActionResultV1Schema,
+  gitFinalizeIntegration: DesktopGitActionResultV1Schema,
+  workspaceSnapshot: DesktopWorkspaceSnapshotV1Schema,
+  workspaceCreate: DesktopWorkspaceV1Schema,
+  workspaceOpen: z.boolean(),
+  workspacePublish: DesktopWorkspacePublishReceiptV1Schema,
+  workspaceDelete: DesktopWorkspaceSnapshotV1Schema,
   artifactRead: ArtifactViewV1Schema,
   runResume: RunControlResultV1Schema,
   runCancel: RunControlResultV1Schema,
@@ -1023,6 +1478,8 @@ export const DesktopIpcResponseSchemas = {
   projectAgentPreference: DesktopBootstrapV2Schema,
   developerSettingsGet: DesktopDeveloperSettingsV1Schema,
   developerSettingsUpdate: DesktopDeveloperSettingsV1Schema,
+  preferencesGet: DesktopPreferencesV1Schema,
+  preferencesUpdate: DesktopPreferencesV1Schema,
   dogfoodStatus: DesktopDogfoodStatusV1Schema,
   dogfoodStart: DesktopDogfoodStatusV1Schema,
   dogfoodFinalize: DesktopDogfoodStatusV1Schema,

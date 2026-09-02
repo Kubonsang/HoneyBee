@@ -17,6 +17,17 @@ import {
   type SetupCommand,
 } from "../shared/ipc.js";
 
+const DesktopSettingsV5Schema = z
+  .object({
+    schemaVersion: z.literal(5),
+    profiles: z.array(DesktopProjectProfileSchema).max(50),
+    agents: z.array(DesktopAgentProfileV1Schema).max(50),
+    preferredAgentIds: z.record(z.string().uuid(), z.string().uuid()),
+    lastUsedAgentId: z.string().uuid().optional(),
+    developer: DesktopDeveloperSettingsV1Schema,
+  })
+  .strict();
+
 const DesktopSettingsV4Schema = z
   .object({
     schemaVersion: z.literal(4),
@@ -24,7 +35,12 @@ const DesktopSettingsV4Schema = z
     agents: z.array(DesktopAgentProfileV1Schema).max(50),
     preferredAgentIds: z.record(z.string().uuid(), z.string().uuid()),
     lastUsedAgentId: z.string().uuid().optional(),
-    developer: DesktopDeveloperSettingsV1Schema,
+    developer: z
+      .object({
+        schemaVersion: z.literal(1),
+        dogfoodMetricsEnabled: z.boolean(),
+      })
+      .strict(),
   })
   .strict();
 
@@ -52,16 +68,20 @@ const DesktopSettingsV1Schema = z
   })
   .strict();
 
-type DesktopSettingsV4 = z.infer<typeof DesktopSettingsV4Schema>;
-export type DesktopSettingsSnapshot = Readonly<DesktopSettingsV4>;
+type DesktopSettingsV5 = z.infer<typeof DesktopSettingsV5Schema>;
+export type DesktopSettingsSnapshot = Readonly<DesktopSettingsV5>;
 
-const emptySettings = (): DesktopSettingsV4 =>
-  DesktopSettingsV4Schema.parse({
-    schemaVersion: 4,
+const emptySettings = (): DesktopSettingsV5 =>
+  DesktopSettingsV5Schema.parse({
+    schemaVersion: 5,
     profiles: [],
     agents: [],
     preferredAgentIds: {},
-    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
+    developer: {
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: false,
+      rawAgentProtocolEnabled: false,
+    },
   });
 
 const operationTails = new Map<string, Promise<void>>();
@@ -112,7 +132,7 @@ const embeddedAgent = (profile: DesktopProjectProfile): SetupCommand | undefined
     ? SetupCommandSchema.parse(profile.environment.agent)
     : undefined;
 
-const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV4 => {
+const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV5 => {
   const now = new Date().toISOString();
   const agents = new Map<string, DesktopAgentProfileV1>();
   const preferredAgentIds: Record<string, string> = {};
@@ -139,21 +159,39 @@ const migrate = (profiles: readonly DesktopProjectProfile[]): DesktopSettingsV4 
     preferredAgentIds[profile.profileId] = agent.agentId;
   }
   const values = [...agents.values()];
-  return DesktopSettingsV4Schema.parse({
-    schemaVersion: 4,
+  return DesktopSettingsV5Schema.parse({
+    schemaVersion: 5,
     profiles,
     agents: values,
     preferredAgentIds,
     ...(values[0] === undefined ? {} : { lastUsedAgentId: values[0].agentId }),
-    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
+    developer: {
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: false,
+      rawAgentProtocolEnabled: false,
+    },
   });
 };
 
-const migrateV3 = (settings: z.infer<typeof DesktopSettingsV3Schema>): DesktopSettingsV4 =>
-  DesktopSettingsV4Schema.parse({
+const migrateV3 = (settings: z.infer<typeof DesktopSettingsV3Schema>): DesktopSettingsV5 =>
+  DesktopSettingsV5Schema.parse({
     ...settings,
-    schemaVersion: 4,
-    developer: { schemaVersion: 1, dogfoodMetricsEnabled: false },
+    schemaVersion: 5,
+    developer: {
+      schemaVersion: 1,
+      dogfoodMetricsEnabled: false,
+      rawAgentProtocolEnabled: false,
+    },
+  });
+
+const migrateV4 = (settings: z.infer<typeof DesktopSettingsV4Schema>): DesktopSettingsV5 =>
+  DesktopSettingsV5Schema.parse({
+    ...settings,
+    schemaVersion: 5,
+    developer: {
+      ...settings.developer,
+      rawAgentProtocolEnabled: false,
+    },
   });
 
 export class DesktopSettingsStore {
@@ -162,7 +200,7 @@ export class DesktopSettingsStore {
 
   public constructor(userDataDirectory: string) {
     this.#directory = path.resolve(userDataDirectory);
-    this.#filePath = path.join(this.#directory, "settings-v4.json");
+    this.#filePath = path.join(this.#directory, "settings-v5.json");
   }
 
   public async snapshot(): Promise<DesktopSettingsSnapshot> {
@@ -361,16 +399,27 @@ export class DesktopSettingsStore {
     return result;
   }
 
-  async #read(): Promise<DesktopSettingsV4> {
+  async #read(): Promise<DesktopSettingsV5> {
     try {
       const entry = await lstat(this.#filePath);
       if (!entry.isFile() || entry.isSymbolicLink() || entry.size > 1024 * 1024) {
         throw new Error("invalid settings file");
       }
-      return DesktopSettingsV4Schema.parse(JSON.parse(await readFile(this.#filePath, "utf8")));
+      return DesktopSettingsV5Schema.parse(JSON.parse(await readFile(this.#filePath, "utf8")));
     } catch (error) {
       if (errorCode(error) !== "ENOENT")
         throw new Error("Desktop settings are invalid or unreadable.", { cause: error });
+      try {
+        const legacy = DesktopSettingsV4Schema.parse(
+          JSON.parse(await readFile(path.join(this.#directory, "settings-v4.json"), "utf8")),
+        );
+        const migrated = migrateV4(legacy);
+        await this.#write(migrated);
+        return migrated;
+      } catch (legacyError) {
+        if (errorCode(legacyError) !== "ENOENT")
+          throw new Error("Desktop settings are invalid or unreadable.", { cause: legacyError });
+      }
       try {
         const legacy = DesktopSettingsV3Schema.parse(
           JSON.parse(await readFile(path.join(this.#directory, "settings-v3.json"), "utf8")),
@@ -403,7 +452,7 @@ export class DesktopSettingsStore {
   }
 
   async #write(value: unknown): Promise<void> {
-    const settings = DesktopSettingsV4Schema.parse(value);
+    const settings = DesktopSettingsV5Schema.parse(value);
     await mkdir(this.#directory, { recursive: true });
     const directory = await lstat(this.#directory);
     if (!directory.isDirectory() || directory.isSymbolicLink()) {

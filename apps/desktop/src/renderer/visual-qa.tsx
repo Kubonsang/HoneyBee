@@ -217,6 +217,31 @@ const completedDetail = RunDetailV1Schema.parse({
   artifacts: [patchArtifact],
 });
 
+const activeDetail = (runId: string) => {
+  const summary = summaries.find((item) => item.runId === runId && !item.terminal) ?? summaries[0];
+  return RunDetailV1Schema.parse({
+    schemaVersion: 1,
+    summary,
+    events: [
+      {
+        sequence: 1,
+        timestamp: timestamp(80),
+        type: "workflow.started",
+        summary: "HoneyBee prepared the isolated Unity workspace.",
+        artifacts: [],
+      },
+      {
+        sequence: 2,
+        timestamp: timestamp(18),
+        type: "step.started",
+        stepId: "agent",
+        summary: "Agent is inspecting project files and planning the change.",
+        artifacts: [],
+      },
+    ],
+    artifacts: [],
+  });
+};
 const textContent = (
   text: string,
   digest: string,
@@ -359,6 +384,20 @@ const api: HoneyBeeDesktopApi = {
     preferredAgentIds: { [projectId]: agentId },
     lastUsedAgentId: agentId,
   }),
+  projectCatalog: async () => ({
+    schemaVersion: 1,
+    observedAt: timestamp(0),
+    projects: [
+      {
+        schemaVersion: 1,
+        projectPath: "C:\\Unity\\MyUnityGame",
+        label: "MyUnityGame",
+        source: "managed",
+        profileId: projectId,
+        lastOpenedAt: timestamp(4),
+      },
+    ],
+  }),
   chooseProfile: async () => null,
   chooseSetupPath: async () => null,
   discoverProject: unsupported,
@@ -381,11 +420,184 @@ const api: HoneyBeeDesktopApi = {
   startWorks: unsupported,
   cloneRunDraft: unsupported,
   runtimeSnapshot: async () => snapshot,
-  runDetail: async () => completedDetail,
+  runDetail: async (request) =>
+    request.runId === runDone ? completedDetail : activeDetail(request.runId),
+  terminalSnapshot: async (request) => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 60));
+    const cursor = Math.min(2, request.afterCursor + 1);
+    return {
+      schemaVersion: 1,
+      instanceId: "00000000-0000-4000-8000-000000000099",
+      cursor,
+      state: cursor < 2 ? ("running" as const) : ("completed" as const),
+      entries:
+        request.afterCursor === 0
+          ? [
+              {
+                cursor: 1,
+                runId: request.runId,
+                stepId: "unity-agent",
+                timestamp: timestamp(1),
+                channel: "system" as const,
+                mode: request.mode,
+                text: "Inspecting the selected Run.",
+              },
+            ]
+          : request.afterCursor === 1
+            ? [
+                {
+                  cursor: 2,
+                  runId: request.runId,
+                  stepId: "unity-agent",
+                  timestamp: timestamp(2),
+                  channel: "assistant" as const,
+                  mode: request.mode,
+                  text: "Terminal stream ready.",
+                },
+              ]
+            : [],
+      truncated: false,
+      rawAvailable: false,
+    };
+  },
+  openTerminalWindow: async () => true,
+  projectTree: async (request) => ({
+    schemaVersion: 1,
+    relativePath: request.relativePath,
+    entries:
+      request.relativePath === ""
+        ? [
+            { name: "Assets", relativePath: "Assets", kind: "directory" as const },
+            { name: "Packages", relativePath: "Packages", kind: "directory" as const },
+            {
+              name: "README.md",
+              relativePath: "README.md",
+              kind: "file" as const,
+              byteLength: 42,
+            },
+          ]
+        : request.relativePath === "Assets"
+          ? [{ name: "Scripts", relativePath: "Assets/Scripts", kind: "directory" as const }]
+          : [
+              {
+                name: "PlayerController.cs",
+                relativePath: "Assets/Scripts/PlayerController.cs",
+                kind: "file" as const,
+                byteLength: 256,
+              },
+            ],
+    truncated: false,
+  }),
+  readProjectFile: async (request) => ({
+    schemaVersion: 1,
+    relativePath: request.relativePath,
+    encoding: "utf8",
+    content: "public sealed class PlayerController\n{\n    // HoneyBee workbench preview\n}\n",
+    byteLength: 82,
+    truncated: false,
+    language: "csharp",
+  }),
+  searchProject: async (request) => ({
+    schemaVersion: 1,
+    query: request.query,
+    matches: [
+      {
+        name: "PlayerController.cs",
+        relativePath: "Assets/Scripts/PlayerController.cs",
+        kind: "file",
+        byteLength: 256,
+      },
+    ],
+    truncated: false,
+  }),
+  createPty: async (request) => ({
+    schemaVersion: 1,
+    sessionId: "00000000-0000-4000-8000-000000000088",
+    profileId: request.profileId,
+    kind: request.kind,
+    label: request.kind === "agent" ? "OpenCode" : "PowerShell",
+    state: "running",
+    createdAt: timestamp(0),
+  }),
+  ptySnapshot: async (request) => ({
+    schemaVersion: 1,
+    session: {
+      schemaVersion: 1,
+      sessionId: request.sessionId,
+      profileId: projectId,
+      kind: "shell",
+      label: "PowerShell",
+      state: "running",
+      createdAt: timestamp(0),
+    },
+    cursor: 1,
+    chunks: request.afterCursor === 0 ? [{ cursor: 1, data: "PS C:\\Unity\\MyUnityGame> " }] : [],
+    truncated: false,
+  }),
+  writePty: async () => true,
+  resizePty: async () => true,
+  closePty: async () => true,
+  gitSnapshot: async () => ({
+    schemaVersion: 1,
+    available: true,
+    projectPath: "C:\\Unity\\MyUnityGame",
+    repositoryRoot: "C:\\Unity\\MyUnityGame",
+    currentBranch: "main",
+    worktrees: [
+      {
+        path: "C:\\Unity\\MyUnityGame",
+        branch: "main",
+        head: "0123456789abcdef0123456789abcdef01234567",
+        kind: "source",
+        status: "clean",
+      },
+    ],
+  }),
+  materializeRunWorktree: unsupported,
+  mergeRunWorktree: unsupported,
+  finalizeIntegration: unsupported,
+  workspaceSnapshot: async () => ({
+    schemaVersion: 1,
+    profileId: projectId,
+    supported: true,
+    workspaces: [
+      {
+        schemaVersion: 1,
+        profileId: projectId,
+        workspaceId: "00000000-0000-4000-8000-000000000099",
+        label: "Combat tutorial polish",
+        workspacePath: "C:\\HoneyBee\\Workspaces\\hb-work-combat",
+        branch: "honeybee/combat-tutorial-polish-00000000",
+        baseCommit: "0123456789abcdef0123456789abcdef01234567",
+        parentId: "parent-unity-2022",
+        provider: "vhdx-differencing",
+        createdAt: timestamp(-2),
+        lastOpenedAt: timestamp(-1),
+        allocatedBytes: 38_797_312,
+        git: {
+          state: "clean",
+          head: "1123456789abcdef0123456789abcdef01234567",
+          aheadCommits: 3,
+          changedFiles: 0,
+        },
+        publishState: "ahead",
+        publishedBranch: "honeybee/combat-tutorial-polish-00000000",
+        publishedCommit: "1023456789abcdef0123456789abcdef01234567",
+        publishedAt: timestamp(-1),
+      },
+    ],
+  }),
+  createWorkspace: unsupported,
+  openWorkspace: async () => true,
+  publishWorkspace: unsupported,
+  deleteWorkspace: unsupported,
   readArtifact: unsupported,
   resumeRun: unsupported,
   cancelRun: unsupported,
-  getPatch: async () => verifiedPatch,
+  getPatch: async () => {
+    await new Promise<void>((resolve) => setTimeout(resolve, 100));
+    return verifiedPatch;
+  },
   controlPatch: unsupported,
   upsertAgent: unsupported,
   removeAgent: unsupported,
@@ -397,8 +609,18 @@ const api: HoneyBeeDesktopApi = {
   developerSettings: async () => ({
     schemaVersion: 1,
     dogfoodMetricsEnabled: false,
+    rawAgentProtocolEnabled: false,
   }),
   updateDeveloperSettings: unsupported,
+  preferences: async () => ({
+    schemaVersion: 1,
+    density: "comfortable",
+    terminalFontSize: 12,
+    fileExplorerWidth: 280,
+    workbenchDefault: "files",
+    reducedMotion: false,
+  }),
+  updatePreferences: unsupported,
   dogfoodStatus: async () => ({
     schemaVersion: 1,
     enabled: false,

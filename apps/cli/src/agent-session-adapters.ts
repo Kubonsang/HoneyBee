@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import { win32 as win32Path } from "node:path";
 
 import {
   AgentApprovalDecisionV1Schema,
@@ -29,8 +30,43 @@ import { UnityAgentProcessRunner } from "./unity-adapters.js";
 type JsonRpcId = string | number;
 type JsonRecord = Record<string, unknown>;
 
+export type AgentSessionTraceChannel =
+  "system" | "assistant" | "tool" | "approval" | "stderr" | "raw";
+
+export interface AgentSessionTraceEvent {
+  readonly runId: AgentProcessRequest["runId"];
+  readonly stepId: AgentProcessRequest["stepId"];
+  readonly timestamp: string;
+  readonly channel: AgentSessionTraceChannel;
+  readonly mode: "readable" | "raw";
+  readonly text: string;
+  readonly direction?: "provider" | "honeybee";
+}
+
+export interface AgentSessionTraceObserver {
+  onTrace(event: AgentSessionTraceEvent): void | Promise<void>;
+}
+
 const isRecord = (value: unknown): value is JsonRecord =>
   typeof value === "object" && value !== null && !Array.isArray(value);
+
+export const codexObservedSkillConfiguration = (
+  value: unknown,
+): Readonly<{ config: readonly Readonly<{ path: string; enabled: false }>[] }> | undefined => {
+  if (!isRecord(value) || !Array.isArray(value.data)) return undefined;
+  const paths = new Set<string>();
+  for (const group of value.data) {
+    if (!isRecord(group) || !Array.isArray(group.skills)) continue;
+    for (const skill of group.skills) {
+      if (isRecord(skill) && typeof skill.path === "string" && skill.path.length > 0) {
+        paths.add(skill.path);
+      }
+    }
+  }
+  return paths.size === 0
+    ? undefined
+    : { config: [...paths].sort().map((path) => ({ path, enabled: false as const })) };
+};
 
 const digest = (value: string | Buffer): ContentDigest =>
   ContentDigestSchema.parse("sha256:" + createHash("sha256").update(value).digest("hex"));
@@ -93,15 +129,59 @@ if (!process.connected) process.exit(0);
 keepAlive = setInterval(() => {}, 1000);
 `;
 
-const internalEnvironment = (): NodeJS.ProcessEnv => {
+export const internalAgentSessionEnvironment = (
+  platform: typeof process.platform = process.platform,
+  environment: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv => {
   const result: NodeJS.ProcessEnv = {};
   const names =
-    process.platform === "win32"
+    platform === "win32"
       ? ["SystemRoot", "WINDIR", "ComSpec", "TEMP", "TMP"]
       : ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL"];
   for (const name of names) {
-    const value = process.env[name];
+    const value = environment[name];
     if (value !== undefined) result[name] = value;
+  }
+  if (platform === "win32") result.ELECTRON_RUN_AS_NODE = "1";
+  return result;
+};
+
+type AgentSessionTrustFiles = Readonly<{
+  files: readonly Readonly<{ role: string; path: string }>[];
+}>;
+
+const codexTrustEntrypoint = (trust: AgentSessionTrustFiles | undefined): string | undefined =>
+  trust?.files.find(
+    (file) =>
+      file.role === "entrypoint" && win32Path.basename(file.path).toLowerCase() === "codex.exe",
+  )?.path;
+
+export const codexAgentSessionExecutable = (
+  platform: typeof process.platform,
+  trust: AgentSessionTrustFiles | undefined,
+  fallback: string,
+): string => (platform === "win32" ? (codexTrustEntrypoint(trust) ?? fallback) : fallback);
+
+export const codexAgentSessionEnvironment = (
+  platform: typeof process.platform,
+  trust: AgentSessionTrustFiles | undefined,
+  environment: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv => {
+  const result = { ...environment };
+  if (platform !== "win32" || trust === undefined) return result;
+  const entrypoint = codexTrustEntrypoint(trust);
+  if (entrypoint === undefined) return result;
+  const releaseRoot = win32Path.dirname(win32Path.dirname(entrypoint));
+  const resourcesDirectory = win32Path.join(releaseRoot, "codex-resources");
+  const pathKey = Object.keys(result).find((name) => name.toLowerCase() === "path") ?? "Path";
+  result[pathKey] = [resourcesDirectory, result[pathKey]].filter(Boolean).join(win32Path.delimiter);
+
+  const standaloneMarker = `${win32Path.sep}packages${win32Path.sep}standalone${win32Path.sep}releases${win32Path.sep}`;
+  const markerIndex = entrypoint.toLowerCase().indexOf(standaloneMarker);
+  if (markerIndex >= 0) {
+    const codexHomeKey =
+      Object.keys(result).find((name) => name.toLowerCase() === "codex_home") ?? "CODEX_HOME";
+    result[codexHomeKey] = entrypoint.slice(0, markerIndex);
   }
   return result;
 };
@@ -139,12 +219,16 @@ interface JsonRpcPeerOptions {
   readonly request: AgentProcessRequest;
   readonly lifecycle: AgentProcessLifecycle;
   readonly onMessage: (value: JsonRecord, peer: JsonRpcPeer) => Promise<void>;
+  readonly targetEnvironment: NodeJS.ProcessEnv;
+  readonly trace?: AgentSessionTraceObserver;
 }
 
 class JsonRpcPeer {
   readonly #request: AgentProcessRequest;
   readonly #lifecycle: AgentProcessLifecycle;
   readonly #onMessage: JsonRpcPeerOptions["onMessage"];
+  readonly #targetEnvironment: NodeJS.ProcessEnv;
+  readonly #traceObserver: AgentSessionTraceObserver | undefined;
   readonly #pending = new Map<
     JsonRpcId,
     { resolve(value: unknown): void; reject(error: unknown): void }
@@ -174,6 +258,8 @@ class JsonRpcPeer {
     this.#request = options.request;
     this.#lifecycle = options.lifecycle;
     this.#onMessage = options.onMessage;
+    this.#targetEnvironment = options.targetEnvironment;
+    this.#traceObserver = options.trace;
     this.#failure = new Promise<never>((_resolve, reject) => {
       this.#failureReject = reject;
     });
@@ -214,12 +300,31 @@ class JsonRpcPeer {
     return this.#transcript.join("\n") + "\n";
   }
 
+  public trace(channel: Exclude<AgentSessionTraceChannel, "raw" | "stderr">, text: string): void {
+    this.#emitTrace({ channel, mode: "readable", text });
+  }
+
+  #emitTrace(event: Pick<AgentSessionTraceEvent, "channel" | "mode" | "text" | "direction">): void {
+    if (event.text.length === 0) return;
+    const value: AgentSessionTraceEvent = {
+      runId: this.#request.runId,
+      stepId: this.#request.stepId,
+      timestamp: new Date().toISOString(),
+      ...event,
+    };
+    try {
+      void Promise.resolve(this.#traceObserver?.onTrace(value)).catch(() => undefined);
+    } catch {
+      // Live trace is best effort and must never affect Agent execution.
+    }
+  }
+
   public async start(): Promise<void> {
     const command = this.#request.command;
     this.#startedAt = Date.now();
     const child = spawn(process.execPath, ["-e", SESSION_LAUNCHER], {
       cwd: command.cwd ?? process.cwd(),
-      env: internalEnvironment(),
+      env: internalAgentSessionEnvironment(),
       stdio: ["pipe", "pipe", "pipe", "ipc"],
       windowsHide: true,
     });
@@ -269,8 +374,7 @@ class JsonRpcPeer {
       args: command.args ?? [],
       cwd: command.cwd ?? process.cwd(),
       environment: {
-        ...process.env,
-        ...command.env,
+        ...this.#targetEnvironment,
         HONEYBEE_RUN_ID: this.#request.runId,
         HONEYBEE_STEP_ID: this.#request.stepId,
       },
@@ -338,6 +442,12 @@ class JsonRpcPeer {
     }
     const serialized = JSON.stringify(value);
     this.#transcript.push(serialized);
+    this.#emitTrace({
+      channel: "raw",
+      mode: "raw",
+      direction: "honeybee",
+      text: serialized,
+    });
     await new Promise<void>((resolve, reject) => {
       stdin.write(serialized + "\n", "utf8", (error) => {
         if (error === null || error === undefined) resolve();
@@ -379,6 +489,12 @@ class JsonRpcPeer {
       }
       if (!isRecord(value)) continue;
       this.#transcript.push(line);
+      this.#emitTrace({
+        channel: "raw",
+        mode: "raw",
+        direction: "provider",
+        text: line,
+      });
       if (value.id !== undefined && (value.result !== undefined || value.error !== undefined)) {
         const pending = this.#pending.get(value.id as JsonRpcId);
         if (pending === undefined) continue;
@@ -395,6 +511,7 @@ class JsonRpcPeer {
     const chunk = Buffer.isBuffer(chunkValue) ? chunkValue : Buffer.from(chunkValue);
     this.#stderrBytes += chunk.byteLength;
     this.#stderrHash.update(chunk);
+    this.#emitTrace({ channel: "stderr", mode: "readable", text: chunk.toString("utf8") });
     if (this.#stderrBytes <= this.#request.maxOutputBytes) this.#stderr.push(chunk);
     if (this.#stdoutBytes + this.#stderrBytes > this.#request.maxOutputBytes) {
       this.fail(
@@ -419,6 +536,7 @@ class JsonRpcPeer {
   public async finish(
     termination: AgentProcessResult["termination"],
     stdout: string,
+    protocolCompleted = false,
   ): Promise<AgentProcessResult> {
     this.#finishing = true;
     const child = this.#child;
@@ -438,10 +556,18 @@ class JsonRpcPeer {
       await this.#closed;
     }
     const output = Buffer.from(stdout, "utf8");
+    const providerExit =
+      this.#exit ??
+      (protocolCompleted
+        ? {
+            exitCode: 0,
+            signal: null,
+          }
+        : undefined);
     const observation = {
       pid: this.pid,
-      exitCode: this.#exit?.exitCode ?? null,
-      signal: this.#exit?.signal ?? null,
+      exitCode: providerExit?.exitCode ?? null,
+      signal: providerExit?.signal ?? null,
       durationMs: Date.now() - this.#startedAt,
       stdoutBytes: output.byteLength,
       stderrBytes: this.#stderrBytes,
@@ -485,6 +611,11 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
   protected turnId: string = randomUUID();
   protected turnDone?: (status: "completed" | "failed" | "interrupted") => void;
   protected observer: ((event: AgentSessionLifecycleEventV1) => Promise<void>) | undefined;
+  readonly #traceObserver: AgentSessionTraceObserver | undefined;
+
+  public constructor(traceObserver?: AgentSessionTraceObserver) {
+    this.#traceObserver = traceObserver;
+  }
 
   public abstract capabilities(): AgentCapabilitiesV1;
   protected abstract initialize(peer: JsonRpcPeer, request: AgentProcessRequest): Promise<void>;
@@ -495,6 +626,10 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
     request: AgentProcessRequest,
     approval: AgentApprovalPort,
   ): Promise<void>;
+
+  protected targetEnvironment(request: AgentProcessRequest): NodeJS.ProcessEnv {
+    return { ...process.env, ...request.command.env };
+  }
 
   public async run(
     request: AgentProcessRequest,
@@ -509,6 +644,8 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
     const peer = new JsonRpcPeer({
       request,
       lifecycle,
+      targetEnvironment: this.targetEnvironment(request),
+      ...(this.#traceObserver === undefined ? {} : { trace: this.#traceObserver }),
       onMessage: (value, activePeer) =>
         this.handleProviderMessage(value, activePeer, request, approval),
     });
@@ -538,6 +675,7 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
     let runError: unknown;
     let lifecycleError: unknown;
     try {
+      peer.trace("system", `Opening ${this.kind} Agent session.`);
       await peer.wait(peer.start());
       await peer.wait(
         observer?.({
@@ -548,11 +686,13 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
         }) ?? Promise.resolve(),
       );
       sessionOpened = true;
+      peer.trace("system", "Agent session opened.");
       await peer.wait(
         observer?.({ type: "turn-started", turnIdDigest: digest(this.turnId) }) ??
           Promise.resolve(),
       );
       turnStarted = true;
+      peer.trace("system", "Agent turn started.");
       await peer.wait(this.initialize(peer, request));
       status = await peer.wait(completion);
     } catch (error) {
@@ -562,11 +702,18 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
         ["transaction.interrupted", "agent.cancelled", "agent.timed-out"].includes(error.code)
           ? "interrupted"
           : "failed";
+      peer.trace(
+        "system",
+        error instanceof Error
+          ? `Agent session ${status}: ${error.message}`
+          : `Agent session ${status}.`,
+      );
     } finally {
       clearTimeout(timeout);
       request.signal?.removeEventListener("abort", abort);
       try {
         if (turnStarted) {
+          peer.trace("system", `Agent turn ${status}.`);
           await observer?.({
             type: "turn-completed",
             turnIdDigest: digest(this.turnId),
@@ -595,6 +742,7 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
                 : "cancelled"
             : "exited",
           this.output,
+          status === "completed",
         )
       : undefined;
     if (runError !== undefined) throw runError;
@@ -630,6 +778,7 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
       summary,
       serializedRequest,
     });
+    peer.trace("approval", summary);
     const decision = await approval.decide({
       approvalId,
       runId: request.runId,
@@ -641,6 +790,10 @@ abstract class JsonRpcAgentSessionAdapter implements AgentSessionAdapter {
       ...(request.signal === undefined ? {} : { signal: request.signal }),
     });
     await this.observer?.({ type: "approval-resolved", decision });
+    peer.trace(
+      "approval",
+      decision.decision === "allow-once" ? "Agent action allowed once." : "Agent action denied.",
+    );
     try {
       await peer.respond(providerRequestId, result(decision));
     } catch (error) {
@@ -675,6 +828,14 @@ export class CodexAppServerAdapter extends JsonRpcAgentSessionAdapter {
     });
   }
 
+  protected override targetEnvironment(request: AgentProcessRequest): NodeJS.ProcessEnv {
+    return codexAgentSessionEnvironment(
+      process.platform,
+      request.trust,
+      super.targetEnvironment(request),
+    );
+  }
+
   protected async initialize(peer: JsonRpcPeer, request: AgentProcessRequest): Promise<void> {
     await peer.request("initialize", {
       clientInfo: { name: "HoneyBee", title: "HoneyBee Desktop", version: "0.7.0" },
@@ -685,6 +846,7 @@ export class CodexAppServerAdapter extends JsonRpcAgentSessionAdapter {
       cwds: [request.command.cwd ?? process.cwd()],
       forceReload: true,
     });
+    const skills = codexObservedSkillConfiguration(observedSkills);
     await this.observer?.({
       type: "skills-observed",
       isolation: "observe-only",
@@ -695,6 +857,11 @@ export class CodexAppServerAdapter extends JsonRpcAgentSessionAdapter {
       ephemeral: true,
       approvalPolicy: "on-request",
       sandbox: "workspace-write",
+      config: {
+        features: { plugins: false },
+        model_reasoning_effort: "low",
+        ...(skills === undefined ? {} : { skills }),
+      },
     });
     const thread = isRecord(started) && isRecord(started.thread) ? started.thread : undefined;
     if (thread === undefined || typeof thread.id !== "string") {
@@ -709,6 +876,7 @@ export class CodexAppServerAdapter extends JsonRpcAgentSessionAdapter {
       cwd: request.command.cwd ?? process.cwd(),
       input: [{ type: "text", text: request.prompt }],
       approvalPolicy: "on-request",
+      effort: "low",
     });
     if (isRecord(turn) && isRecord(turn.turn) && typeof turn.turn.id === "string") {
       this.#providerTurnId = turn.turn.id;
@@ -734,10 +902,20 @@ export class CodexAppServerAdapter extends JsonRpcAgentSessionAdapter {
     const params = isRecord(value.params) ? value.params : {};
     if (method === "item/agentMessage/delta" && typeof params.delta === "string") {
       this.output += params.delta;
+      peer.trace("assistant", params.delta);
     } else if (method === "turn/completed") {
       const turn = isRecord(params.turn) ? params.turn : params;
       const rawStatus = typeof turn.status === "string" ? turn.status : "completed";
       this.turnDone?.(rawStatus === "completed" ? "completed" : "failed");
+    } else if (
+      !method.endsWith("/requestApproval") &&
+      (method.includes("commandExecution") || method.includes("fileChange"))
+    ) {
+      const item = isRecord(params.item) ? params.item : params;
+      const delta = typeof params.delta === "string" ? params.delta : undefined;
+      const command = typeof item.command === "string" ? item.command : undefined;
+      const pathValue = typeof item.path === "string" ? item.path : undefined;
+      peer.trace("tool", delta ?? command ?? pathValue ?? method.replaceAll("/", " · "));
     } else if (
       value.id !== undefined &&
       [
@@ -832,6 +1010,14 @@ export class OpenCodeAcpAdapter extends JsonRpcAgentSessionAdapter {
       const content = isRecord(update.content) ? update.content : {};
       if (update.sessionUpdate === "agent_message_chunk" && typeof content.text === "string") {
         this.output += content.text;
+        peer.trace("assistant", content.text);
+      } else if (
+        typeof update.sessionUpdate === "string" &&
+        update.sessionUpdate.includes("tool")
+      ) {
+        const title = typeof update.title === "string" ? update.title : update.sessionUpdate;
+        const text = typeof content.text === "string" ? content.text : title;
+        peer.trace("tool", text);
       }
       return;
     }
@@ -865,6 +1051,7 @@ export interface AgentSessionProcessRunnerOptions {
   readonly scheduler?: DesktopWorkScheduler;
   readonly approval?: AgentApprovalPort;
   readonly priority?: (request: AgentProcessRequest) => UnityWorkPriority;
+  readonly trace?: AgentSessionTraceObserver;
 }
 
 export class AgentSessionProcessRunner implements AgentProcessRunner {
@@ -872,6 +1059,7 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
   readonly #scheduler: DesktopWorkScheduler;
   readonly #approval: AgentApprovalPort;
   readonly #priority: (request: AgentProcessRequest) => UnityWorkPriority;
+  readonly #trace: AgentSessionTraceObserver | undefined;
 
   public constructor(
     legacy: AgentProcessRunner = new UnityAgentProcessRunner(),
@@ -881,6 +1069,7 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
     this.#scheduler = options.scheduler ?? new DesktopWorkScheduler(4);
     this.#approval = options.approval ?? new DenyAgentApprovalPort();
     this.#priority = options.priority ?? (() => "validation");
+    this.#trace = options.trace;
   }
 
   public async run(
@@ -888,7 +1077,26 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
     lifecycle: AgentProcessLifecycle,
   ): Promise<AgentProcessResult> {
     if (request.adapter === undefined || request.adapter === "stdio-framed-v2") {
-      return this.#legacy.run(request, lifecycle);
+      this.#emitTrace(
+        request,
+        "system",
+        "This Agent uses framed stdio. HoneyBee can show lifecycle status now; token-level output becomes available only with a structured Codex or OpenCode adapter.",
+      );
+      try {
+        const result = await this.#legacy.run(request, lifecycle);
+        if (result.stderr.length > 0) this.#emitTrace(request, "stderr", result.stderr);
+        this.#emitTrace(request, "system", "Framed stdio Agent process completed.");
+        return result;
+      } catch (error) {
+        this.#emitTrace(
+          request,
+          "system",
+          error instanceof Error
+            ? `Framed stdio Agent process failed: ${error.message}`
+            : "Framed stdio Agent process failed.",
+        );
+        throw error;
+      }
     }
     if (request.trust === undefined) {
       throw new HoneyBeeCoreError(
@@ -897,14 +1105,25 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
       );
     }
     await verifyAgentLaunchTrust(request.command, request.trust);
+    const trustedCommand = await trustedAgentInvocation(request.command, request.trust);
     const invocationRequest: AgentProcessRequest = {
       ...request,
-      command: await trustedAgentInvocation(request.command, request.trust),
+      command:
+        request.adapter === "codex-app-server-v1"
+          ? {
+              ...trustedCommand,
+              command: codexAgentSessionExecutable(
+                process.platform,
+                request.trust,
+                trustedCommand.command,
+              ),
+            }
+          : trustedCommand,
     };
     const adapter: AgentSessionAdapter =
       request.adapter === "codex-app-server-v1"
-        ? new CodexAppServerAdapter()
-        : new OpenCodeAcpAdapter();
+        ? new CodexAppServerAdapter(this.#trace)
+        : new OpenCodeAcpAdapter(this.#trace);
     const result = await this.#scheduler.withSlot(
       {
         priority: this.#priority(request),
@@ -917,5 +1136,22 @@ export class AgentSessionProcessRunner implements AgentProcessRunner {
       () => adapter.run(invocationRequest, lifecycle, this.#approval),
     );
     return { ...result, command: request.command.command };
+  }
+
+  #emitTrace(request: AgentProcessRequest, channel: "system" | "stderr", text: string): void {
+    try {
+      void Promise.resolve(
+        this.#trace?.onTrace({
+          runId: request.runId,
+          stepId: request.stepId,
+          timestamp: new Date().toISOString(),
+          channel,
+          mode: "readable",
+          text,
+        }),
+      ).catch(() => undefined);
+    } catch {
+      // Optional Desktop observability must not affect legacy execution.
+    }
   }
 }

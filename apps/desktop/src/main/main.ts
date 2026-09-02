@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import { StepIdSchema } from "@honeybee/orchestration-contracts";
+import { trustedAgentInvocation } from "@honeybee/core";
 import {
   AgentSessionProcessRunner,
   DesktopWorkScheduler,
@@ -25,9 +27,15 @@ import {
   DesktopDogfoodFinalizeRequestV1Schema,
   DesktopDogfoodOpenEvidenceRequestV1Schema,
   DesktopDogfoodStartRequestV1Schema,
+  DesktopGitRunRequestV1Schema,
+  DesktopGitSnapshotRequestV1Schema,
   DesktopIpcChannels,
   DesktopPatchControlRequestV1Schema,
   DesktopPatchRequestV1Schema,
+  DesktopPreferencesV1Schema,
+  DesktopProjectFileRequestV1Schema,
+  DesktopProjectSearchRequestV1Schema,
+  DesktopProjectTreeRequestV1Schema,
   DesktopProfileIdRequestV1Schema,
   DesktopProjectAddRequestV2Schema,
   DesktopProjectAgentPreferenceRequestV1Schema,
@@ -36,7 +44,13 @@ import {
   DesktopProjectProfileSchema,
   DesktopRunRequestV1Schema,
   DesktopRuntimeSnapshotV1Schema,
+  DesktopPtyCreateRequestV1Schema,
+  DesktopPtyResizeRequestV1Schema,
+  DesktopPtySessionRequestV1Schema,
+  DesktopPtySnapshotRequestV1Schema,
+  DesktopPtyWriteRequestV1Schema,
   DesktopStartRequestV2Schema,
+  DesktopTerminalSnapshotRequestV1Schema,
   DesktopSetupDiscoveryRequestV1Schema,
   DesktopSetupIdRequestV1Schema,
   DesktopSetupPathRequestV1Schema,
@@ -47,7 +61,13 @@ import { DesktopAgentManager } from "./agent-manager.js";
 import { DesktopAgentApprovalBroker } from "./agent-approval-broker.js";
 import { DesktopDogfoodController } from "./desktop-dogfood.js";
 import { DesktopSettingsStore } from "./settings.js";
+import { DesktopTerminalBroker } from "./terminal-broker.js";
 import { cloneRunDraftFromConfig } from "./run-draft.js";
+import { readProjectCatalog } from "./project-catalog.js";
+import { DesktopProjectFiles } from "./project-files.js";
+import { DesktopPtySessionManager } from "./pty-session-manager.js";
+import { DesktopGitWorktrees } from "./git-worktrees.js";
+import { DesktopPreferencesStore } from "./desktop-preferences.js";
 import {
   DesktopSetupCoordinator,
   ResolvedDesktopSetupDraftV1Schema,
@@ -60,6 +80,7 @@ import {
 } from "./setup.js";
 
 let mainWindow: BrowserWindow | undefined;
+const terminalWindows = new Map<string, BrowserWindow>();
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v1";
 if (smokeMode) app.disableHardwareAcceleration();
@@ -96,11 +117,17 @@ const setup = new DesktopSetupCoordinator(
 const agentManager = new DesktopAgentManager(settings);
 const agentApprovalBroker = new DesktopAgentApprovalBroker();
 const desktopWorkScheduler = new DesktopWorkScheduler(4);
+const terminalBroker = new DesktopTerminalBroker();
+const projectFiles = new DesktopProjectFiles();
+const ptySessions = new DesktopPtySessionManager();
+const gitWorktrees = new DesktopGitWorktrees(userData);
+const preferences = new DesktopPreferencesStore(userData);
 const runtime = new HoneyBeeRuntimeFacade({
   stateRoot: path.join(userData, "runtime", "runs"),
   agentRunner: new AgentSessionProcessRunner(undefined, {
     scheduler: desktopWorkScheduler,
     approval: agentApprovalBroker,
+    trace: terminalBroker,
   }),
 });
 const dogfood = new DesktopDogfoodController(userData, runtime.info().stateRoot);
@@ -304,6 +331,44 @@ const requireReadyAgent = async (agentId: string) => {
   return agent;
 };
 
+const interactiveAgentLaunch = async (agentId: string, projectPath: string) => {
+  const agent = await requireReadyAgent(agentId);
+  if (agent.trust === undefined) throw new Error("Agent trust approval is required.");
+  const nativeArgs = agent.provider === "custom" ? (agent.command.args ?? []) : [];
+  const invocation = await trustedAgentInvocation(agent.command, agent.trust, nativeArgs);
+  return {
+    command: invocation.command,
+    args: invocation.args ?? [],
+    cwd: projectPath,
+    label: agent.displayName,
+  };
+};
+
+const interactiveShellLaunch = async (projectPath: string) => {
+  const command =
+    process.platform === "win32"
+      ? path.join(
+          process.env.SystemRoot ?? "C:\\Windows",
+          "System32",
+          "WindowsPowerShell",
+          "v1.0",
+          "powershell.exe",
+        )
+      : (process.env.SHELL ?? "/bin/bash");
+  const executable = await lstat(command).catch(() => undefined);
+  if (executable?.isFile() !== true || executable.isSymbolicLink()) {
+    throw Object.assign(new Error("The fixed project shell is unavailable."), {
+      code: "desktop.shell-unavailable",
+    });
+  }
+  return {
+    command,
+    args: process.platform === "win32" ? ["-NoLogo"] : [],
+    cwd: projectPath,
+    label: process.platform === "win32" ? "PowerShell" : path.basename(command),
+  };
+};
+
 const bootstrap = async () => {
   await agentManager.ensureDetected();
   const snapshot = await settings.snapshot();
@@ -347,6 +412,27 @@ const safeHandler =
           "The original project profile is no longer available. Add the project again before cloning this Run.",
         "desktop.clone-unavailable":
           "This Run does not contain a supported task and configuration that can be cloned safely.",
+        "desktop.project-path-invalid": "The requested file is outside the selected project.",
+        "desktop.project-root-invalid": "The selected project folder is unavailable or unsafe.",
+        "desktop.project-symlink-forbidden":
+          "Linked project paths are hidden from the Desktop file viewer.",
+        "desktop.project-file-binary": "Binary files cannot be opened in the text workbench.",
+        "desktop.pty-session-not-found": "This terminal session has already closed.",
+        "desktop.shell-unavailable": "The fixed project shell is unavailable on this machine.",
+        "desktop.preferences-invalid":
+          "Desktop preferences are invalid. Repair or remove preferences-v1.json to continue.",
+        "desktop.git-dirty":
+          "Commit, stash, or remove local Git changes before preparing HoneyBee branches.",
+        "desktop.git-detached": "Switch the project to a named Git branch before integration.",
+        "desktop.git-patch-not-pending":
+          "Only a pending verified patch with a clean source can become a Work branch.",
+        "desktop.git-patch-preview-incomplete":
+          "This patch contains binary or truncated files, so Git materialization is unavailable.",
+        "desktop.git-patch-conflict": "The Git worktree no longer matches the verified patch base.",
+        "desktop.git-worktree-not-ready": "Prepare this Work branch before approving its merge.",
+        "desktop.git-integration-missing": "The Run integration worktree is missing.",
+        "desktop.git-source-advanced":
+          "The source branch changed after this Run began. Review the integration branch manually.",
         "dogfood.disabled": "Enable Dogfood Metrics in Settings before recording.",
         "dogfood.doctor-failed": "Doctor and the selected Agent must be ready before recording.",
         "dogfood.evidence-path-unsafe": "The recorded Evidence path is outside HoneyBee user data.",
@@ -373,10 +459,81 @@ const safeHandler =
     }
   };
 
+type TerminalRunList = Awaited<ReturnType<HoneyBeeRuntimeFacade["listRuns"]>>;
+let terminalRunListCache: { expiresAt: number; runs: TerminalRunList } | undefined;
+let terminalRunListPending: Promise<TerminalRunList> | undefined;
+
+const listTerminalRuns = async (): Promise<TerminalRunList> => {
+  const cached = terminalRunListCache;
+  if (cached !== undefined && cached.expiresAt > Date.now()) return cached.runs;
+  terminalRunListPending ??= runtime.listRuns().then((runs) => {
+    terminalRunListCache = { expiresAt: Date.now() + 500, runs };
+    return runs;
+  });
+  try {
+    return await terminalRunListPending;
+  } finally {
+    terminalRunListPending = undefined;
+  }
+};
+
+const terminalRunContext = async (runId: string) => {
+  const runs = await listTerminalRuns();
+  let selected = runs.find((run) => run.runId === runId);
+  if (selected === undefined) {
+    selected = (await runtime.getRunDetail(runId)).summary;
+  }
+  const targets = [selected, ...runs.filter((run) => run.parentRunId === selected.runId)];
+  for (const target of targets) {
+    if (
+      !target.terminal ||
+      terminalBroker.hasEntries(target.runId) ||
+      terminalBroker.hasReplayed(target.runId)
+    ) {
+      continue;
+    }
+    const detail = await runtime.getRunDetail(target.runId);
+    const transcript = detail.artifacts.find(
+      (artifact) => artifact.kind === "agent-session-transcript",
+    );
+    if (transcript === undefined) {
+      terminalBroker.markReplayAttempted(target.runId);
+      continue;
+    }
+    const view = await runtime.readReferencedArtifact(target.runId, transcript.artifactId);
+    if (view.encoding !== "utf8") {
+      terminalBroker.markReplayAttempted(target.runId);
+      continue;
+    }
+    terminalBroker.replayTranscript(
+      target.runId,
+      target.workId ?? StepIdSchema.parse("agent"),
+      view.content,
+      target.updatedAt ?? new Date().toISOString(),
+    );
+  }
+  const hasEntries = targets.some((target) => terminalBroker.hasEntries(target.runId));
+  return {
+    runIds: targets.map((target) => target.runId),
+    state: targets.some((target) => !target.terminal)
+      ? ("running" as const)
+      : hasEntries
+        ? ("completed" as const)
+        : ("unavailable" as const),
+  };
+};
+
 const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.bootstrap,
     safeHandler(async () => bootstrap()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectCatalog,
+    safeHandler(async () => {
+      const snapshot = await settings.snapshot();
+      return readProjectCatalog(app.getPath("appData"), snapshot.profiles);
+    }),
   );
   ipcMain.handle(
     DesktopIpcChannels.developerSettingsGet,
@@ -395,6 +552,16 @@ const registerIpc = (): void => {
       }
       return settings.updateDeveloperSettings(request);
     }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.preferencesGet,
+    safeHandler(async () => preferences.read()),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.preferencesUpdate,
+    safeHandler(async (requestValue: unknown) =>
+      preferences.update(DesktopPreferencesV1Schema.parse(requestValue)),
+    ),
   );
   ipcMain.handle(
     DesktopIpcChannels.dogfoodStatus,
@@ -984,6 +1151,177 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.terminalSnapshot,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopTerminalSnapshotRequestV1Schema.parse(requestValue);
+      const [context, developer] = await Promise.all([
+        terminalRunContext(request.runId),
+        settings.developerSettings(),
+      ]);
+      return terminalBroker.snapshot({
+        ...context,
+        scopeKey: request.runId,
+        afterCursor: request.afterCursor,
+        mode: request.mode,
+        rawEnabled: developer.rawAgentProtocolEnabled,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.terminalWindowOpen,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopRunRequestV1Schema.parse(requestValue);
+      await runtime.getRunDetail(request.runId);
+      await openTerminalWindow(request.runId);
+      return true;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectTree,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProjectTreeRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return projectFiles.tree(profile.projectPath, request.relativePath);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectFileRead,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProjectFileRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return projectFiles.read(profile.projectPath, request.relativePath);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectSearch,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopProjectSearchRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return projectFiles.search(profile.projectPath, request.query, request.maxResults);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptyCreate,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPtyCreateRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      const launch =
+        request.kind === "agent"
+          ? await interactiveAgentLaunch(request.agentId as string, profile.projectPath)
+          : await interactiveShellLaunch(profile.projectPath);
+      return ptySessions.create({
+        profileId: profile.profileId,
+        kind: request.kind,
+        columns: request.columns,
+        rows: request.rows,
+        ...launch,
+      });
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptySnapshot,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPtySnapshotRequestV1Schema.parse(requestValue);
+      return ptySessions.snapshot(request.sessionId, request.afterCursor);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptyWrite,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPtyWriteRequestV1Schema.parse(requestValue);
+      return ptySessions.write(request.sessionId, request.data);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptyResize,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPtyResizeRequestV1Schema.parse(requestValue);
+      return ptySessions.resize(request.sessionId, request.columns, request.rows);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptyClose,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopPtySessionRequestV1Schema.parse(requestValue);
+      return ptySessions.close(request.sessionId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.gitSnapshot,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopGitSnapshotRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      return gitWorktrees.snapshot(profile.projectPath);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.gitMaterializeRun,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopGitRunRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      const detail = await runtime.getRunDetail(request.runId);
+      if (
+        detail.summary.projectPath === undefined ||
+        profileKey(detail.summary.projectPath) !== profileKey(profile.projectPath)
+      ) {
+        throw Object.assign(new Error("The Run does not belong to this project."), {
+          code: "desktop.git-run-project-mismatch",
+        });
+      }
+      const patch = detail.artifacts.find((artifact) => artifact.kind === "unity-verified-patch");
+      if (patch === undefined) {
+        throw Object.assign(new Error("This Run has no verified patch."), {
+          code: "desktop.git-patch-unavailable",
+        });
+      }
+      const view = await runtime.getVerifiedPatch(request.runId, patch.artifactId);
+      return gitWorktrees.materialize(
+        profile.projectPath,
+        request.runId,
+        detail.summary.parentRunId ?? request.runId,
+        view,
+      );
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.gitMergeRun,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopGitRunRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      const detail = await runtime.getRunDetail(request.runId);
+      if (
+        detail.summary.projectPath === undefined ||
+        profileKey(detail.summary.projectPath) !== profileKey(profile.projectPath)
+      ) {
+        throw Object.assign(new Error("The Run does not belong to this project."), {
+          code: "desktop.git-run-project-mismatch",
+        });
+      }
+      return gitWorktrees.merge(
+        profile.projectPath,
+        request.runId,
+        detail.summary.parentRunId ?? request.runId,
+      );
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.gitFinalizeIntegration,
+    safeHandler(async (requestValue: unknown) => {
+      const request = DesktopGitRunRequestV1Schema.parse(requestValue);
+      const profile = await profileFor(request.profileId);
+      const detail = await runtime.getRunDetail(request.runId);
+      if (
+        detail.summary.projectPath === undefined ||
+        profileKey(detail.summary.projectPath) !== profileKey(profile.projectPath)
+      ) {
+        throw Object.assign(new Error("The Run does not belong to this project."), {
+          code: "desktop.git-run-project-mismatch",
+        });
+      }
+      return gitWorktrees.finalize(profile.projectPath, request.runId);
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.artifactRead,
     safeHandler(async (requestValue: unknown) => {
       const request = DesktopArtifactRequestV1Schema.parse(requestValue);
@@ -1020,40 +1358,90 @@ const registerIpc = (): void => {
   );
 };
 
-const createWindow = async (): Promise<void> => {
-  const preload = fileURLToPath(
-    new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url),
-  );
-  mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
-    minWidth: 980,
-    minHeight: 680,
-    backgroundColor: "#090d10",
-    show: false,
-    title: "HoneyBee",
-    webPreferences: {
-      preload,
-      contextIsolation: true,
-      nodeIntegration: false,
-      sandbox: true,
-    },
-  });
-  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
-  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
-  await writeSmokeStage("window-created");
+const desktopPreloadPath = (): string =>
+  fileURLToPath(new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url));
+
+const loadRenderer = async (
+  window: BrowserWindow,
+  query: Readonly<Record<string, string>> = {},
+): Promise<void> => {
   const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
   if (
     developmentUrl !== undefined &&
     /^http:\/\/(?:127\.0\.0\.1|localhost)(?::\d+)?(?:\/|$)/u.test(developmentUrl)
   ) {
-    await mainWindow.loadURL(developmentUrl);
-  } else {
-    await mainWindow.loadFile(
-      fileURLToPath(new URL(/* @vite-ignore */ "../../renderer/index.html", import.meta.url)),
-    );
+    const target = new URL(developmentUrl);
+    for (const [key, value] of Object.entries(query)) target.searchParams.set(key, value);
+    await window.loadURL(target.toString());
+    return;
   }
+  await window.loadFile(
+    fileURLToPath(new URL(/* @vite-ignore */ "../../renderer/index.html", import.meta.url)),
+    { query: { ...query } },
+  );
+};
+
+const openTerminalWindow = async (runId: string): Promise<void> => {
+  const existing = terminalWindows.get(runId);
+  if (existing !== undefined && !existing.isDestroyed()) {
+    if (existing.isMinimized()) existing.restore();
+    existing.show();
+    existing.focus();
+    return;
+  }
+  const terminalWindow = new BrowserWindow({
+    width: 980,
+    height: 640,
+    minWidth: 680,
+    minHeight: 420,
+    backgroundColor: "#070b0e",
+    show: false,
+    title: `HoneyBee Terminal · ${runId.slice(0, 8)}`,
+    ...(mainWindow === undefined ? {} : { parent: mainWindow }),
+    webPreferences: {
+      preload: desktopPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  terminalWindows.set(runId, terminalWindow);
+  terminalWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  terminalWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  terminalWindow.once("ready-to-show", () => terminalWindow.show());
+  terminalWindow.once("closed", () => terminalWindows.delete(runId));
+  await loadRenderer(terminalWindow, { view: "terminal", runId });
+};
+
+const createWindow = async (): Promise<void> => {
+  mainWindow = new BrowserWindow({
+    width: 1320,
+    height: 860,
+    minWidth: 1100,
+    minHeight: 720,
+    autoHideMenuBar: true,
+    backgroundColor: "#090d10",
+    show: false,
+    title: "HoneyBee",
+    titleBarStyle: "hidden",
+    titleBarOverlay: {
+      color: "#0d1215",
+      symbolColor: "#aab3b9",
+      height: 54,
+    },
+    webPreferences: {
+      preload: desktopPreloadPath(),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+    },
+  });
+  mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
+  await writeSmokeStage("window-created");
+  await loadRenderer(mainWindow);
   await writeSmokeStage("renderer-loaded");
   if (smokeMode) {
     try {
@@ -1063,18 +1451,20 @@ const createWindow = async (): Promise<void> => {
         "  const inspect = async () => {",
         "    try {",
         "      const api = window.honeybee;",
-        "      const ready = document.body.textContent?.includes('Your Unity projects') === true;",
+        "      const ready = document.querySelector('.desktop-shell .activity-rail') !== null && document.querySelector('.shell-content') !== null;",
         "      if (api !== undefined && ready) {",
         "        const components = await api.components();",
         "        const developerBefore = await api.developerSettings();",
-        "        const developerEnabled = await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true });",
+        "        const developerEnabled = await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: true, rawAgentProtocolEnabled: false });",
         "        const dogfood = await api.dogfoodStatus();",
-        "        await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: false });",
+        "        const preferences = await api.preferences();",
+        "        await api.updateDeveloperSettings({ schemaVersion: 1, dogfoodMetricsEnabled: false, rawAgentProtocolEnabled: false });",
         "        resolve({",
         "          componentSchemaVersion: components.schemaVersion,",
         "          developerDefaultOff: developerBefore.dogfoodMetricsEnabled === false,",
         "          developerToggleOn: developerEnabled.dogfoodMetricsEnabled === true,",
         "          dogfoodIdle: dogfood.enabled === true && dogfood.state === 'idle',",
+        "          preferencesReady: preferences.workbenchDefault === 'files',",
         "          rendererReady: ready",
         "        });",
         "        return;",
@@ -1103,7 +1493,9 @@ const createWindow = async (): Promise<void> => {
         "developerToggleOn" in result &&
         result.developerToggleOn === true &&
         "dogfoodIdle" in result &&
-        result.dogfoodIdle === true;
+        result.dogfoodIdle === true &&
+        "preferencesReady" in result &&
+        result.preferencesReady === true;
       if (!valid) throw new Error("invalid smoke result");
       await writeSmokeStage("passed");
       process.stdout.write("HONEYBEE_DESKTOP_SMOKE_OK\n");
@@ -1126,6 +1518,7 @@ const startDesktop = async (): Promise<void> => {
   await writeSmokeStage("module-loaded");
   await app.whenReady();
   await writeSmokeStage("app-ready");
+  Menu.setApplicationMenu(null);
   registerIpc();
   await createWindow();
 };
@@ -1152,3 +1545,4 @@ app.on("activate", () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
+app.on("before-quit", () => ptySessions.closeAll());
