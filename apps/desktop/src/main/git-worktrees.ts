@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { lstat, mkdir, readFile, rename, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, readFile, realpath, rename, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 
@@ -27,7 +27,7 @@ const pathKey = (value: string): string => {
 };
 
 const inside = (parent: string, child: string): boolean => {
-  const relative = path.relative(parent, child);
+  const relative = path.relative(pathKey(parent), pathKey(child));
   return relative.length === 0 || (!relative.startsWith("..") && !path.isAbsolute(relative));
 };
 
@@ -270,9 +270,9 @@ export class DesktopGitWorktrees {
   }
 
   async #repository(projectPath: string): Promise<GitRepository> {
-    const resolvedProject = path.resolve(projectPath);
-    const root = path.resolve(
-      (await this.#git(resolvedProject, ["rev-parse", "--show-toplevel"])).trim(),
+    const resolvedProject = await realpath(path.resolve(projectPath));
+    const root = await realpath(
+      path.resolve((await this.#git(resolvedProject, ["rev-parse", "--show-toplevel"])).trim()),
     );
     if (!inside(root, resolvedProject)) {
       throw codedError("desktop.git-path-invalid", "The project is outside its Git repository.");

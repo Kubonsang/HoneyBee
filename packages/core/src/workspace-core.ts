@@ -72,7 +72,7 @@ const pathKey = (value: string): string => {
 };
 
 const contains = (rootValue: string, candidateValue: string): boolean => {
-  const relative = path.relative(path.resolve(rootValue), path.resolve(candidateValue));
+  const relative = path.relative(pathKey(rootValue), pathKey(candidateValue));
   return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 };
 
@@ -128,13 +128,18 @@ export class HoneyBeeWorkspaceCore {
   }
 
   public async initProject(input: ProjectInitInput): Promise<ProjectRecordV1> {
-    const unityProjectPath = requireAbsolute(input.unityProjectPath, "Unity project path");
-    const workspaceRoot = requireAbsolute(input.workspaceRoot, "Workspace root");
-    const storageCommand = requireAbsolute(input.storageCommand, "workspace-storage command");
+    const unityProjectPath = await realpath(
+      requireAbsolute(input.unityProjectPath, "Unity project path"),
+    );
+    const requestedWorkspaceRoot = requireAbsolute(input.workspaceRoot, "Workspace root");
+    await mkdir(requestedWorkspaceRoot, { recursive: true });
+    const workspaceRoot = await realpath(requestedWorkspaceRoot);
+    const storageCommandPath = requireAbsolute(input.storageCommand, "workspace-storage command");
     await this.#assertUnityProject(unityProjectPath);
-    await access(storageCommand);
-    const repositoryRoot = path.resolve(
-      await this.#git(unityProjectPath, ["rev-parse", "--show-toplevel"]),
+    await access(storageCommandPath);
+    const storageCommand = await realpath(storageCommandPath);
+    const repositoryRoot = await realpath(
+      path.resolve(await this.#git(unityProjectPath, ["rev-parse", "--show-toplevel"])),
     );
     if (!contains(repositoryRoot, unityProjectPath)) {
       throw new WorkspaceCoreError(
@@ -148,7 +153,6 @@ export class HoneyBeeWorkspaceCore {
         "The Workspace root must be outside the source repository.",
       );
     }
-    await mkdir(workspaceRoot, { recursive: true });
     const registry = await this.#registry.read();
     const existing = registry.projects.find(
       (project) => pathKey(project.unityProjectPath) === pathKey(unityProjectPath),

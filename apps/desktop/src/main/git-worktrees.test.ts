@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
-import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -44,6 +44,8 @@ describe("DesktopGitWorktrees", () => {
       "-m",
       "initial",
     );
+    const repositoryAlias = path.join(userData, "source-alias");
+    await symlink(repository, repositoryAlias, process.platform === "win32" ? "junction" : "dir");
     const runId = "11111111-1111-4111-8111-111111111111";
     const groupRunId = "22222222-2222-4222-8222-222222222222";
     const patch = VerifiedPatchViewV1Schema.parse({
@@ -58,7 +60,7 @@ describe("DesktopGitWorktrees", () => {
       },
       manifestVersion: 3,
       verification: { workspaceIntegrity: "verified", compile: "passed", warmTest: "not-run" },
-      sourceProjectPath: repository,
+      sourceProjectPath: repositoryAlias,
       sourceState: "clean",
       disposition: "pending",
       conflictPaths: [],
@@ -86,11 +88,11 @@ describe("DesktopGitWorktrees", () => {
     });
     const worktrees = new DesktopGitWorktrees(userData);
 
-    const materialized = await worktrees.materialize(repository, runId, groupRunId, patch);
+    const materialized = await worktrees.materialize(repositoryAlias, runId, groupRunId, patch);
     expect(materialized.disposition).toBe("materialized");
     expect(materialized.snapshot.worktrees.some((entry) => entry.kind === "work")).toBe(true);
 
-    const merged = await worktrees.merge(repository, runId, groupRunId);
+    const merged = await worktrees.merge(repositoryAlias, runId, groupRunId);
     expect(merged.disposition).toBe("merged");
     expect(merged.snapshot.worktrees.some((entry) => entry.kind === "work")).toBe(false);
     const integration = merged.snapshot.worktrees.find((entry) => entry.kind === "integration");
@@ -101,7 +103,7 @@ describe("DesktopGitWorktrees", () => {
     expect(await git(repository, "branch", "--list", `honeybee/work/${runId}`)).toContain(runId);
     expect(await readFile(path.join(repository, "Assets", "Player.cs"), "utf8")).toBe(before);
 
-    const integrated = await worktrees.finalize(repository, groupRunId);
+    const integrated = await worktrees.finalize(repositoryAlias, groupRunId);
     expect(integrated.disposition).toBe("integrated");
     expect(integrated.snapshot.worktrees.some((entry) => entry.kind === "integration")).toBe(false);
     expect(await readFile(path.join(repository, "Assets", "Player.cs"), "utf8")).toBe(after);

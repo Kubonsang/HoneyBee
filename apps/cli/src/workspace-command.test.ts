@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -72,7 +72,7 @@ describe("Workspace CLI", () => {
     expect(listed.exitCode).toBe(0);
     expect(JSON.parse(listed.stdout)).toMatchObject({
       ok: true,
-      projects: [{ projectId: project.projectId, unityProjectPath: source }],
+      projects: [{ projectId: project.projectId, unityProjectPath: await realpath(source) }],
     });
 
     const help = await runCli(["--help"], root);

@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -144,6 +144,8 @@ const fixture = async () => {
     "-m",
     "initial",
   );
+  const sourceAlias = path.join(root, "source-alias");
+  await symlink(source, sourceAlias, process.platform === "win32" ? "junction" : "dir");
   const launcher = new FakeLauncher();
   const core = new HoneyBeeWorkspaceCore({
     dataRoot: path.join(root, "registry"),
@@ -151,7 +153,7 @@ const fixture = async () => {
     launcher,
   });
   const project = await core.initProject({
-    unityProjectPath: source,
+    unityProjectPath: sourceAlias,
     workspaceRoot,
     storageCommand: process.execPath,
   });
