@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { access, copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -14,11 +14,9 @@ const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
 const hostRoot = path.join(repositoryRoot, "tools", "workspace-storage-host");
-const nativeAgentHostRoot = path.join(repositoryRoot, "tools", "native-agent-host");
 const outputRoot = path.join(appRoot, ".tools", "win32-x64");
 const clientOutput = path.join(outputRoot, "unity-workspace-storage.exe");
 const hostOutput = path.join(outputRoot, "honeybee-workspace-storage-host.exe");
-const nativeAgentHostOutput = path.join(outputRoot, "honeybee-native-agent-host.exe");
 
 const run = async (command, args, options = {}) =>
   execFileAsync(command, args, {
@@ -92,34 +90,6 @@ try {
     await rm(workRoot, { recursive: true, force: true });
   }
 
-  const nativeBuildRoot = await mkdtemp(path.join(tmpdir(), "honeybee-native-host-build-"));
-  try {
-    const first = path.join(nativeBuildRoot, "first.exe");
-    const second = path.join(nativeBuildRoot, "second.exe");
-    for (const output of [first, second]) {
-      await run(
-        "go",
-        ["build", "-buildvcs=false", "-trimpath", "-ldflags=-buildid=", "-o", output, "."],
-        {
-          cwd: nativeAgentHostRoot,
-          env: { ...buildEnvironment, GOWORK: "off" },
-        },
-      );
-    }
-    const [firstDigest, secondDigest, firstStat, secondStat] = await Promise.all([
-      sha256(first),
-      sha256(second),
-      stat(first),
-      stat(second),
-    ]);
-    if (firstDigest !== secondDigest || firstStat.size !== secondStat.size) {
-      throw new Error("native-agent-host build is not deterministic.");
-    }
-    await copyFile(first, nativeAgentHostOutput);
-  } finally {
-    await rm(nativeBuildRoot, { recursive: true, force: true });
-  }
-
   await writeFile(
     path.join(outputRoot, "manifest.json"),
     JSON.stringify(
@@ -135,10 +105,6 @@ try {
           "honeybee-workspace-storage-host.exe": {
             byteLength: (await stat(hostOutput)).size,
             sha256: await sha256(hostOutput),
-          },
-          "honeybee-native-agent-host.exe": {
-            byteLength: (await stat(nativeAgentHostOutput)).size,
-            sha256: await sha256(nativeAgentHostOutput),
           },
         },
       },

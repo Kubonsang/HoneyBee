@@ -12,8 +12,8 @@ private project data. In the repository's **Security** tab, use **Report a vulne
 for this repository. Include the affected version, reproduction steps, impact,
 and the smallest safe proof of concept.
 
-Do not include real API keys, access tokens, Unity project credentials, agent
-transcripts, PTY logs, or proprietary project files. Replace them with
+Do not include real API keys, access tokens, Unity project credentials,
+terminal output, PTY logs, or proprietary project files. Replace them with
 redacted fixtures.
 
 ## Repository safeguards

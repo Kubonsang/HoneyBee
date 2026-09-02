@@ -71,24 +71,48 @@ describe("Workspace CLI", () => {
     const listed = await runCli(["project", "list", "--data-root", dataRoot, "--json"], root);
     expect(listed.exitCode).toBe(0);
     expect(JSON.parse(listed.stdout)).toMatchObject({
+      schemaVersion: 1,
       ok: true,
       projects: [{ projectId: project.projectId, unityProjectPath: await realpath(source) }],
     });
+    expect(listed.stdout).not.toContain("storageCommand");
+
+    const cache = await runCli(["cache", "status", "--data-root", dataRoot, "--json"], root);
+    expect(JSON.parse(cache.stdout)).toMatchObject({
+      schemaVersion: 1,
+      ok: true,
+      projectId: project.projectId,
+      state: "missing",
+      cache: null,
+    });
+    const workspaceList = await runCli(
+      ["workspace", "list", "--data-root", dataRoot, "--json"],
+      root,
+    );
+    expect(JSON.parse(workspaceList.stdout)).toEqual({
+      schemaVersion: 1,
+      ok: true,
+      workspaces: [],
+    });
 
     const help = await runCli(["--help"], root);
-    expect(help.stdout).toContain("Workspace Core for Unity projects");
+    expect(help.stdout).toContain("Unity parallel Workspace provider");
     expect(help.stdout).not.toContain("Run a deterministic two-process");
+    expect(help.stdout).not.toContain("workspace launch");
 
     const legacy = await runCli(["demo", "--task", "blocked"], root);
     expect(legacy.exitCode).toBe(1);
     expect(JSON.parse(legacy.stderr)).toMatchObject({ code: "cli.unknown-command" });
 
-    const forwardedHelp = await runCli(
+    const removedLaunch = await runCli(
       ["workspace", "launch", "missing", "codex", "--", "--help"],
       root,
     );
-    expect(forwardedHelp.exitCode).toBe(1);
-    expect(forwardedHelp.stdout).not.toContain("Workspace Core for Unity projects");
-    expect(JSON.parse(forwardedHelp.stderr)).toMatchObject({ code: "workspace.not-found" });
+    expect(removedLaunch.exitCode).toBe(1);
+    expect(JSON.parse(removedLaunch.stderr)).toMatchObject({
+      schemaVersion: 1,
+      ok: false,
+      code: "cli.unknown-command",
+    });
   });
 });

@@ -5,6 +5,7 @@ import {
   cp,
   lstat,
   mkdir,
+  readlink,
   readdir,
   realpath,
   rm,
@@ -16,15 +17,14 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
-import { WindowsTerminalLauncher, WindowsWorkspaceStorage } from "./workspace-storage.js";
+import { WindowsWorkspaceStorage } from "./workspace-storage.js";
 import {
+  WORKSPACE_REGISTRY_SCHEMA_VERSION,
   WorkspaceCoreError,
-  type ProjectRecordV1,
+  type ProjectRecordV2,
   type StorageLease,
-  type WorkspaceRecordV1,
+  type WorkspaceRecordV2,
   type WorkspaceStoragePort,
-  type WorkspaceTool,
-  type WorkspaceToolLauncher,
   type WorkspaceViewV1,
 } from "./workspace-types.js";
 
@@ -93,7 +93,6 @@ const now = (): string => new Date().toISOString();
 export interface HoneyBeeWorkspaceCoreOptions {
   readonly dataRoot?: string;
   readonly storage?: WorkspaceStoragePort;
-  readonly launcher?: WorkspaceToolLauncher;
 }
 
 export interface ProjectInitInput {
@@ -114,20 +113,18 @@ export interface WorkspaceCreateInput {
 export class HoneyBeeWorkspaceCore {
   readonly #registry: WorkspaceRegistryStore;
   readonly #storage: WorkspaceStoragePort;
-  readonly #launcher: WorkspaceToolLauncher;
 
   public constructor(options: HoneyBeeWorkspaceCoreOptions = {}) {
     const dataRoot = path.resolve(options.dataRoot ?? defaultDataRoot());
     this.#registry = new WorkspaceRegistryStore(dataRoot);
     this.#storage = options.storage ?? new WindowsWorkspaceStorage();
-    this.#launcher = options.launcher ?? new WindowsTerminalLauncher();
   }
 
   public get registryPath(): string {
     return this.#registry.path;
   }
 
-  public async initProject(input: ProjectInitInput): Promise<ProjectRecordV1> {
+  public async initProject(input: ProjectInitInput): Promise<ProjectRecordV2> {
     const unityProjectPath = await realpath(
       requireAbsolute(input.unityProjectPath, "Unity project path"),
     );
@@ -157,8 +154,8 @@ export class HoneyBeeWorkspaceCore {
     const existing = registry.projects.find(
       (project) => pathKey(project.unityProjectPath) === pathKey(unityProjectPath),
     );
-    const record: ProjectRecordV1 = {
-      schemaVersion: 1,
+    const record: ProjectRecordV2 = {
+      schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
       projectId: existing?.projectId ?? randomUUID(),
       label: input.label?.trim() || path.basename(unityProjectPath),
       unityProjectPath,
@@ -173,11 +170,11 @@ export class HoneyBeeWorkspaceCore {
     return record;
   }
 
-  public async listProjects(): Promise<readonly ProjectRecordV1[]> {
+  public async listProjects(): Promise<readonly ProjectRecordV2[]> {
     return (await this.#registry.read()).projects;
   }
 
-  public async prepareCache(projectReference?: string): Promise<ProjectRecordV1> {
+  public async prepareCache(projectReference?: string): Promise<ProjectRecordV2> {
     const project = await this.#project(projectReference);
     const library = path.join(project.unityProjectPath, "Library");
     const libraryInfo = await stat(library).catch(() => undefined);
@@ -242,7 +239,7 @@ export class HoneyBeeWorkspaceCore {
         throw error;
       }
     }
-    const prepared: ProjectRecordV1 = {
+    const prepared: ProjectRecordV2 = {
       ...project,
       cache: {
         kind: "library-only-v1",
@@ -256,6 +253,10 @@ export class HoneyBeeWorkspaceCore {
     };
     await this.#registry.putProject(prepared);
     return prepared;
+  }
+
+  public async cacheStatus(projectReference?: string): Promise<ProjectRecordV2> {
+    return this.#project(projectReference);
   }
 
   public async createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceViewV1> {
@@ -321,7 +322,7 @@ export class HoneyBeeWorkspaceCore {
         ? ["worktree", "add", workspacePath, input.branch]
         : ["worktree", "add", "-b", input.branch, workspacePath, baseCommit];
     await this.#git(project.repositoryRoot, worktreeArgs);
-    let record: WorkspaceRecordV1 | undefined;
+    let record: WorkspaceRecordV2 | undefined;
     try {
       const lease = await this.#storage.acquire(project.storageCommand, {
         consumerId,
@@ -331,7 +332,7 @@ export class HoneyBeeWorkspaceCore {
       });
       const createdAt = now();
       record = {
-        schemaVersion: 1,
+        schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
         layout: "git-worktree-library-cow-v1",
         workspaceId,
         projectId: project.projectId,
@@ -387,23 +388,45 @@ export class HoneyBeeWorkspaceCore {
       return this.#view(record);
     } catch (error) {
       if (record === undefined) {
-        await this.#git(project.repositoryRoot, [
-          "worktree",
-          "remove",
-          "--force",
-          workspacePath,
-        ]).catch(() => undefined);
+        try {
+          await this.#git(project.repositoryRoot, ["worktree", "remove", workspacePath]);
+        } catch (cleanupError) {
+          throw new WorkspaceCoreError(
+            "workspace.create-cleanup-pending",
+            `Workspace creation failed and ${workspacePath} was preserved because Git could not remove it safely.`,
+            { cause: new AggregateError([error, cleanupError]) },
+          );
+        }
       } else {
-        await this.#cleanupFailedCreation(project, record).catch(() => undefined);
-        await this.#registry.removeWorkspace(record.workspaceId).catch(() => undefined);
-      }
-      if (input.existingBranch !== true) {
-        await this.#git(project.repositoryRoot, ["branch", "-D", input.branch]).catch(
-          () => undefined,
-        );
+        const cleanupErrors: unknown[] = [];
+        await this.#registry
+          .putWorkspace({ ...record, state: "cleanup-pending", updatedAt: now() })
+          .catch((cleanupError: unknown) => cleanupErrors.push(cleanupError));
+        await this.#storage
+          .retain(project.storageCommand, record.leaseId)
+          .catch((cleanupError: unknown) => cleanupErrors.push(cleanupError));
+        try {
+          await this.removeWorkspace(record.workspaceId, project.projectId);
+          cleanupErrors.length = 0;
+        } catch (cleanupError) {
+          cleanupErrors.push(cleanupError);
+        }
+        if (cleanupErrors.length > 0) {
+          throw new WorkspaceCoreError(
+            "workspace.create-cleanup-pending",
+            "Workspace creation failed and safe cleanup is pending; retry workspace remove.",
+            { cause: new AggregateError([error, ...cleanupErrors]) },
+          );
+        }
       }
       throw error;
     }
+  }
+
+  public async attachWorkspace(
+    input: Omit<WorkspaceCreateInput, "existingBranch" | "base">,
+  ): Promise<WorkspaceViewV1> {
+    return this.createWorkspace({ ...input, existingBranch: true });
   }
 
   public async listWorkspaces(projectReference?: string): Promise<readonly WorkspaceViewV1[]> {
@@ -436,6 +459,29 @@ export class HoneyBeeWorkspaceCore {
         "This pre-adoption Full-project Workspace cannot be repaired by Library-only Core.",
       );
     }
+    if (!(await this.#exists(record.workspacePath))) {
+      throw new WorkspaceCoreError(
+        "workspace.worktree-missing",
+        "The Git worktree directory is missing and cannot be reconstructed safely.",
+      );
+    }
+    const workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
+    if (!contains(record.workspacePath, workspaceLibrary)) {
+      throw new WorkspaceCoreError(
+        "workspace.library-path-invalid",
+        "Workspace Library path escaped its Git worktree.",
+      );
+    }
+    const libraryEntry = await lstat(workspaceLibrary).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (libraryEntry !== undefined && !libraryEntry.isSymbolicLink()) {
+      throw new WorkspaceCoreError(
+        "workspace.library-not-junction",
+        "Workspace Library exists but is not the retained storage junction.",
+      );
+    }
     let lease: StorageLease | undefined;
     const mountAvailable = await stat(record.mountPath)
       .then(() => true)
@@ -451,13 +497,6 @@ export class HoneyBeeWorkspaceCore {
       );
     }
     const mountPath = lease?.mountPath ?? record.mountPath;
-    if (!(await this.#exists(record.workspacePath))) {
-      throw new WorkspaceCoreError(
-        "workspace.worktree-missing",
-        "The Git worktree directory is missing and cannot be reconstructed safely.",
-      );
-    }
-    const workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
     await this.#ensureLibraryJunction(workspaceLibrary, mountPath);
     await this.#git(project.repositoryRoot, ["worktree", "repair", record.workspacePath]);
     await this.#git(record.workspacePath, ["status", "--porcelain=v1"]);
@@ -480,119 +519,124 @@ export class HoneyBeeWorkspaceCore {
   public async removeWorkspace(reference: string, projectReference?: string): Promise<void> {
     let record = await this.#workspace(reference, projectReference);
     const project = await this.#project(record.projectId);
+    const resumed = record.state === "removing" || record.state === "cleanup-pending";
+    let cleanupStarted = resumed;
     if (record.layout !== "git-worktree-library-cow-v1") {
       throw new WorkspaceCoreError(
         "workspace.layout-unsupported",
         "This pre-adoption Full-project Workspace must be removed with the Core version that created it.",
       );
     }
-    const view = await this.#view(record);
-    if (view.git === undefined) {
-      await this.repairWorkspace(reference, projectReference);
-      record = await this.#workspace(reference, projectReference);
-    } else if (view.git.dirty) {
-      throw new WorkspaceCoreError(
-        "workspace.dirty",
-        "Commit or discard every tracked and untracked change before removing the Workspace.",
-      );
-    }
-    const refreshed = await this.#view(record);
-    if (refreshed.git?.dirty === true) {
-      throw new WorkspaceCoreError("workspace.dirty", "The Workspace contains changes.");
-    }
-    record = { ...record, state: "removing", updatedAt: now() };
-    await this.#registry.putWorkspace(record);
     try {
-      const workspaceLibrary = path.join(
-        record.workspacePath,
-        project.unityRelativePath,
-        "Library",
-      );
+      if (await this.#exists(record.workspacePath)) {
+        const view = await this.#view(record);
+        if (view.git === undefined) {
+          await this.repairWorkspace(reference, projectReference);
+          record = await this.#workspace(reference, projectReference);
+        } else if (view.git.dirty) {
+          throw new WorkspaceCoreError(
+            "workspace.dirty",
+            "Commit or discard every tracked and untracked change before removing the Workspace.",
+          );
+        }
+        const refreshed = await this.#view(record);
+        if (refreshed.git?.dirty === true) {
+          throw new WorkspaceCoreError("workspace.dirty", "The Workspace contains changes.");
+        }
+        record = { ...record, state: "removing", updatedAt: now() };
+        await this.#registry.putWorkspace(record);
+        cleanupStarted = true;
+        const workspaceLibrary = path.join(
+          record.workspacePath,
+          project.unityRelativePath,
+          "Library",
+        );
+        await this.#removeLibraryJunction(record.workspacePath, workspaceLibrary, record.mountPath);
+        await this.#git(project.repositoryRoot, ["worktree", "remove", record.workspacePath]);
+      } else if (!resumed) {
+        throw new WorkspaceCoreError(
+          "workspace.worktree-missing",
+          "The Git worktree is missing without a pending removal receipt.",
+        );
+      }
       try {
-        await unlink(workspaceLibrary);
+        await this.#storage.removeRetained(project.storageCommand, record.consumerId);
       } catch (error) {
-        const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EPERM") {
-          if (!contains(record.workspacePath, workspaceLibrary)) {
-            throw new WorkspaceCoreError(
-              "workspace.library-path-invalid",
-              "Workspace Library path escaped its Git worktree.",
-            );
-          }
-          await rm(workspaceLibrary, { recursive: true, force: true });
-        } else if (code !== "ENOENT") {
+        if (!(
+          resumed &&
+          error instanceof WorkspaceCoreError &&
+          error.code === "retained-not-found"
+        )) {
           throw error;
         }
       }
-      await this.#storage.removeRetained(project.storageCommand, record.consumerId);
-      await this.#git(project.repositoryRoot, ["worktree", "remove", record.workspacePath]);
       await this.#registry.removeWorkspace(record.workspaceId);
     } catch (error) {
-      await this.#registry.putWorkspace({
-        ...record,
-        state: "cleanup-pending",
-        updatedAt: now(),
-      });
+      if (cleanupStarted) {
+        await this.#registry.putWorkspace({
+          ...record,
+          state: "cleanup-pending",
+          updatedAt: now(),
+        });
+      }
       throw error;
     }
   }
 
-  public async setTool(tool: WorkspaceTool, executable: string): Promise<void> {
-    const resolved = requireAbsolute(executable, `${tool} executable`);
-    await access(resolved);
-    await this.#registry.setTool(tool, resolved);
-  }
-
-  public async launchWorkspace(
-    reference: string,
-    tool: WorkspaceTool,
-    args: readonly string[] = [],
-    projectReference?: string,
+  async #removeLibraryJunction(
+    workspacePath: string,
+    workspaceLibrary: string,
+    expectedMountPath: string,
   ): Promise<void> {
-    const repaired = await this.repairWorkspace(reference, projectReference);
-    const project = await this.#project(repaired.projectId);
-    const registry = await this.#registry.read();
-    const configured = registry.tools[tool];
-    const executable =
-      configured ??
-      ({ codex: "codex", claude: "claude", shell: "powershell.exe", unity: undefined } as const)[
-        tool
-      ];
-    if (executable === undefined) {
+    if (!contains(workspacePath, workspaceLibrary)) {
       throw new WorkspaceCoreError(
-        "tool.not-configured",
-        `Configure ${tool} with honeybee config tool set before launching it.`,
+        "workspace.library-path-invalid",
+        "Workspace Library path escaped its Git worktree.",
       );
     }
-    const launchArgs =
-      tool === "unity"
-        ? ["-projectPath", path.join(repaired.workspacePath, project.unityRelativePath), ...args]
-        : tool === "shell" && args.length === 0
-          ? ["-NoExit"]
-          : [...args];
-    await this.#launcher.launch(executable, launchArgs, repaired.workspacePath);
+    const entry = await lstat(workspaceLibrary).catch((error: unknown) => {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (entry === undefined) return;
+    if (!entry.isSymbolicLink()) {
+      throw new WorkspaceCoreError(
+        "workspace.library-not-junction",
+        "Workspace Library exists but is not a HoneyBee-owned junction.",
+      );
+    }
+    if (!(await this.#libraryJunctionReferences(workspaceLibrary, expectedMountPath))) {
+      throw new WorkspaceCoreError(
+        "workspace.library-target-invalid",
+        "Workspace Library junction does not reference HoneyBee retained storage.",
+      );
+    }
+    try {
+      await unlink(workspaceLibrary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      await rm(workspaceLibrary, { recursive: true, force: true });
+    }
   }
 
-  async #cleanupFailedCreation(project: ProjectRecordV1, record: WorkspaceRecordV1): Promise<void> {
-    await unlink(path.join(record.workspacePath, project.unityRelativePath, "Library")).catch(
-      () => undefined,
-    );
-    await this.#storage.retain(project.storageCommand, record.leaseId).catch(() => undefined);
-    await this.#storage
-      .removeRetained(project.storageCommand, record.consumerId)
-      .catch(() => undefined);
-    await this.#git(project.repositoryRoot, [
-      "worktree",
-      "remove",
-      "--force",
-      record.workspacePath,
-    ]).catch(() => undefined);
+  async #libraryJunctionReferences(workspaceLibrary: string, mountPath: string): Promise<boolean> {
+    try {
+      const target = await readlink(workspaceLibrary);
+      return pathKey(path.resolve(path.dirname(workspaceLibrary), target)) === pathKey(mountPath);
+    } catch {
+      return false;
+    }
   }
 
   async #libraryJunctionMatches(workspaceLibrary: string, mountPath: string): Promise<boolean> {
     try {
       const entry = await lstat(workspaceLibrary);
-      if (!entry.isSymbolicLink()) return false;
+      if (
+        !entry.isSymbolicLink() ||
+        !(await this.#libraryJunctionReferences(workspaceLibrary, mountPath))
+      ) {
+        return false;
+      }
       const [libraryTarget, storageTarget] = await Promise.all([
         realpath(workspaceLibrary),
         realpath(mountPath),
@@ -628,9 +672,16 @@ export class HoneyBeeWorkspaceCore {
     }
   }
 
-  async #view(record: WorkspaceRecordV1): Promise<WorkspaceViewV1> {
+  async #view(record: WorkspaceRecordV2): Promise<WorkspaceViewV1> {
     if (!(await this.#exists(record.workspacePath))) {
-      return { ...record, available: false, state: "repair-required" };
+      return {
+        ...record,
+        available: false,
+        state:
+          record.state === "removing" || record.state === "cleanup-pending"
+            ? record.state
+            : "repair-required",
+      };
     }
     try {
       const branch = await this.#git(record.workspacePath, ["branch", "--show-current"]);
@@ -662,7 +713,7 @@ export class HoneyBeeWorkspaceCore {
     }
   }
 
-  async #project(reference?: string): Promise<ProjectRecordV1> {
+  async #project(reference?: string): Promise<ProjectRecordV2> {
     const registry = await this.#registry.read();
     if (registry.projects.length === 0) {
       throw new WorkspaceCoreError("project.not-found", "No HoneyBee project is registered.");
@@ -687,15 +738,15 @@ export class HoneyBeeWorkspaceCore {
             workspace.projectId === item.projectId && contains(workspace.workspacePath, cwd),
         ),
     );
-    if (matches.length === 1) return matches[0] as ProjectRecordV1;
-    if (registry.projects.length === 1) return registry.projects[0] as ProjectRecordV1;
+    if (matches.length === 1) return matches[0] as ProjectRecordV2;
+    if (registry.projects.length === 1) return registry.projects[0] as ProjectRecordV2;
     throw new WorkspaceCoreError(
       "project.ambiguous",
       "Use --project because the current directory does not identify one project.",
     );
   }
 
-  async #workspace(reference: string, projectReference?: string): Promise<WorkspaceRecordV1> {
+  async #workspace(reference: string, projectReference?: string): Promise<WorkspaceRecordV2> {
     const registry = await this.#registry.read();
     const project =
       projectReference === undefined ? undefined : await this.#project(projectReference);
@@ -710,7 +761,7 @@ export class HoneyBeeWorkspaceCore {
         `Workspace ${reference} could not be resolved uniquely.`,
       );
     }
-    return matches[0] as WorkspaceRecordV1;
+    return matches[0] as WorkspaceRecordV2;
   }
 
   async #assertUnityProject(projectPath: string): Promise<void> {

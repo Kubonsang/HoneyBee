@@ -3,7 +3,7 @@
   "version": "0.7.0",
   "private": true,
   "type": "module",
-  "description": "CLI-first Git worktrees with Library-only CoW for Unity, Codex, and Claude Code.",
+  "description": "Windows Unity Workspace provider using Git worktrees and Library-only CoW.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -32,8 +32,8 @@
     "test:watch": "vitest",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
-    "test:run": "vitest run && corepack pnpm test:native-host",
-    "test:native-host": "go -C tools/native-agent-host test ./..."
+    "test:run": "vitest run && corepack pnpm test:storage-host",
+    "test:storage-host": "go -C tools/workspace-storage-host test ./..."
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

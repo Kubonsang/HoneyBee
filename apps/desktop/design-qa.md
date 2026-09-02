@@ -1,4 +1,7 @@
-# HoneyBee Desktop state workspace design QA
+# Historical HoneyBee v0.6 Desktop design QA
+
+> Historical validation evidence only. This document describes the retired Run/Agent control-plane
+> UI and is not a v0.7 product specification. The active Desktop boundary is ADR-032.
 
 ## Comparison target
 

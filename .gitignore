@@ -5,6 +5,9 @@ dist/
 coverage/
 *.tsbuildinfo
 /apps/desktop/release/
+/apps/desktop/release*/
+/output/
+/tmp/
 /dogfood/evidence/
 /dogfood/state/
 __pycache__/

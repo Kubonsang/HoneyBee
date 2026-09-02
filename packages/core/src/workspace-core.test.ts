@@ -17,12 +17,8 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { HoneyBeeWorkspaceCore } from "./workspace-core.js";
-import type {
-  StorageLease,
-  StorageParentBuild,
-  WorkspaceStoragePort,
-  WorkspaceToolLauncher,
-} from "./workspace-types.js";
+import type { StorageLease, StorageParentBuild, WorkspaceStoragePort } from "./workspace-types.js";
+import { WorkspaceCoreError } from "./workspace-types.js";
 
 const execFileAsync = promisify(execFile);
 const roots: string[] = [];
@@ -42,7 +38,8 @@ class FakeStorage implements WorkspaceStoragePort {
   readonly #parents = new Map<string, string>();
   readonly #transactions = new Map<string, { key: string; path: string }>();
   readonly #leases = new Map<string, StorageLease & { consumerId: string; workspaceId: string }>();
-  public beforeRemoveRetained: (() => Promise<void>) | undefined;
+  public loseNextRemoveResponse = false;
+  public failNextAttach = false;
 
   public constructor(root: string) {
     this.#root = root;
@@ -101,25 +98,26 @@ class FakeStorage implements WorkspaceStoragePort {
     consumerId: string,
     _workspaceId: string,
   ): Promise<StorageLease> {
+    if (this.failNextAttach) {
+      this.failNextAttach = false;
+      throw new WorkspaceCoreError("storage.attach-failed", "simulated attach failure");
+    }
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) throw new Error("missing retained lease");
     return lease;
   }
 
   public async removeRetained(_command: string, consumerId: string): Promise<void> {
-    await this.beforeRemoveRetained?.();
     const lease = this.#leases.get(consumerId);
-    if (lease === undefined) throw new Error("missing retained lease");
+    if (lease === undefined) {
+      throw new WorkspaceCoreError("retained-not-found", "missing retained lease");
+    }
     await rm(lease.workspacePath, { recursive: true, force: true });
     this.#leases.delete(consumerId);
-  }
-}
-
-class FakeLauncher implements WorkspaceToolLauncher {
-  public launchRequest: { executable: string; args: readonly string[]; cwd: string } | undefined;
-
-  public async launch(executable: string, args: readonly string[], cwd: string): Promise<void> {
-    this.launchRequest = { executable, args, cwd };
+    if (this.loseNextRemoveResponse) {
+      this.loseNextRemoveResponse = false;
+      throw new WorkspaceCoreError("storage.response-lost", "response was lost");
+    }
   }
 }
 
@@ -158,12 +156,10 @@ const fixture = async () => {
   );
   const sourceAlias = path.join(root, "source-alias");
   await symlink(source, sourceAlias, process.platform === "win32" ? "junction" : "dir");
-  const launcher = new FakeLauncher();
   const storage = new FakeStorage(path.join(root, "provider"));
   const core = new HoneyBeeWorkspaceCore({
     dataRoot: path.join(root, "registry"),
     storage,
-    launcher,
   });
   const project = await core.initProject({
     unityProjectPath: sourceAlias,
@@ -171,7 +167,7 @@ const fixture = async () => {
     storageCommand: process.execPath,
   });
   await core.prepareCache(project.projectId);
-  return { root, source, workspaceRoot, core, project, launcher, storage };
+  return { root, source, workspaceRoot, core, project, storage };
 };
 
 afterEach(async () => {
@@ -241,8 +237,8 @@ describe("HoneyBeeWorkspaceCore", () => {
     );
   }, 30_000);
 
-  it("attaches an existing branch, refuses dirty removal, and launches from the workspace", async () => {
-    const { root, source, core, project, launcher } = await fixture();
+  it("attaches an existing branch, repairs its Library, and refuses dirty removal", async () => {
+    const { root, source, core, project } = await fixture();
     await git(source, "branch", "feature/existing");
     const created = await core.createWorkspace({
       project: project.projectId,
@@ -250,18 +246,14 @@ describe("HoneyBeeWorkspaceCore", () => {
       branch: "feature/existing",
       existingBranch: true,
     });
-    await core.launchWorkspace(created.workspaceId, "codex", ["--help"]);
-    expect(launcher.launchRequest).toEqual({
-      executable: "codex",
-      args: ["--help"],
-      cwd: created.workspacePath,
-    });
-
     const workspaceLibrary = path.join(created.workspacePath, "Library");
     await unlink(workspaceLibrary);
     await mkdir(workspaceLibrary);
     await writeFile(path.join(workspaceLibrary, "user-data.txt"), "preserve\n", "utf8");
     await expect(core.repairWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.library-not-junction",
+    });
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
       code: "workspace.library-not-junction",
     });
     expect(await readFile(path.join(workspaceLibrary, "user-data.txt"), "utf8")).toBe("preserve\n");
@@ -270,6 +262,10 @@ describe("HoneyBeeWorkspaceCore", () => {
     const wrongTarget = path.join(root, "wrong-library");
     await mkdir(wrongTarget);
     await symlink(wrongTarget, workspaceLibrary, "junction");
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.library-target-invalid",
+    });
+    expect(await realpath(workspaceLibrary)).toBe(await realpath(wrongTarget));
     const repaired = await core.repairWorkspace(created.workspaceId);
     expect(await realpath(workspaceLibrary)).toBe(await realpath(repaired.mountPath));
 
@@ -277,9 +273,10 @@ describe("HoneyBeeWorkspaceCore", () => {
     await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
       code: "workspace.dirty",
     });
+    expect((await core.workspaceStatus(created.workspaceId)).state).toBe("ready");
   }, 30_000);
 
-  it("preserves a file written after the final status check during removal", async () => {
+  it("resumes cleanup after a retained-child removal response is lost", async () => {
     const { source, core, project, storage } = await fixture();
     const created = await core.createWorkspace({
       project: project.projectId,
@@ -287,16 +284,33 @@ describe("HoneyBeeWorkspaceCore", () => {
       branch: "feature/late-write",
       base: "main",
     });
-    const lateFile = path.join(created.workspacePath, "Assets", "Late.cs");
-    storage.beforeRemoveRetained = () => writeFile(lateFile, "class Late {}\n", "utf8");
+    storage.loseNextRemoveResponse = true;
 
     await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
-      code: "git.command-failed",
+      code: "storage.response-lost",
     });
+    await core.removeWorkspace(created.workspaceId);
+    expect(await core.listWorkspaces()).toEqual([]);
+    expect(await git(source, "rev-parse", "refs/heads/feature/late-write")).toBe(
+      created.baseCommit,
+    );
+  }, 30_000);
 
-    expect(await readFile(lateFile, "utf8")).toBe("class Late {}\n");
-    expect(await git(source, "worktree", "list", "--porcelain")).toContain(
-      created.workspacePath.replaceAll("\\", "/"),
+  it("closes registered storage and worktree state when creation fails", async () => {
+    const { source, core, project, storage } = await fixture();
+    storage.failNextAttach = true;
+
+    await expect(
+      core.createWorkspace({
+        project: project.projectId,
+        name: "failed-create",
+        branch: "feature/failed-create",
+      }),
+    ).rejects.toMatchObject({ code: "storage.attach-failed" });
+    expect(await core.listWorkspaces()).toEqual([]);
+    expect(await git(source, "worktree", "list", "--porcelain")).not.toContain("failed-create");
+    expect(await git(source, "rev-parse", "refs/heads/feature/failed-create")).toMatch(
+      /^[0-9a-f]{40}$/u,
     );
   }, 30_000);
 });

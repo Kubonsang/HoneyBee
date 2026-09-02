@@ -15,7 +15,6 @@ if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".
 const output = path.join(appRoot, outputDirectory);
 const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 const compatibilityManifest = path.join(appRoot, "resources", "component-compatibility-v1.json");
-const nativeAgentHostManifest = path.join(appRoot, "resources", "native-agent-host-v1.json");
 const require = createRequire(import.meta.url);
 const nodePtyRoot = path.dirname(require.resolve("node-pty/package.json"));
 const nodeAddonApiRoot = path.join(path.dirname(nodePtyRoot), "node-addon-api");
@@ -31,25 +30,14 @@ assertOwned(staging, appRoot);
 assertOwned(output, appRoot);
 await access(path.join(bundledTools, "unity-workspace-storage.exe"));
 await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
-await access(path.join(bundledTools, "honeybee-native-agent-host.exe"));
 await access(compatibilityManifest);
-await access(nativeAgentHostManifest);
 const preparedTools = JSON.parse(await readFile(path.join(bundledTools, "manifest.json"), "utf8"));
 const compatibility = JSON.parse(await readFile(compatibilityManifest, "utf8"));
-const approvedNativeHost = JSON.parse(await readFile(nativeAgentHostManifest, "utf8"));
 const approvedStorage = compatibility.workspaceStorage?.find(
   (release) => release.version === preparedTools.workspaceStorageVersion,
 );
 if (approvedStorage === undefined) {
   throw new Error("Prepared workspace-storage version is absent from the compatibility manifest.");
-}
-const preparedNativeHost = preparedTools.files?.[approvedNativeHost.fileName];
-if (
-  preparedNativeHost === undefined ||
-  preparedNativeHost.byteLength !== approvedNativeHost.byteLength ||
-  preparedNativeHost.sha256 !== approvedNativeHost.sha256
-) {
-  throw new Error("Prepared native-agent-host does not match its committed pin.");
 }
 for (const payload of approvedStorage.payloads) {
   const prepared = preparedTools.files?.[payload.fileName];
@@ -124,11 +112,11 @@ const paths = await packager({
   out: output,
   overwrite: true,
   asar: { unpack: "**/node_modules/node-pty/prebuilds/win32-x64/**/*" },
-  extraResource: [bundledTools, compatibilityManifest, nativeAgentHostManifest],
+  extraResource: [bundledTools, compatibilityManifest],
   appCopyright: "Copyright HoneyBee contributors",
   win32metadata: {
     CompanyName: "HoneyBee",
-    FileDescription: "HoneyBee Unity control plane",
+    FileDescription: "HoneyBee Unity Workspace Workbench",
     InternalName: "HoneyBee",
     OriginalFilename: "HoneyBee.exe",
     ProductName: "HoneyBee",

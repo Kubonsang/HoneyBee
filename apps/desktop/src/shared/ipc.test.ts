@@ -1,370 +1,68 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  DesktopArtifactRequestV1Schema,
-  DesktopDeveloperSettingsV1Schema,
-  DesktopClonedRunDraftV1Schema,
-  DesktopCloneRunDraftRequestV1Schema,
-  DesktopDogfoodFinalizeRequestV1Schema,
-  DesktopDogfoodStartRequestV1Schema,
-  DesktopPatchControlRequestV1Schema,
-  DesktopProjectAddRequestV1Schema,
-  DesktopProjectAddRequestV2Schema,
-  DesktopRunRequestV1Schema,
-  DesktopRuntimeSnapshotV1Schema,
-  DesktopSetupDiscoveryRequestV1Schema,
-  DesktopStartRequestV1Schema,
-  DesktopStartRequestV2Schema,
-  DesktopTerminalSnapshotRequestV1Schema,
-  DesktopTerminalSnapshotV1Schema,
+  DesktopIpcChannels,
+  DesktopPtyCreateRequestV1Schema,
   DesktopWorkspaceCreateRequestV1Schema,
-  DesktopWorkspacePublishRequestV1Schema,
-  HoneyBeeCompatibilityManifestV1Schema,
+  DesktopWorkspaceV1Schema,
 } from "./ipc.js";
 
-describe("Desktop IPC contracts", () => {
-  it("rejects unknown renderer fields and accepts Agent-only Work", () => {
-    const request = {
-      schemaVersion: 1,
-      profileId: "00000000-0000-4000-8000-000000000001",
-      maxParallelWorks: 1,
-      works: [
-        {
-          id: "work-1",
-          task: "Change the scene",
-          priority: "validation",
-          capabilities: [{ id: "compile", kind: "compile" }],
-          prompt: "unexpected",
-        },
-      ],
-    };
-
-    expect(DesktopStartRequestV1Schema.safeParse(request).success).toBe(false);
-    expect(
-      DesktopStartRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        profileId: request.profileId,
-        maxParallelWorks: 1,
-        works: [
-          {
-            id: "work-1",
-            task: "Change the scene",
-            priority: "validation",
-            capabilities: [],
-          },
-        ],
-      }).success,
-    ).toBe(true);
+describe("Workspace Workbench IPC", () => {
+  it("exposes only Workspace, Git diff, and terminal channels", () => {
+    expect(Object.values(DesktopIpcChannels)).toEqual([
+      "desktop.projects.v1",
+      "desktop.workspaces.v1",
+      "desktop.workspace.create.v1",
+      "desktop.workspace.repair.v1",
+      "desktop.workspace.remove.v1",
+      "desktop.git.diff.v1",
+      "desktop.pty.create.v1",
+      "desktop.pty.snapshot.v1",
+      "desktop.pty.write.v1",
+      "desktop.pty.resize.v1",
+      "desktop.pty.close.v1",
+    ]);
   });
 
-  it("validates Run and Artifact identifiers before they cross IPC", () => {
-    const runId = "00000000-0000-4000-8000-000000000001";
-    const artifactId = "00000000-0000-4000-8000-000000000002";
-
-    expect(DesktopRunRequestV1Schema.safeParse({ schemaVersion: 1, runId }).success).toBe(true);
-    expect(
-      DesktopRunRequestV1Schema.safeParse({ schemaVersion: 1, runId, rawPath: ".." }).success,
-    ).toBe(false);
-    expect(DesktopRunRequestV1Schema.safeParse({ schemaVersion: 1, runId: ".." }).success).toBe(
-      false,
-    );
-    expect(
-      DesktopArtifactRequestV1Schema.safeParse({ schemaVersion: 1, runId, artifactId }).success,
-    ).toBe(true);
-    expect(
-      DesktopPatchControlRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        runId,
-        patchArtifactId: artifactId,
-        action: "apply",
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopPatchControlRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        runId,
-        patchArtifactId: artifactId,
-        action: "delete",
-      }).success,
-    ).toBe(false);
-    expect(DesktopCloneRunDraftRequestV1Schema.safeParse({ schemaVersion: 1, runId }).success).toBe(
-      true,
-    );
-    expect(
-      DesktopCloneRunDraftRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        runId,
-        autoStart: true,
-      }).success,
-    ).toBe(false);
+  it("rejects legacy orchestration fields and storage internals", () => {
+    expect(() =>
+      DesktopWorkspaceCreateRequestV1Schema.parse({
+        projectId: "project",
+        name: "combat",
+        branch: "agent/combat",
+        agentId: "codex",
+      }),
+    ).toThrow();
+    expect(() =>
+      DesktopWorkspaceV1Schema.parse({
+        workspaceId: "workspace",
+        projectId: "project",
+        name: "combat",
+        workspacePath: "C:\\workspaces\\combat",
+        state: "ready",
+        available: true,
+        branch: "agent/combat",
+        baseCommit: "a".repeat(40),
+        git: null,
+        leaseId: "private-storage-detail",
+      }),
+    ).toThrow();
   });
 
-  it("keeps Live CLI snapshots cursor-based, bounded, and strict", () => {
-    const runId = "00000000-0000-4000-8000-000000000001";
+  it("bounds terminal creation and applies stable defaults", () => {
     expect(
-      DesktopTerminalSnapshotRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        runId,
-        afterCursor: 12,
-        mode: "readable",
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopTerminalSnapshotRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        runId,
-        afterCursor: -1,
-        mode: "stdin",
-      }).success,
-    ).toBe(false);
-    expect(
-      DesktopTerminalSnapshotV1Schema.safeParse({
-        schemaVersion: 1,
-        instanceId: "00000000-0000-4000-8000-000000000002",
-        cursor: 1,
-        state: "running",
-        entries: [
-          {
-            cursor: 1,
-            runId,
-            stepId: "unity-agent",
-            timestamp: new Date(0).toISOString(),
-            channel: "assistant",
-            mode: "readable",
-            text: "Working",
-          },
-        ],
-        truncated: false,
-        rawAvailable: false,
-      }).success,
-    ).toBe(true);
-  });
-
-  it("keeps cloned Run drafts explicit about unavailable Agents", () => {
-    const value = {
-      schemaVersion: 1,
-      sourceRunId: "00000000-0000-4000-8000-000000000001",
-      profileId: "00000000-0000-4000-8000-000000000002",
-      defaultAgentId: null,
-      maxParallelWorks: 1,
-      works: [
-        {
-          id: "work-1",
-          task: "Fix player movement jitter",
-          priority: "validation",
-          compile: true,
-          warmTest: true,
-          filter: "Smoke",
-          agentId: null,
-          agentLabel: "retired-agent.exe",
-        },
-      ],
-    };
-    expect(DesktopClonedRunDraftV1Schema.safeParse(value).success).toBe(true);
-    expect(
-      DesktopClonedRunDraftV1Schema.safeParse({
-        ...value,
-        works: [{ ...value.works[0], autoStart: true }],
-      }).success,
-    ).toBe(false);
-  });
-
-  it("requires a global default Agent and permits a per-Work override", () => {
-    const defaultAgentId = "00000000-0000-4000-8000-000000000010";
-    const overrideAgentId = "00000000-0000-4000-8000-000000000011";
-    expect(
-      DesktopStartRequestV2Schema.safeParse({
-        schemaVersion: 2,
-        profileId: "00000000-0000-4000-8000-000000000001",
-        defaultAgentId,
-        maxParallelWorks: 2,
-        works: [
-          { id: "work-a", task: "A", priority: "interactive", capabilities: [] },
-          {
-            id: "work-b",
-            task: "B",
-            priority: "background",
-            capabilities: [],
-            agentId: overrideAgentId,
-          },
-        ],
-      }).success,
-    ).toBe(true);
-  });
-
-  it("keeps runtime snapshots strict at nested resource boundaries", () => {
-    const snapshot = {
-      schemaVersion: 1,
-      observedAt: new Date(0).toISOString(),
-      runs: [],
-      editors: { schemaVersion: 1, editors: [] },
-      pool: {
-        schemaVersion: 1,
-        poolId: "unity-editor",
-        capacity: 1,
-        active: [],
-        queued: [],
-      },
-    };
-
-    expect(DesktopRuntimeSnapshotV1Schema.safeParse(snapshot).success).toBe(true);
-    expect(
-      DesktopRuntimeSnapshotV1Schema.safeParse({
-        ...snapshot,
-        pool: { ...snapshot.pool, ownerPid: 1234 },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("keeps Add Project strict and never accepts storage configuration from the renderer", () => {
-    expect(
-      DesktopSetupDiscoveryRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        projectPath: "C:\\Project",
-        typo: true,
-      }).success,
-    ).toBe(false);
-
-    const request = {
-      schemaVersion: 1,
-      projectPath: "C:\\Project",
-      unityPath: "C:\\Unity\\Unity.exe",
-      agent: { command: "C:\\Tools\\opencode.exe" },
-    } as const;
-    expect(DesktopProjectAddRequestV1Schema.safeParse(request).success).toBe(true);
-    expect(
-      DesktopProjectAddRequestV1Schema.safeParse({ ...request, workspaceRoot: "C:\\Workspaces" })
-        .success,
-    ).toBe(false);
-    expect(
-      DesktopProjectAddRequestV1Schema.safeParse({
-        ...request,
-        workspaceStorageVersion: "1.0.0",
-      }).success,
-    ).toBe(false);
-    expect(
-      DesktopProjectAddRequestV2Schema.safeParse({
-        schemaVersion: 2,
-        projectPath: request.projectPath,
-        unityPath: request.unityPath,
-        preferredAgentId: "00000000-0000-4000-8000-000000000010",
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopProjectAddRequestV1Schema.safeParse({
-        ...request,
-        agent: { ...request.agent, env: { SECRET: "not-allowed" } },
-      }).success,
-    ).toBe(false);
-  });
-
-  it("accepts only fixed Component Manager IDs and releases", () => {
-    const payloads = [
-      {
-        role: "client",
-        source: "bundled",
-        fileName: "client.exe",
-        byteLength: 1,
-        sha256: "a".repeat(64),
-        archive: "none",
-      },
-      {
-        role: "host",
-        source: "bundled",
-        fileName: "host.exe",
-        byteLength: 1,
-        sha256: "b".repeat(64),
-        archive: "none",
-      },
-    ];
-    const manifest = {
-      schemaVersion: 1,
-      honeybeeVersion: "0.6.0",
-      workspaceStorage: [
-        {
-          componentId: "workspace-storage",
-          version: "1.0.0",
-          honeybeeVersion: "0.6.0",
-          platform: "win32",
-          architecture: "x64",
-          payloads,
-        },
-      ],
-      testplay: [],
-    };
-    expect(HoneyBeeCompatibilityManifestV1Schema.safeParse(manifest).success).toBe(true);
-    expect(
-      HoneyBeeCompatibilityManifestV1Schema.safeParse({
-        ...manifest,
-        marketplace: "https://untrusted.example",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("keeps Developer and dogfood session controls strict", () => {
-    const profileId = "00000000-0000-4000-8000-000000000001";
-    const sessionId = "00000000-0000-4000-8000-000000000002";
-    expect(
-      DesktopDeveloperSettingsV1Schema.safeParse({
-        schemaVersion: 1,
-        dogfoodMetricsEnabled: true,
-        rawAgentProtocolEnabled: false,
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopDeveloperSettingsV1Schema.safeParse({
-        schemaVersion: 1,
-        dogfoodMetricsEnabled: true,
-      }).success,
-    ).toBe(false);
-    expect(
-      DesktopDeveloperSettingsV1Schema.safeParse({
-        schemaVersion: 1,
-        dogfoodMetricsEnabled: true,
-        rawAgentProtocolEnabled: false,
-        automaticUpload: true,
-      }).success,
-    ).toBe(false);
-    expect(
-      DesktopDogfoodStartRequestV1Schema.safeParse({ schemaVersion: 1, profileId }).success,
-    ).toBe(true);
-    expect(
-      DesktopDogfoodFinalizeRequestV1Schema.safeParse({ schemaVersion: 1, sessionId }).success,
-    ).toBe(true);
-    expect(
-      DesktopDogfoodFinalizeRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        sessionId,
-        evidencePath: "C:\\outside",
-      }).success,
-    ).toBe(false);
-  });
-
-  it("limits Workspace publishing to explicit HoneyBee branches", () => {
-    const profileId = "00000000-0000-4000-8000-000000000001";
-    const workspaceId = "00000000-0000-4000-8000-000000000002";
-    expect(
-      DesktopWorkspaceCreateRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        profileId,
-        label: "Combat tutorial",
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopWorkspacePublishRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        profileId,
-        workspaceId,
-        branch: "honeybee/combat-tutorial",
-      }).success,
-    ).toBe(true);
-    expect(
-      DesktopWorkspacePublishRequestV1Schema.safeParse({
-        schemaVersion: 1,
-        profileId,
-        workspaceId,
-        branch: "main",
-      }).success,
-    ).toBe(false);
+      DesktopPtyCreateRequestV1Schema.parse({
+        projectId: "project",
+        workspaceId: "workspace",
+      }),
+    ).toMatchObject({ columns: 120, rows: 30 });
+    expect(() =>
+      DesktopPtyCreateRequestV1Schema.parse({
+        projectId: "project",
+        workspaceId: "workspace",
+        columns: 10_000,
+        rows: 30,
+      }),
+    ).toThrow();
   });
 });
