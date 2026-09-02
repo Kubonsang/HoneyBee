@@ -1,11 +1,9 @@
-export const WORKSPACE_REGISTRY_SCHEMA_VERSION = 1 as const;
+export const WORKSPACE_REGISTRY_SCHEMA_VERSION = 2 as const;
 
 export type WorkspaceState =
   "provisioning" | "ready" | "repair-required" | "removing" | "cleanup-pending";
 
-export type WorkspaceTool = "codex" | "claude" | "unity" | "shell";
-
-export interface ProjectCacheV1 {
+export interface ProjectCacheV2 {
   readonly kind: "library-only-v1";
   readonly parentId: string;
   readonly seedCommit: string;
@@ -13,8 +11,8 @@ export interface ProjectCacheV1 {
   readonly allocatedBytes?: number;
 }
 
-export interface ProjectRecordV1 {
-  readonly schemaVersion: 1;
+export interface ProjectRecordV2 {
+  readonly schemaVersion: 2;
   readonly projectId: string;
   readonly label: string;
   readonly unityProjectPath: string;
@@ -23,11 +21,11 @@ export interface ProjectRecordV1 {
   readonly workspaceRoot: string;
   readonly storageCommand: string;
   readonly createdAt: string;
-  readonly cache?: ProjectCacheV1;
+  readonly cache?: ProjectCacheV2;
 }
 
-export interface WorkspaceRecordV1 {
-  readonly schemaVersion: 1;
+export interface WorkspaceRecordV2 {
+  readonly schemaVersion: 2;
   readonly layout: "git-worktree-library-cow-v1";
   readonly workspaceId: string;
   readonly projectId: string;
@@ -46,11 +44,10 @@ export interface WorkspaceRecordV1 {
   readonly updatedAt: string;
 }
 
-export interface WorkspaceRegistryV1 {
-  readonly schemaVersion: 1;
-  readonly projects: readonly ProjectRecordV1[];
-  readonly workspaces: readonly WorkspaceRecordV1[];
-  readonly tools: Readonly<Partial<Record<WorkspaceTool, string>>>;
+export interface WorkspaceRegistryV2 {
+  readonly schemaVersion: 2;
+  readonly projects: readonly ProjectRecordV2[];
+  readonly workspaces: readonly WorkspaceRecordV2[];
 }
 
 export interface WorkspaceGitStatusV1 {
@@ -60,7 +57,7 @@ export interface WorkspaceGitStatusV1 {
   readonly changes: readonly string[];
 }
 
-export interface WorkspaceViewV1 extends WorkspaceRecordV1 {
+export interface WorkspaceViewV1 extends WorkspaceRecordV2 {
   readonly available: boolean;
   readonly git?: WorkspaceGitStatusV1;
 }
@@ -95,10 +92,6 @@ export interface WorkspaceStoragePort {
   retain(command: string, leaseId: string): Promise<void>;
   attachRetained(command: string, consumerId: string, workspaceId: string): Promise<StorageLease>;
   removeRetained(command: string, consumerId: string): Promise<void>;
-}
-
-export interface WorkspaceToolLauncher {
-  launch(executable: string, args: readonly string[], cwd: string): Promise<void>;
 }
 
 export class WorkspaceCoreError extends Error {

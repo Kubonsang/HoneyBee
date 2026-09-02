@@ -8,12 +8,6 @@ module.exports = {
       to: { circular: true },
     },
     {
-      name: "contracts-do-not-depend-on-apps-or-core",
-      severity: "error",
-      from: { path: "^packages/(control-plane|orchestration)-contracts/" },
-      to: { path: "^(apps/|packages/core/)" },
-    },
-    {
       name: "packages-do-not-import-apps",
       severity: "error",
       from: { path: "^packages/" },

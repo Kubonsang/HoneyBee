@@ -1,4 +1,4 @@
-import { execFile, spawn } from "node:child_process";
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, lstat, mkdir, readFile, rm } from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +8,6 @@ import {
   type StorageLease,
   type StorageParentBuild,
   type WorkspaceStoragePort,
-  type WorkspaceToolLauncher,
 } from "./workspace-types.js";
 
 const COMMAND_TIMEOUT_MS = 120_000;
@@ -307,37 +306,5 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       );
     }
     return run(controlCommand, ["control"], JSON.stringify(request));
-  }
-}
-
-const spawnDetached = (executable: string, args: readonly string[], cwd: string): Promise<void> =>
-  new Promise((resolve, reject) => {
-    const child = spawn(executable, [...args], {
-      cwd,
-      detached: true,
-      shell: false,
-      stdio: "ignore",
-      windowsHide: false,
-    });
-    child.once("error", reject);
-    child.once("spawn", () => {
-      child.unref();
-      resolve();
-    });
-  });
-
-export class WindowsTerminalLauncher implements WorkspaceToolLauncher {
-  public async launch(executable: string, args: readonly string[], cwd: string): Promise<void> {
-    const extension = path.extname(executable).toLowerCase();
-    const command: readonly [string, readonly string[]] =
-      extension === ".cmd" || extension === ".bat"
-        ? ["cmd.exe", ["/d", "/k", "call", executable, ...args]]
-        : [executable, args];
-    try {
-      await spawnDetached("wt.exe", ["-w", "new", "nt", "-d", cwd, command[0], ...command[1]], cwd);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      await spawnDetached(command[0], command[1], cwd);
-    }
   }
 }

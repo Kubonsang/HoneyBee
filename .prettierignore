@@ -5,3 +5,6 @@ node_modules
 .honeybee
 *.docx
 pnpm-lock.yaml
+tmp
+output
+apps/desktop/release*

@@ -1,77 +1,50 @@
-import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+
+import { expect, it } from "vitest";
 
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
 
-class FakePty {
-  readonly writes: string[] = [];
-  readonly sizes: Array<[number, number]> = [];
-  killed = false;
-  dataListener?: (data: string) => void;
-  exitListener?: (event: { exitCode: number; signal?: number }) => void;
+const delay = (milliseconds: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, milliseconds));
 
-  onData(listener: (data: string) => void) {
-    this.dataListener = listener;
-    return { dispose() {} };
-  }
-  onExit(listener: (event: { exitCode: number; signal?: number }) => void) {
-    this.exitListener = listener;
-    return { dispose() {} };
-  }
-  write(data: string) {
-    this.writes.push(data);
-  }
-  resize(columns: number, rows: number) {
-    this.sizes.push([columns, rows]);
-  }
-  kill() {
-    this.killed = true;
-  }
-  pause() {}
-  resume() {}
-  clear() {}
-  get pid() {
-    return 1;
-  }
-  get cols() {
-    return 80;
-  }
-  get rows() {
-    return 24;
-  }
-  get process() {
-    return "fake";
-  }
-  handleFlowControl = false;
-}
-
-describe("DesktopPtySessionManager", () => {
-  it("streams output by cursor and forwards input and resize", async () => {
-    const fake = new FakePty();
-    const manager = new DesktopPtySessionManager(async () => ({
-      spawn: () => fake as never,
-    }));
-    const session = await manager.create({
-      profileId: "11111111-1111-4111-8111-111111111111",
-      kind: "shell",
-      label: "PowerShell",
-      command: "powershell.exe",
-      args: [],
-      cwd: "C:\\project",
-      columns: 80,
-      rows: 24,
-    });
-
-    fake.dataListener?.("hello\r\n");
-    expect(manager.snapshot(session.sessionId, 0).chunks[0]?.data).toBe("hello\r\n");
-    expect(manager.snapshot(session.sessionId, 1).chunks).toHaveLength(0);
-    expect(manager.write(session.sessionId, "dir\r")).toBe(true);
-    expect(fake.writes).toEqual(["dir\r"]);
-    expect(manager.resize(session.sessionId, 120, 40)).toBe(true);
-    expect(fake.sizes).toEqual([[120, 40]]);
-    fake.exitListener?.({ exitCode: 0 });
-    expect(manager.snapshot(session.sessionId, 1).session).toMatchObject({
-      state: "exited",
-      exitCode: 0,
-    });
-  });
-});
+it.runIf(process.platform === "win32")(
+  "opens an interactive PowerShell in the selected Workspace",
+  async () => {
+    const cwd = await mkdtemp(path.join(tmpdir(), "honeybee-workbench-pty-"));
+    const manager = new DesktopPtySessionManager();
+    try {
+      const session = manager.create("workspace-test", cwd, 80, 24);
+      expect(session).toMatchObject({ workspaceId: "workspace-test", cwd, state: "running" });
+      expect(manager.write(session.sessionId, "Write-Output HONEYBEE_WORKBENCH_PTY_OK\r")).toBe(
+        true,
+      );
+      let output = "";
+      for (
+        let attempt = 0;
+        attempt < 100 && !output.includes("HONEYBEE_WORKBENCH_PTY_OK");
+        attempt += 1
+      ) {
+        await delay(25);
+        output = manager
+          .snapshot(session.sessionId, 0)
+          .chunks.map((chunk) => chunk.data)
+          .join("");
+      }
+      expect(output).toContain("HONEYBEE_WORKBENCH_PTY_OK");
+      expect(manager.write(session.sessionId, "exit\r")).toBe(true);
+      let state = manager.snapshot(session.sessionId, 0).session.state;
+      for (let attempt = 0; attempt < 100 && state !== "exited"; attempt += 1) {
+        await delay(25);
+        state = manager.snapshot(session.sessionId, 0).session.state;
+      }
+      expect(state).toBe("exited");
+      expect(manager.close(session.sessionId)).toBe(true);
+    } finally {
+      manager.closeAll();
+      await rm(cwd, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+    }
+  },
+  10_000,
+);

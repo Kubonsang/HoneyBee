@@ -2,9 +2,9 @@
 
 ## Status
 
-Accepted for HoneyBee Workspace Core v0.7. Supersedes ADR-030. The user-directed tool boundary from
-ADR-029 remains in force, but Git branches use ordinary shared-repository worktrees rather than
-independent clones and publish steps.
+Accepted for HoneyBee Workspace Core v0.7, with reboot repair still release-blocked. Supersedes
+ADR-030. The user-directed tool boundary from ADR-029 remains in force, but Git branches use ordinary
+shared-repository worktrees rather than independent clones and publish steps.
 
 ## Context
 
@@ -39,9 +39,10 @@ workspace records carry explicit `library-only-v1` and `git-worktree-library-cow
 Pre-adoption Full-project caches must be prepared again, and pre-adoption Full-project workspaces are
 rejected by repair and removal rather than being interpreted under the new layout.
 
-HoneyBee may launch Codex, Claude Code, Unity, or a shell in the worktree. It does not supervise those
-tools, coordinate agents, commit, merge, rebase, push, or create pull requests. Branches remain in
-the common repository after Workspace removal.
+HoneyBee returns the worktree path. The user enters that directory and launches Codex, Claude Code,
+Unity, a shell, or any other tool directly. HoneyBee does not configure or launch those tools,
+supervise them, coordinate agents, commit, merge, rebase, push, or create pull requests. Branches
+remain in the common repository after Workspace removal.
 
 ## Consequences
 
@@ -56,3 +57,37 @@ the common repository after Workspace removal.
   repair and must be fixed in `unity-workspace-storage` independently of this layout decision.
 - ADR-030 Full-project creation is retired; its benchmark implementation remains evidence, not a
   supported product mode.
+
+## Reboot repair release gate
+
+The pinned storage revision `e69fb8a0c55c91dee25274b3f40110b57fb538c4` has this call order in
+`workspace.Broker.attachRetained`:
+
+1. `validateWorkspaceMount` rejects any existing `Library` mount path.
+2. `native.AttachChild` is therefore not reached.
+3. `native.AttachChild` is the code that calls `storage.PrepareDetachedStaleMount`, which verifies the
+   expected Child identity, expected volume GUID, and detached state before removing the stale mount.
+
+After a real reboot, the expected stale directory-mount reparse point can still exist. The generic
+precondition rejects it before the identity-aware cleanup can decide whether it is safe. HoneyBee
+must not work around this by blindly unlinking or recursively deleting `Library`.
+
+Release requires an upstream change that keeps Workspace-root containment checks but defers an
+existing retained mount to `PrepareDetachedStaleMount`. Tests in `unity-workspace-storage` must prove
+that the exact detached Child and expected volume mount are accepted, while an attached disk, a
+different volume GUID, an ordinary directory, and an unrelated reparse point are rejected without
+mutation. HoneyBee must then update all three pins together:
+
+- `tools/workspace-storage-host/go.mod` and `go.sum`;
+- `apps/desktop/scripts/prepare-tools.mjs` commit/version;
+- `apps/desktop/resources/component-compatibility-v1.json` payload sizes and SHA-256 values.
+
+The final elevated Windows gate is:
+
+```text
+create → modify/commit → shutdown/reboot → repair → modify/commit → remove
+```
+
+It passes only if the repaired `Library` resolves to the expected retained volume, Git authored data
+survives unchanged, the Workspace and retained Child have zero residuals after removal, and the Git
+branch still exists.
