@@ -1,4 +1,4 @@
-# HoneyBee 0.1.0 Beta 2
+# HoneyBee 0.1.0 Beta 3
 
 HoneyBee is a Windows Unity Workspace provider. It creates independent Git worktrees and gives each
 one a differencing-VHDX-backed Unity `Library`.
@@ -25,7 +25,7 @@ codex
 
 ## Status
 
-`0.1.0-beta.2` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
+`0.1.0-beta.3` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
 after reboot is not released: the pinned `unity-workspace-storage` component rejects the stale mount
 path before its native identity-checked stale-mount cleanup can run. Remove beta Workspaces before a
 planned reboot and do not use this build where reboot recovery is required. The complete lifecycle
@@ -84,15 +84,20 @@ is never replaced by repair or remove.
 
 Desktop is a small view over the same Workspace Core. It contains:
 
-- registered projects and their cache state;
+- Unity Hub discovery, manual project selection, and one-time Git clone onboarding;
+- project preflight, registration, cache preparation, and cache state;
 - Workspaces, branch/HEAD state, and changed files;
 - a bounded Git diff viewer;
 - an interactive PowerShell terminal rooted in the selected Workspace;
-- create/attach, repair, and safe remove actions.
+- create/attach, repair, and safe remove actions;
+- explicit one-click CMD, PowerShell, VS Code, and exact-version Unity launches.
 
 It has no Agent Manager, Run/DAG, approval, verified-patch, publish, or merge surface. The sandboxed
 renderer receives only strict versioned DTOs through the preload bridge; filesystem, Git, storage,
-and PTY authority stay in the main process.
+process launch, and PTY authority stay in the main process. Git clone is onboarding only: HoneyBee
+uses the system Git credential flow, does not store credentials, and preserves partial output on
+failure. External tools are launched only when the user clicks an action; HoneyBee does not monitor,
+restart, or orchestrate them. See the [Desktop Beta guide](docs/operations/windows-desktop-beta.md).
 
 ## Safety and persistence
 
@@ -136,7 +141,9 @@ corepack pnpm --filter honeybee-desktop package:win
 ## Decisions and evidence
 
 [ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) defines the storage layout and
-[ADR-032](docs/decisions/ADR-032-workspace-only-product-boundary.md) defines the product boundary.
+[ADR-032](docs/decisions/ADR-032-workspace-only-product-boundary.md) defines the product boundary,
+and [ADR-033](docs/decisions/ADR-033-desktop-onboarding-and-tool-launch.md) constrains Desktop
+onboarding and user-triggered tool launch.
 The [decision index](docs/decisions/README.md) distinguishes active decisions from retained
 historical control-plane decisions. Existing benchmark and validation evidence remains preserved
 under `docs/benchmarks` and `docs/validation`; it is evidence, not a supported product surface.

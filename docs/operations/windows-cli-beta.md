@@ -1,6 +1,6 @@
 # HoneyBee Windows CLI Beta
 
-HoneyBee 0.1.0 Beta 2 is an unsigned Windows 11 x64 evaluation build. It requires Node.js 24 or
+HoneyBee 0.1.0 Beta 3 is an unsigned Windows 11 x64 evaluation build. It requires Node.js 24 or
 newer, Git for Windows, and a one-time elevated installation of the bundled
 UnityWorkspaceStorage service. HoneyBee does not install or repair the service automatically.
 

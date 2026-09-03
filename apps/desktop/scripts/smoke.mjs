@@ -1,5 +1,5 @@
 import { execFile, spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -24,6 +24,7 @@ if (packagedExecutable !== undefined) {
   if (relative.startsWith("..") || path.isAbsolute(relative)) {
     throw new Error("Packaged smoke executable escaped the Desktop release directory.");
   }
+  await access(path.join(path.dirname(packagedExecutable), "resources", "honeybee.png"));
 }
 const userData = await mkdtemp(path.join(tmpdir(), "honeybee-desktop-smoke-"));
 const resultPath = path.join(userData, "smoke-result.json");
@@ -42,7 +43,7 @@ const child = spawn(
     cwd: appRoot,
     env: {
       ...process.env,
-      HONEYBEE_DESKTOP_SMOKE: "desktop-smoke-v1",
+      HONEYBEE_DESKTOP_SMOKE: "desktop-smoke-v2",
       HONEYBEE_DESKTOP_SMOKE_RESULT: resultPath,
     },
     windowsHide: true,

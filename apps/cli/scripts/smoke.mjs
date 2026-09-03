@@ -57,7 +57,7 @@ try {
       windowsHide: true,
     },
   );
-  if (version.stdout.trim() !== "0.1.0-beta.2") {
+  if (version.stdout.trim() !== "0.1.0-beta.3") {
     throw new Error(`Unexpected packaged CLI version: ${version.stdout.trim()}`);
   }
   const listed = await execFileAsync(
