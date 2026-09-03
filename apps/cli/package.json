@@ -1,6 +1,6 @@
 {
   "name": "honeybee-cli",
-  "version": "0.7.0",
+  "version": "0.1.0-beta.1",
   "private": true,
   "type": "module",
   "files": [
@@ -11,6 +11,8 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json --pretty false",
+    "package:win": "corepack pnpm --filter honeybee-desktop prepare:tools && corepack pnpm --filter honeybee-cli... build && node scripts/package.mjs",
+    "package:smoke": "corepack pnpm package:win && node scripts/smoke.mjs",
     "start": "node dist/cli.js",
     "typecheck": "tsc -p tsconfig.build.json --pretty false && tsc -p tsconfig.json --pretty false"
   },

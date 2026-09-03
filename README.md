@@ -1,4 +1,4 @@
-# HoneyBee 0.7
+# HoneyBee 0.1.0 Beta
 
 HoneyBee is a Windows Unity Workspace provider. It creates independent Git worktrees and gives each
 one a differencing-VHDX-backed Unity `Library`.
@@ -25,12 +25,16 @@ codex
 
 ## Status
 
-The workspace-only product boundary and breaking cleanup are implemented in this tree. Automatic
-repair after reboot is still a release blocker in the pinned `unity-workspace-storage` component:
-retained attach rejects the stale mount path before its native identity-checked stale-mount cleanup
-can run. Do not describe the complete reboot lifecycle as released until the upstream fix is pinned
-and the real Windows reboot gate in [ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md)
-passes.
+`0.1.0-beta.1` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
+after reboot is not released: the pinned `unity-workspace-storage` component rejects the stale mount
+path before its native identity-checked stale-mount cleanup can run. Remove beta Workspaces before a
+planned reboot and do not use this build where reboot recovery is required. The complete lifecycle
+remains blocked until the upstream fix is pinned and the real Windows reboot gate in
+[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passes.
+
+The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
+The CLI archive requires Node.js 24; extract it and run `honeybee.cmd`. Windows may warn before
+opening the unsigned Desktop executable.
 
 ## CLI
 
