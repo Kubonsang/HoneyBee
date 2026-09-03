@@ -52,6 +52,27 @@ func TestMachineReceiptRequiresNeutralServiceIdentity(t *testing.T) {
 	_ = os.Remove(receiptPath)
 }
 
+func TestDiagnoseReturnsAReadOnlyStructuredSnapshot(t *testing.T) {
+	result, err := execute([]string{"diagnose"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	value, ok := result.(map[string]any)
+	if !ok || value["schemaVersion"] != 1 || value["ok"] != true {
+		t.Fatalf("unexpected diagnose envelope: %#v", result)
+	}
+	if _, ok := value["diagnostic"].(storageDiagnostic); !ok {
+		t.Fatalf("diagnose did not return a storageDiagnostic: %#v", value["diagnostic"])
+	}
+}
+
+func TestCurrentUserSIDIsAvailableWithoutElevation(t *testing.T) {
+	sid, err := currentUserSID()
+	if err != nil || sid == "" {
+		t.Fatalf("current user SID unavailable: %q %v", sid, err)
+	}
+}
+
 func TestReceiptVersionSwitchPublishesAndRecoversAtomically(t *testing.T) {
 	root := t.TempDir()
 	target := filepath.Join(root, "install-receipt.json")

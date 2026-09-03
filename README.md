@@ -1,4 +1,4 @@
-# HoneyBee 0.1.0 Beta
+# HoneyBee 0.1.0 Beta 2
 
 HoneyBee is a Windows Unity Workspace provider. It creates independent Git worktrees and gives each
 one a differencing-VHDX-backed Unity `Library`.
@@ -25,7 +25,7 @@ codex
 
 ## Status
 
-`0.1.0-beta.1` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
+`0.1.0-beta.2` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
 after reboot is not released: the pinned `unity-workspace-storage` component rejects the stale mount
 path before its native identity-checked stale-mount cleanup can run. Remove beta Workspaces before a
 planned reboot and do not use this build where reboot recovery is required. The complete lifecycle
@@ -33,7 +33,8 @@ remains blocked until the upstream fix is pinned and the real Windows reboot gat
 [ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passes.
 
 The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
-The CLI archive requires Node.js 24; extract it and run `honeybee.cmd`. Windows may warn before
+The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and
+follow the [Windows CLI Beta guide](docs/operations/windows-cli-beta.md). Windows may warn before
 opening the unsigned Desktop executable.
 
 ## CLI
@@ -49,8 +50,11 @@ honeybee workspace create <name> --branch <new-branch> [--base <ref>] [--project
 honeybee workspace attach <name> --branch <existing-branch> [--project <id>]
 honeybee workspace list [--project <id>]
 honeybee workspace status <name-or-id> [--project <id>]
+honeybee workspace path <name-or-id> [--project <id>]
 honeybee workspace repair <name-or-id> [--project <id>]
 honeybee workspace remove <name-or-id> [--project <id>]
+
+honeybee doctor
 ```
 
 `project init` finds `unity-workspace-storage.exe` beside the CLI, in the prepared Desktop tools,
@@ -66,6 +70,15 @@ and broker internals. Errors are JSON on stderr with `schemaVersion`, `ok: false
 `workspace launch` and tool configuration no longer exist. `workspace remove` refuses a dirty Git
 worktree, removes only a verified `Library` junction and the worktree, and preserves the branch.
 Interrupted removals remain `cleanup-pending` and can be retried.
+
+`doctor` is a read-only Windows readiness report. It checks the runtime, Git, packaged storage
+tools, service and receipt identity, registered projects, cache prerequisites, registry, and
+Workspace repair/cleanup state. Warnings do not fail the command; blocking checks return exit code
+`1`. It never installs, starts, repairs, or removes anything.
+
+`cache prepare` is also the refresh operation: it publishes a new parent for future Workspaces.
+Existing Workspaces remain attached to their original parent. A different-target Library junction
+is never replaced by repair or remove.
 
 ## Desktop Workspace Workbench
 

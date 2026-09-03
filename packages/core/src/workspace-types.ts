@@ -44,10 +44,19 @@ export interface WorkspaceRecordV2 {
   readonly updatedAt: string;
 }
 
+export interface WorkspaceRemovalReceiptV1 {
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly branch: string;
+  readonly removedAt: string;
+}
+
 export interface WorkspaceRegistryV2 {
   readonly schemaVersion: 2;
   readonly projects: readonly ProjectRecordV2[];
   readonly workspaces: readonly WorkspaceRecordV2[];
+  readonly removalReceipts: readonly WorkspaceRemovalReceiptV1[];
 }
 
 export interface WorkspaceGitStatusV1 {
@@ -60,6 +69,46 @@ export interface WorkspaceGitStatusV1 {
 export interface WorkspaceViewV1 extends WorkspaceRecordV2 {
   readonly available: boolean;
   readonly git?: WorkspaceGitStatusV1;
+  /** Internal presentation aid. Existing CLI/Desktop JSON DTOs deliberately omit it. */
+  readonly libraryConnected: boolean;
+}
+
+export interface WorkspaceRemoveResultV1 {
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly name: string;
+  readonly branch: string;
+  readonly alreadyRemoved: boolean;
+}
+
+export type DoctorCheckStatusV1 = "pass" | "warning" | "fail";
+
+export interface DoctorCheckV1 {
+  readonly code: string;
+  readonly status: DoctorCheckStatusV1;
+  readonly message: string;
+  readonly subject?: string;
+  readonly remediation?: readonly string[];
+}
+
+export interface DoctorReportV1 {
+  readonly schemaVersion: 1;
+  readonly ready: boolean;
+  readonly summary: Readonly<{ pass: number; warning: number; fail: number }>;
+  readonly checks: readonly DoctorCheckV1[];
+}
+
+export interface StorageDiagnosticV1 {
+  readonly serviceExists: boolean;
+  readonly serviceState?: string;
+  readonly receiptExists: boolean;
+  readonly receiptValid: boolean;
+  readonly componentVersion?: string;
+  readonly workspaceRoot?: string;
+  readonly workspaceRootAccessible: boolean;
+  readonly executableExists: boolean;
+  readonly executableDigestMatches: boolean;
+  readonly userMatches: boolean;
 }
 
 export interface StorageParentBuild {
@@ -92,14 +141,27 @@ export interface WorkspaceStoragePort {
   retain(command: string, leaseId: string): Promise<void>;
   attachRetained(command: string, consumerId: string, workspaceId: string): Promise<StorageLease>;
   removeRetained(command: string, consumerId: string): Promise<void>;
+  diagnose?(command: string): Promise<StorageDiagnosticV1>;
+  status?(
+    command: string,
+  ): Promise<Readonly<{ parentCount: number; manualRecoveryRequired: boolean }>>;
+}
+
+export interface WorkspaceCoreErrorOptions extends ErrorOptions {
+  readonly remediation?: readonly string[];
+  readonly upstreamCode?: string;
 }
 
 export class WorkspaceCoreError extends Error {
   public readonly code: string;
+  public readonly remediation: readonly string[];
+  public readonly upstreamCode: string | undefined;
 
-  public constructor(code: string, message: string, options?: ErrorOptions) {
+  public constructor(code: string, message: string, options?: WorkspaceCoreErrorOptions) {
     super(message, options);
     this.name = "WorkspaceCoreError";
     this.code = code;
+    this.remediation = options?.remediation ?? [];
+    this.upstreamCode = options?.upstreamCode;
   }
 }

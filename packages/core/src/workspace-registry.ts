@@ -10,6 +10,7 @@ import {
   type ProjectCacheV2,
   type ProjectRecordV2,
   type WorkspaceRecordV2,
+  type WorkspaceRemovalReceiptV1,
   type WorkspaceRegistryV2,
   type WorkspaceState,
 } from "./workspace-types.js";
@@ -43,6 +44,7 @@ const emptyRegistry = (): WorkspaceRegistryV2 => ({
   schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
   projects: [],
   workspaces: [],
+  removalReceipts: [],
 });
 
 const isRecord = (value: unknown): value is JsonObject =>
@@ -153,6 +155,19 @@ const parseWorkspace = (value: unknown): WorkspaceRecordV2 => {
   };
 };
 
+const parseRemovalReceipt = (value: unknown): WorkspaceRemovalReceiptV1 => {
+  if (!isRecord(value)) {
+    throw new WorkspaceCoreError("registry.invalid", "A Workspace removal receipt is invalid.");
+  }
+  return {
+    workspaceId: string(value.workspaceId, "removalReceipt.workspaceId"),
+    projectId: string(value.projectId, "removalReceipt.projectId"),
+    name: string(value.name, "removalReceipt.name"),
+    branch: string(value.branch, "removalReceipt.branch"),
+    removedAt: timestamp(value.removedAt, "removalReceipt.removedAt"),
+  };
+};
+
 const parseRegistry = (value: unknown): WorkspaceRegistryV2 => {
   if (
     !isRecord(value) ||
@@ -167,6 +182,17 @@ const parseRegistry = (value: unknown): WorkspaceRegistryV2 => {
   }
   const projects = value.projects.map(parseProject);
   const workspaces = value.workspaces.map(parseWorkspace);
+  const removalReceipts =
+    value.removalReceipts === undefined
+      ? []
+      : Array.isArray(value.removalReceipts)
+        ? value.removalReceipts.map(parseRemovalReceipt)
+        : (() => {
+            throw new WorkspaceCoreError(
+              "registry.invalid",
+              "Workspace removal receipts are invalid.",
+            );
+          })();
   if (new Set(projects.map((item) => item.projectId)).size !== projects.length) {
     throw new WorkspaceCoreError("registry.invalid", "Project IDs must be unique.");
   }
@@ -177,7 +203,12 @@ const parseRegistry = (value: unknown): WorkspaceRegistryV2 => {
   if (workspaces.some((item) => !projectIds.has(item.projectId))) {
     throw new WorkspaceCoreError("registry.invalid", "A Workspace references a missing project.");
   }
-  return { schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION, projects, workspaces };
+  return {
+    schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
+    projects,
+    workspaces,
+    removalReceipts,
+  };
 };
 
 const errorCode = (error: unknown): string | undefined =>
@@ -483,5 +514,37 @@ export class WorkspaceRegistryStore {
       ...current,
       workspaces: current.workspaces.filter((item) => item.workspaceId !== workspaceId),
     }));
+  }
+
+  public async completeWorkspaceRemoval(
+    workspace: WorkspaceRecordV2,
+  ): Promise<WorkspaceRemovalReceiptV1> {
+    const receipt: WorkspaceRemovalReceiptV1 = {
+      workspaceId: workspace.workspaceId,
+      projectId: workspace.projectId,
+      name: workspace.name,
+      branch: workspace.branch,
+      removedAt: new Date().toISOString(),
+    };
+    await this.update((current) => {
+      const otherProjects = current.removalReceipts.filter(
+        (item) => item.projectId !== workspace.projectId,
+      );
+      const projectReceipts = [
+        ...current.removalReceipts.filter(
+          (item) =>
+            item.projectId === workspace.projectId && item.workspaceId !== workspace.workspaceId,
+        ),
+        receipt,
+      ]
+        .sort((left, right) => right.removedAt.localeCompare(left.removedAt))
+        .slice(0, 256);
+      return {
+        ...current,
+        workspaces: current.workspaces.filter((item) => item.workspaceId !== workspace.workspaceId),
+        removalReceipts: [...otherProjects, ...projectReceipts],
+      };
+    });
+    return receipt;
   }
 }

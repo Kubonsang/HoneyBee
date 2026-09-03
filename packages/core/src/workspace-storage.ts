@@ -5,6 +5,7 @@ import path from "node:path";
 
 import {
   WorkspaceCoreError,
+  type StorageDiagnosticV1,
   type StorageLease,
   type StorageParentBuild,
   type WorkspaceStoragePort,
@@ -47,9 +48,13 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
       typeof response.error === "object" && response.error !== null
         ? object(response.error, "error")
         : {};
+    const upstreamCode = typeof body.code === "string" ? body.code : undefined;
     throw new WorkspaceCoreError(
-      typeof body.code === "string" ? body.code : "storage.operation-failed",
+      upstreamCode === "retained-not-found"
+        ? "storage.retained-not-found"
+        : "storage.operation-failed",
       typeof body.message === "string" ? body.message : `${label} failed.`,
+      upstreamCode === undefined ? undefined : { upstreamCode },
     );
   }
   return response;
@@ -80,7 +85,9 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
           }
           reject(
             new WorkspaceCoreError(
-              "storage.command-failed",
+              (error as NodeJS.ErrnoException).code === "ENOENT"
+                ? "storage.command-not-found"
+                : "storage.operation-failed",
               stderr.trim().length > 0 ? stderr.trim() : error.message,
               { cause: error },
             ),
@@ -230,6 +237,50 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     });
   }
 
+  public async diagnose(command: string): Promise<StorageDiagnosticV1> {
+    const response = await run(await this.#controlCommand(command), ["diagnose"]);
+    const diagnostic = object(response.diagnostic, "diagnostic");
+    return {
+      serviceExists: diagnostic.serviceExists === true,
+      ...(typeof diagnostic.serviceState === "string"
+        ? { serviceState: diagnostic.serviceState }
+        : {}),
+      receiptExists: diagnostic.receiptExists === true,
+      receiptValid: diagnostic.receiptValid === true,
+      ...(typeof diagnostic.componentVersion === "string"
+        ? { componentVersion: diagnostic.componentVersion }
+        : {}),
+      ...(typeof diagnostic.workspaceRoot === "string"
+        ? { workspaceRoot: diagnostic.workspaceRoot }
+        : {}),
+      workspaceRootAccessible: diagnostic.workspaceRootAccessible === true,
+      executableExists: diagnostic.executableExists === true,
+      executableDigestMatches: diagnostic.executableDigestMatches === true,
+      userMatches: diagnostic.userMatches === true,
+    };
+  }
+
+  public async status(
+    command: string,
+  ): Promise<Readonly<{ parentCount: number; manualRecoveryRequired: boolean }>> {
+    const response = await run(command, [
+      "workspace",
+      "status",
+      "--schema",
+      "2",
+      "--request-id",
+      `hb-status-${randomUUID()}`,
+    ]);
+    const status = object(response.status, "status");
+    return {
+      parentCount:
+        typeof status.parentCount === "number" && Number.isSafeInteger(status.parentCount)
+          ? status.parentCount
+          : 0,
+      manualRecoveryRequired: status.manualRecoveryRequired === true,
+    };
+  }
+
   #lease(response: JsonObject): StorageLease {
     const lease = object(response.lease, "lease");
     const metrics =
@@ -291,6 +342,11 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   async #control(command: string, request: JsonObject): Promise<JsonObject> {
+    const controlCommand = await this.#controlCommand(command);
+    return run(controlCommand, ["control"], JSON.stringify(request));
+  }
+
+  async #controlCommand(command: string): Promise<string> {
     const explicit = process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL;
     const controlCommand =
       explicit === undefined
@@ -305,6 +361,6 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
         { cause: error },
       );
     }
-    return run(controlCommand, ["control"], JSON.stringify(request));
+    return controlCommand;
   }
 }

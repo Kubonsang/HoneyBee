@@ -1,6 +1,6 @@
 {
   "name": "honey-bee",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "private": true,
   "type": "module",
   "description": "Windows Unity Workspace provider using Git worktrees and Library-only CoW.",

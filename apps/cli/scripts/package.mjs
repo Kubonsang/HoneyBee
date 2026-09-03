@@ -23,6 +23,7 @@ await Promise.all([
   access(path.join(coreRoot, "dist", "index.js")),
   access(path.join(bundledTools, "unity-workspace-storage.exe")),
   access(path.join(bundledTools, "honeybee-workspace-storage-host.exe")),
+  access(path.join(bundledTools, "manifest.json")),
 ]);
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(bundledCore, { recursive: true });
@@ -39,18 +40,37 @@ await Promise.all([
     path.join(bundledTools, "honeybee-workspace-storage-host.exe"),
     path.join(bundleRoot, "dist", "honeybee-workspace-storage-host.exe"),
   ),
+  cp(path.join(bundledTools, "manifest.json"), path.join(bundleRoot, "dist", "manifest.json")),
   cp(path.join(repositoryRoot, "LICENSE"), path.join(bundleRoot, "LICENSE")),
+  cp(
+    path.join(repositoryRoot, "docs", "operations", "windows-cli-beta.md"),
+    path.join(bundleRoot, "README.md"),
+  ),
 ]);
 await writeFile(
   path.join(bundleRoot, "honeybee.cmd"),
-  '@echo off\r\nnode "%~dp0dist\\cli.js" %*\r\n',
+  [
+    "@echo off",
+    "where node >nul 2>nul",
+    "if errorlevel 1 (",
+    "  echo HoneyBee requires Node.js 24 or newer. 1>&2",
+    "  exit /b 1",
+    ")",
+    "node -e \"process.exit(Number(process.versions.node.split('.')[0]) >= 24 ? 0 : 1)\"",
+    "if errorlevel 1 (",
+    "  echo HoneyBee requires Node.js 24 or newer. 1>&2",
+    "  exit /b 1",
+    ")",
+    'node "%~dp0dist\\cli.js" %*',
+    "",
+  ].join("\r\n"),
   "utf8",
 );
 
 const cliPackage = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
 const result = await execFileAsync(
-  process.execPath,
-  [path.join(bundleRoot, "dist", "cli.js"), "--version"],
+  "cmd.exe",
+  ["/d", "/c", path.join(bundleRoot, "honeybee.cmd"), "--version"],
   {
     cwd: bundleRoot,
     timeout: 30_000,

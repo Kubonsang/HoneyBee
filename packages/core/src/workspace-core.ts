@@ -18,12 +18,16 @@ import path from "node:path";
 
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
 import { WindowsWorkspaceStorage } from "./workspace-storage.js";
+import { runWorkspaceDoctor, type WorkspaceDoctorOptions } from "./workspace-doctor.js";
 import {
   WORKSPACE_REGISTRY_SCHEMA_VERSION,
   WorkspaceCoreError,
   type ProjectRecordV2,
   type StorageLease,
+  type StorageParentBuild,
   type WorkspaceRecordV2,
+  type WorkspaceRemoveResultV1,
+  type WorkspaceRemovalReceiptV1,
   type WorkspaceStoragePort,
   type WorkspaceViewV1,
 } from "./workspace-types.js";
@@ -90,6 +94,14 @@ const requireAbsolute = (value: string, label: string): string => {
 
 const now = (): string => new Date().toISOString();
 
+const errorCode = (error: unknown): string | undefined =>
+  typeof error === "object" && error !== null && "code" in error && typeof error.code === "string"
+    ? error.code
+    : undefined;
+
+const libraryBusyError = (error: unknown): boolean =>
+  ["EACCES", "EBUSY", "EPERM"].includes(errorCode(error) ?? "");
+
 export interface HoneyBeeWorkspaceCoreOptions {
   readonly dataRoot?: string;
   readonly storage?: WorkspaceStoragePort;
@@ -125,16 +137,15 @@ export class HoneyBeeWorkspaceCore {
   }
 
   public async initProject(input: ProjectInitInput): Promise<ProjectRecordV2> {
-    const unityProjectPath = await realpath(
-      requireAbsolute(input.unityProjectPath, "Unity project path"),
-    );
-    const requestedWorkspaceRoot = requireAbsolute(input.workspaceRoot, "Workspace root");
-    await mkdir(requestedWorkspaceRoot, { recursive: true });
-    const workspaceRoot = await realpath(requestedWorkspaceRoot);
-    const storageCommandPath = requireAbsolute(input.storageCommand, "workspace-storage command");
+    const requestedProjectPath = requireAbsolute(input.unityProjectPath, "Unity project path");
+    const unityProjectPath = await realpath(requestedProjectPath).catch((error: unknown) => {
+      throw new WorkspaceCoreError(
+        "project.not-found",
+        `Unity project was not found: ${requestedProjectPath}`,
+        { cause: error },
+      );
+    });
     await this.#assertUnityProject(unityProjectPath);
-    await access(storageCommandPath);
-    const storageCommand = await realpath(storageCommandPath);
     const repositoryRoot = await realpath(
       path.resolve(await this.#git(unityProjectPath, ["rev-parse", "--show-toplevel"])),
     );
@@ -144,6 +155,33 @@ export class HoneyBeeWorkspaceCore {
         "The Unity project must be inside its Git repository.",
       );
     }
+    const requestedWorkspaceRoot = requireAbsolute(input.workspaceRoot, "Workspace root");
+    if (
+      contains(repositoryRoot, requestedWorkspaceRoot) ||
+      contains(requestedWorkspaceRoot, repositoryRoot)
+    ) {
+      throw new WorkspaceCoreError(
+        "workspace-root.overlaps-repository",
+        "The Workspace root must be outside the source repository.",
+      );
+    }
+    await mkdir(requestedWorkspaceRoot, { recursive: true }).catch((error: unknown) => {
+      throw new WorkspaceCoreError(
+        "workspace-root.inaccessible",
+        `Workspace root could not be created: ${requestedWorkspaceRoot}`,
+        { cause: error },
+      );
+    });
+    const workspaceRoot = await realpath(requestedWorkspaceRoot);
+    const storageCommandPath = requireAbsolute(input.storageCommand, "workspace-storage command");
+    await access(storageCommandPath).catch((error: unknown) => {
+      throw new WorkspaceCoreError(
+        "storage.command-not-found",
+        `workspace-storage executable was not found: ${storageCommandPath}`,
+        { cause: error },
+      );
+    });
+    const storageCommand = await realpath(storageCommandPath);
     if (contains(repositoryRoot, workspaceRoot) || contains(workspaceRoot, repositoryRoot)) {
       throw new WorkspaceCoreError(
         "workspace-root.overlaps-repository",
@@ -174,9 +212,26 @@ export class HoneyBeeWorkspaceCore {
     return (await this.#registry.read()).projects;
   }
 
+  public async doctor(options: WorkspaceDoctorOptions = {}) {
+    return runWorkspaceDoctor(this.#registry, this.#storage, options, (workspace) =>
+      this.#view(workspace),
+    );
+  }
+
   public async prepareCache(projectReference?: string): Promise<ProjectRecordV2> {
     const project = await this.#project(projectReference);
     const library = path.join(project.unityProjectPath, "Library");
+    if (await this.#exists(path.join(project.unityProjectPath, "Temp", "UnityLockfile"))) {
+      throw new WorkspaceCoreError(
+        "cache.library-in-use",
+        "The source Unity project appears to be open.",
+        {
+          remediation: [
+            "Close every Unity Editor using the source project, then run cache prepare again.",
+          ],
+        },
+      );
+    }
     const libraryInfo = await stat(library).catch(() => undefined);
     if (libraryInfo?.isDirectory() !== true) {
       throw new WorkspaceCoreError(
@@ -220,30 +275,71 @@ export class HoneyBeeWorkspaceCore {
       )
       .digest("hex");
     const build = await this.#storage.beginParent(project.storageCommand, parentId);
-    let committed = build;
-    if (build.transactionId !== undefined && build.stagingPath !== undefined) {
-      try {
-        for (const entry of await readdir(library)) {
-          await cp(path.join(library, entry), path.join(build.stagingPath, entry), {
-            recursive: true,
-            force: false,
-            errorOnExist: true,
-            preserveTimestamps: true,
-          });
-        }
-        committed = await this.#storage.commitParent(project.storageCommand, build.transactionId);
-      } catch (error) {
+    if (build.transactionId === undefined || build.stagingPath === undefined) {
+      if (build.transactionId !== undefined) {
         await this.#storage
           .abortParent(project.storageCommand, build.transactionId)
-          .catch(() => undefined);
-        throw error;
+          .catch((abortError: unknown) => {
+            throw new WorkspaceCoreError(
+              "storage.operation-failed",
+              "Workspace storage returned an incomplete parent build and could not confirm cleanup.",
+              { cause: abortError },
+            );
+          });
       }
+      throw new WorkspaceCoreError(
+        "storage.operation-failed",
+        "Workspace storage returned an incomplete parent build.",
+      );
+    }
+    let committed: StorageParentBuild;
+    try {
+      for (const entry of await readdir(library)) {
+        await cp(path.join(library, entry), path.join(build.stagingPath, entry), {
+          recursive: true,
+          force: false,
+          errorOnExist: true,
+          preserveTimestamps: true,
+        });
+      }
+      committed = await this.#storage.commitParent(project.storageCommand, build.transactionId);
+    } catch (error) {
+      const abortError = await this.#storage
+        .abortParent(project.storageCommand, build.transactionId)
+        .then(() => undefined)
+        .catch((candidate: unknown) => candidate);
+      if (abortError !== undefined) {
+        throw new WorkspaceCoreError(
+          "storage.operation-failed",
+          "Cache preparation failed and workspace storage could not confirm parent cleanup.",
+          { cause: new AggregateError([error, abortError]) },
+        );
+      }
+      if (libraryBusyError(error)) {
+        throw new WorkspaceCoreError(
+          "cache.library-in-use",
+          "The source Library could not be copied because Unity or another process is using it.",
+          {
+            cause: error,
+            remediation: [
+              "Close Unity and any process using the source Library, then run cache prepare again.",
+            ],
+          },
+        );
+      }
+      throw error;
+    }
+    if (committed.parentId !== parentId) {
+      throw new WorkspaceCoreError(
+        "storage.operation-failed",
+        "Workspace storage committed an unexpected Library parent identity.",
+      );
     }
     const prepared: ProjectRecordV2 = {
       ...project,
       cache: {
         kind: "library-only-v1",
-        parentId: committed.parentId ?? parentId,
+        parentId: committed.parentId,
         seedCommit,
         preparedAt: now(),
         ...(committed.allocatedBytes === undefined
@@ -453,6 +549,13 @@ export class HoneyBeeWorkspaceCore {
   ): Promise<WorkspaceViewV1> {
     let record = await this.#workspace(reference, projectReference);
     const project = await this.#project(record.projectId);
+    if (record.state === "removing" || record.state === "cleanup-pending") {
+      throw new WorkspaceCoreError(
+        "workspace.cleanup-pending",
+        `Workspace "${record.name}" has incomplete cleanup.`,
+        { remediation: [`Run honeybee workspace remove "${record.name}" again.`] },
+      );
+    }
     if (record.layout !== "git-worktree-library-cow-v1") {
       throw new WorkspaceCoreError(
         "workspace.layout-unsupported",
@@ -480,6 +583,15 @@ export class HoneyBeeWorkspaceCore {
       throw new WorkspaceCoreError(
         "workspace.library-not-junction",
         "Workspace Library exists but is not the retained storage junction.",
+      );
+    }
+    if (
+      libraryEntry !== undefined &&
+      !(await this.#libraryJunctionReferences(workspaceLibrary, record.mountPath))
+    ) {
+      throw new WorkspaceCoreError(
+        "workspace.library-target-invalid",
+        "Workspace Library points to a different target and was not changed.",
       );
     }
     let lease: StorageLease | undefined;
@@ -516,8 +628,27 @@ export class HoneyBeeWorkspaceCore {
     return this.#view(record);
   }
 
-  public async removeWorkspace(reference: string, projectReference?: string): Promise<void> {
-    let record = await this.#workspace(reference, projectReference);
+  public async removeWorkspace(
+    reference: string,
+    projectReference?: string,
+  ): Promise<WorkspaceRemoveResultV1> {
+    let record: WorkspaceRecordV2;
+    try {
+      record = await this.#workspace(reference, projectReference);
+    } catch (error) {
+      if (!(error instanceof WorkspaceCoreError) || error.code !== "workspace.not-found") {
+        throw error;
+      }
+      const receipt = await this.#removalReceipt(reference, projectReference);
+      if (receipt === undefined) throw error;
+      return {
+        workspaceId: receipt.workspaceId,
+        projectId: receipt.projectId,
+        name: receipt.name,
+        branch: receipt.branch,
+        alreadyRemoved: true,
+      };
+    }
     const project = await this.#project(record.projectId);
     const resumed = record.state === "removing" || record.state === "cleanup-pending";
     let cleanupStarted = resumed;
@@ -528,49 +659,90 @@ export class HoneyBeeWorkspaceCore {
       );
     }
     try {
+      let workspaceLibrary: string | undefined;
       if (await this.#exists(record.workspacePath)) {
         const view = await this.#view(record);
         if (view.git === undefined) {
-          await this.repairWorkspace(reference, projectReference);
-          record = await this.#workspace(reference, projectReference);
+          throw new WorkspaceCoreError(
+            "workspace.repair-required",
+            `Workspace "${record.name}" cannot be identified as a safe Git worktree.`,
+            { remediation: [`Run honeybee workspace repair "${record.name}" first.`] },
+          );
         } else if (view.git.dirty) {
           throw new WorkspaceCoreError(
             "workspace.dirty",
-            "Commit or discard every tracked and untracked change before removing the Workspace.",
+            `Workspace "${record.name}" contains uncommitted changes.`,
+            {
+              remediation: [
+                "Commit or discard them before removing the Workspace.",
+                `git -C "${record.workspacePath}" status`,
+              ],
+            },
           );
         }
         const refreshed = await this.#view(record);
         if (refreshed.git?.dirty === true) {
           throw new WorkspaceCoreError("workspace.dirty", "The Workspace contains changes.");
         }
-        record = { ...record, state: "removing", updatedAt: now() };
-        await this.#registry.putWorkspace(record);
-        cleanupStarted = true;
-        const workspaceLibrary = path.join(
+        workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
+        await this.#validateLibraryJunction(
           record.workspacePath,
-          project.unityRelativePath,
-          "Library",
+          workspaceLibrary,
+          record.mountPath,
         );
-        await this.#removeLibraryJunction(record.workspacePath, workspaceLibrary, record.mountPath);
+      } else {
+        const registeredBranch = await this.#registeredWorktreeBranch(
+          project.repositoryRoot,
+          record.workspacePath,
+        );
+        if (registeredBranch !== undefined && registeredBranch !== record.branch) {
+          throw new WorkspaceCoreError(
+            "workspace.repair-required",
+            "The missing Workspace path is registered to a different Git branch.",
+          );
+        }
+      }
+      record = { ...record, state: "removing", updatedAt: now() };
+      await this.#registry.putWorkspace(record);
+      cleanupStarted = true;
+      if (await this.#exists(record.workspacePath)) {
+        await this.#removeLibraryJunction(
+          record.workspacePath,
+          workspaceLibrary as string,
+          record.mountPath,
+        );
         await this.#git(project.repositoryRoot, ["worktree", "remove", record.workspacePath]);
-      } else if (!resumed) {
-        throw new WorkspaceCoreError(
-          "workspace.worktree-missing",
-          "The Git worktree is missing without a pending removal receipt.",
-        );
+      } else if (
+        (await this.#registeredWorktreeBranch(project.repositoryRoot, record.workspacePath)) !==
+        undefined
+      ) {
+        await this.#git(project.repositoryRoot, [
+          "worktree",
+          "remove",
+          "--force",
+          record.workspacePath,
+        ]);
       }
       try {
         await this.#storage.removeRetained(project.storageCommand, record.consumerId);
       } catch (error) {
         if (!(
-          resumed &&
           error instanceof WorkspaceCoreError &&
-          error.code === "retained-not-found"
+          (error.code === "retained-not-found" ||
+            error.code === "storage.retained-not-found" ||
+            error.upstreamCode === "retained-not-found")
         )) {
           throw error;
         }
       }
-      await this.#registry.removeWorkspace(record.workspaceId);
+      await this.#registry.completeWorkspaceRemoval(record);
+      return {
+        workspaceId: record.workspaceId,
+        projectId: record.projectId,
+        name: record.name,
+        branch: record.branch,
+        alreadyRemoved: false,
+      };
     } catch (error) {
       if (cleanupStarted) {
         await this.#registry.putWorkspace({
@@ -588,6 +760,25 @@ export class HoneyBeeWorkspaceCore {
     workspaceLibrary: string,
     expectedMountPath: string,
   ): Promise<void> {
+    const entry = await this.#validateLibraryJunction(
+      workspacePath,
+      workspaceLibrary,
+      expectedMountPath,
+    );
+    if (entry === undefined) return;
+    try {
+      await unlink(workspaceLibrary);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
+      await rm(workspaceLibrary, { recursive: true, force: true });
+    }
+  }
+
+  async #validateLibraryJunction(
+    workspacePath: string,
+    workspaceLibrary: string,
+    expectedMountPath: string,
+  ): Promise<Awaited<ReturnType<typeof lstat>> | undefined> {
     if (!contains(workspacePath, workspaceLibrary)) {
       throw new WorkspaceCoreError(
         "workspace.library-path-invalid",
@@ -611,12 +802,7 @@ export class HoneyBeeWorkspaceCore {
         "Workspace Library junction does not reference HoneyBee retained storage.",
       );
     }
-    try {
-      await unlink(workspaceLibrary);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EPERM") throw error;
-      await rm(workspaceLibrary, { recursive: true, force: true });
-    }
+    return entry;
   }
 
   async #libraryJunctionReferences(workspaceLibrary: string, mountPath: string): Promise<boolean> {
@@ -659,7 +845,10 @@ export class HoneyBeeWorkspaceCore {
       );
     }
     if (entry !== undefined && !(await this.#libraryJunctionMatches(workspaceLibrary, mountPath))) {
-      await unlink(workspaceLibrary);
+      throw new WorkspaceCoreError(
+        "workspace.library-target-invalid",
+        "Workspace Library points to a different target and was not changed.",
+      );
     }
     if (!(await this.#exists(workspaceLibrary))) {
       await symlink(mountPath, workspaceLibrary, "junction");
@@ -677,12 +866,14 @@ export class HoneyBeeWorkspaceCore {
       return {
         ...record,
         available: false,
+        libraryConnected: false,
         state:
           record.state === "removing" || record.state === "cleanup-pending"
             ? record.state
             : "repair-required",
       };
     }
+    let git: WorkspaceViewV1["git"];
     try {
       const branch = await this.#git(record.workspacePath, ["branch", "--show-current"]);
       const head = await this.#commit(record.workspacePath, "HEAD");
@@ -692,25 +883,79 @@ export class HoneyBeeWorkspaceCore {
         "--untracked-files=all",
       ]);
       const changes = status.length === 0 ? [] : status.split(/\r?\n/u).filter(Boolean);
-      let available = true;
-      if (record.layout === "git-worktree-library-cow-v1") {
-        const project = await this.#project(record.projectId);
-        const workspaceLibrary = path.join(
-          record.workspacePath,
-          project.unityRelativePath,
-          "Library",
-        );
-        available = await this.#libraryJunctionMatches(workspaceLibrary, record.mountPath);
-      }
-      return {
-        ...record,
-        available,
-        ...(available ? {} : { state: "repair-required" as const }),
-        git: { branch, head, dirty: changes.length > 0, changes },
-      };
+      git = { branch, head, dirty: changes.length > 0, changes };
     } catch {
-      return { ...record, available: false, state: "repair-required" };
+      git = undefined;
     }
+    let libraryConnected = false;
+    if (record.layout === "git-worktree-library-cow-v1") {
+      const project = await this.#project(record.projectId);
+      const workspaceLibrary = path.join(
+        record.workspacePath,
+        project.unityRelativePath,
+        "Library",
+      );
+      libraryConnected = await this.#libraryJunctionMatches(workspaceLibrary, record.mountPath);
+    }
+    const available = git !== undefined && libraryConnected;
+    const state =
+      record.state === "removing" || record.state === "cleanup-pending"
+        ? record.state
+        : available
+          ? record.state
+          : ("repair-required" as const);
+    return {
+      ...record,
+      available,
+      libraryConnected,
+      state,
+      ...(git === undefined ? {} : { git }),
+    };
+  }
+
+  async #removalReceipt(
+    reference: string,
+    projectReference?: string,
+  ): Promise<WorkspaceRemovalReceiptV1 | undefined> {
+    const registry = await this.#registry.read();
+    const project =
+      projectReference === undefined ? undefined : await this.#project(projectReference);
+    const matches = registry.removalReceipts
+      .filter(
+        (receipt) =>
+          (receipt.workspaceId === reference || receipt.name === reference) &&
+          (project === undefined || receipt.projectId === project.projectId),
+      )
+      .sort((left, right) => right.removedAt.localeCompare(left.removedAt));
+    if (matches.length === 0) return undefined;
+    if (
+      project === undefined &&
+      new Set(matches.map((receipt) => receipt.projectId)).size > 1 &&
+      matches.every((receipt) => receipt.workspaceId !== reference)
+    ) {
+      throw new WorkspaceCoreError(
+        "workspace.ambiguous",
+        `Removed Workspace ${reference} could not be resolved uniquely; use --project.`,
+      );
+    }
+    return matches[0];
+  }
+
+  async #registeredWorktreeBranch(
+    repositoryRoot: string,
+    workspacePath: string,
+  ): Promise<string | undefined> {
+    const records = (await this.#git(repositoryRoot, ["worktree", "list", "--porcelain"]))
+      .split(/\r?\n\r?\n/u)
+      .map((entry) => entry.split(/\r?\n/u));
+    for (const lines of records) {
+      const worktree = lines.find((line) => line.startsWith("worktree "))?.slice(9);
+      if (worktree === undefined || pathKey(worktree) !== pathKey(workspacePath)) continue;
+      return lines
+        .find((line) => line.startsWith("branch refs/heads/"))
+        ?.slice("branch refs/heads/".length);
+    }
+    return undefined;
   }
 
   async #project(reference?: string): Promise<ProjectRecordV2> {

@@ -2,7 +2,8 @@
 
 import { WorkspaceCoreError } from "@honeybee/core";
 
-import { CLI_JSON_SCHEMA_VERSION, runWorkspaceCli } from "./workspace-command.js";
+import { formatError } from "./human-output.js";
+import { CLI_JSON_SCHEMA_VERSION, jsonEnabled, runWorkspaceCli } from "./workspace-command.js";
 
 void runWorkspaceCli(process.argv.slice(2)).catch((error: unknown) => {
   const payload =
@@ -19,6 +20,8 @@ void runWorkspaceCli(process.argv.slice(2)).catch((error: unknown) => {
           code: "cli.invalid-request",
           message: error instanceof Error ? error.message : String(error),
         };
-  process.stderr.write(`${JSON.stringify(payload)}\n`);
+  process.stderr.write(
+    jsonEnabled(process.argv.slice(2)) ? `${JSON.stringify(payload)}\n` : `${formatError(error)}\n`,
+  );
   process.exitCode = 1;
 });

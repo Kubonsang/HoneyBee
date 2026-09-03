@@ -49,6 +49,19 @@ type installReceipt struct {
 	ExecutableSHA256 string `json:"executableSha256"`
 }
 
+type storageDiagnostic struct {
+	ServiceExists           bool   `json:"serviceExists"`
+	ServiceState            string `json:"serviceState,omitempty"`
+	ReceiptExists           bool   `json:"receiptExists"`
+	ReceiptValid            bool   `json:"receiptValid"`
+	ComponentVersion        string `json:"componentVersion,omitempty"`
+	WorkspaceRoot           string `json:"workspaceRoot,omitempty"`
+	WorkspaceRootAccessible bool   `json:"workspaceRootAccessible"`
+	ExecutableExists        bool   `json:"executableExists"`
+	ExecutableDigestMatches bool   `json:"executableDigestMatches"`
+	UserMatches             bool   `json:"userMatches"`
+}
+
 func main() {
 	result, err := execute(os.Args[1:])
 	if err != nil {
@@ -72,7 +85,7 @@ func main() {
 
 func execute(args []string) (any, error) {
 	if len(args) == 0 {
-		return nil, errors.New("usage: install|broker-run|control|version")
+		return nil, errors.New("usage: install|broker-run|control|diagnose|version")
 	}
 	switch args[0] {
 	case "version":
@@ -106,6 +119,15 @@ func execute(args []string) (any, error) {
 			return nil, callErr
 		}
 		return response, nil
+	case "diagnose":
+		if len(args) != 1 {
+			return nil, errors.New("diagnose accepts no arguments")
+		}
+		return map[string]any{
+			"schemaVersion": 1,
+			"ok":            true,
+			"diagnostic":    diagnoseStorage(),
+		}, nil
 	case "install":
 		flags := flag.NewFlagSet("install", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
@@ -119,6 +141,91 @@ func execute(args []string) (any, error) {
 		return install(*workspaceRoot, *userSID, *componentVersion, *replace)
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
+	}
+}
+
+func diagnoseStorage() storageDiagnostic {
+	result := storageDiagnostic{}
+	programData := os.Getenv("ProgramData")
+	if filepath.IsAbs(programData) {
+		receiptPath := filepath.Join(programData, "UnityWorkspaceStorage", "install-receipt.json")
+		if _, err := os.Lstat(receiptPath); err == nil {
+			result.ReceiptExists = true
+		}
+		if receipt, err := loadReceipt(receiptPath); err == nil {
+			result.ReceiptValid = true
+			result.ComponentVersion = receipt.ComponentVersion
+			result.WorkspaceRoot = receipt.WorkspaceRoot
+			if info, statErr := os.Lstat(receipt.WorkspaceRoot); statErr == nil &&
+				info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+				if handle, openErr := os.Open(receipt.WorkspaceRoot); openErr == nil {
+					result.WorkspaceRootAccessible = true
+					_ = handle.Close()
+				}
+			}
+			if info, statErr := os.Lstat(receipt.Executable); statErr == nil &&
+				info.Mode().IsRegular() && info.Mode()&os.ModeSymlink == 0 {
+				result.ExecutableExists = true
+				if digest, hashErr := hashFileHex(receipt.Executable); hashErr == nil {
+					result.ExecutableDigestMatches = strings.EqualFold(
+						digest,
+						receipt.ExecutableSHA256,
+					)
+				}
+			}
+			if sid, sidErr := currentUserSID(); sidErr == nil {
+				result.UserMatches = sid == receipt.UserSID
+			}
+		}
+	}
+	manager, err := mgr.Connect()
+	if err != nil {
+		return result
+	}
+	defer manager.Disconnect()
+	service, err := manager.OpenService(workspace.WindowsServiceName)
+	if err != nil {
+		return result
+	}
+	defer service.Close()
+	result.ServiceExists = true
+	if status, queryErr := service.Query(); queryErr == nil {
+		result.ServiceState = serviceStateName(status.State)
+	}
+	return result
+}
+
+func currentUserSID() (string, error) {
+	token, err := windows.OpenCurrentProcessToken()
+	if err != nil {
+		return "", err
+	}
+	defer token.Close()
+	user, err := token.GetTokenUser()
+	if err != nil {
+		return "", err
+	}
+	return user.User.Sid.String(), nil
+}
+
+func serviceStateName(state svc.State) string {
+	switch state {
+	case svc.Stopped:
+		return "stopped"
+	case svc.StartPending:
+		return "start-pending"
+	case svc.StopPending:
+		return "stop-pending"
+	case svc.Running:
+		return "running"
+	case svc.ContinuePending:
+		return "continue-pending"
+	case svc.PausePending:
+		return "pause-pending"
+	case svc.Paused:
+		return "paused"
+	default:
+		return "unknown"
 	}
 }
 
