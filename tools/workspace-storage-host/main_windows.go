@@ -178,15 +178,25 @@ func diagnoseStorage() storageDiagnostic {
 			}
 		}
 	}
-	manager, err := mgr.Connect()
+	managerHandle, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
 	if err != nil {
 		return result
 	}
+	manager := &mgr.Mgr{Handle: managerHandle}
 	defer manager.Disconnect()
-	service, err := manager.OpenService(workspace.WindowsServiceName)
+	serviceName, err := windows.UTF16PtrFromString(workspace.WindowsServiceName)
 	if err != nil {
 		return result
 	}
+	serviceHandle, err := windows.OpenService(
+		manager.Handle,
+		serviceName,
+		windows.SERVICE_QUERY_STATUS,
+	)
+	if err != nil {
+		return result
+	}
+	service := &mgr.Service{Name: workspace.WindowsServiceName, Handle: serviceHandle}
 	defer service.Close()
 	result.ServiceExists = true
 	if status, queryErr := service.Query(); queryErr == nil {

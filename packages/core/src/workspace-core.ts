@@ -652,6 +652,9 @@ export class HoneyBeeWorkspaceCore {
     const project = await this.#project(record.projectId);
     const resumed = record.state === "removing" || record.state === "cleanup-pending";
     let cleanupStarted = resumed;
+    let removalPrepared = false;
+    let removalCommitStarted = false;
+    const removalTransactionId = `removal-${record.workspaceId}`;
     if (record.layout !== "git-worktree-library-cow-v1") {
       throw new WorkspaceCoreError(
         "workspace.layout-unsupported",
@@ -660,7 +663,8 @@ export class HoneyBeeWorkspaceCore {
     }
     try {
       let workspaceLibrary: string | undefined;
-      if (await this.#exists(record.workspacePath)) {
+      const workspaceExists = await this.#exists(record.workspacePath);
+      if (workspaceExists) {
         const view = await this.#view(record);
         if (view.git === undefined) {
           throw new WorkspaceCoreError(
@@ -680,11 +684,16 @@ export class HoneyBeeWorkspaceCore {
             },
           );
         }
+        workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
+        await this.#validateLibraryJunction(
+          record.workspacePath,
+          workspaceLibrary,
+          record.mountPath,
+        );
         const refreshed = await this.#view(record);
         if (refreshed.git?.dirty === true) {
           throw new WorkspaceCoreError("workspace.dirty", "The Workspace contains changes.");
         }
-        workspaceLibrary = path.join(record.workspacePath, project.unityRelativePath, "Library");
         await this.#validateLibraryJunction(
           record.workspacePath,
           workspaceLibrary,
@@ -702,10 +711,81 @@ export class HoneyBeeWorkspaceCore {
           );
         }
       }
-      record = { ...record, state: "removing", updatedAt: now() };
-      await this.#registry.putWorkspace(record);
+
+      let storageAlreadyRemoved = false;
+      let preparationState: "prepared" | "committed" | undefined;
+      try {
+        const preparation = await this.#storage.prepareRetainedRemoval(
+          project.storageCommand,
+          record.consumerId,
+          record.storageWorkspaceId,
+          removalTransactionId,
+        );
+        if (preparation.state !== "prepared" && preparation.state !== "committed") {
+          throw new WorkspaceCoreError(
+            "storage.invalid-response",
+            "Workspace storage returned an invalid removal preparation state.",
+          );
+        }
+        preparationState = preparation.state;
+        removalPrepared = preparation.state === "prepared";
+      } catch (error) {
+        const retainedMissing =
+          error instanceof WorkspaceCoreError &&
+          (error.code === "retained-not-found" ||
+            error.code === "storage.retained-not-found" ||
+            error.upstreamCode === "retained-not-found");
+        if (retainedMissing) {
+          storageAlreadyRemoved = true;
+        } else if (
+          error instanceof WorkspaceCoreError &&
+          (error.code === "workspace.in-use" || error.upstreamCode === "retained-in-use")
+        ) {
+          throw new WorkspaceCoreError(
+            "workspace.in-use",
+            `Workspace "${record.name}" Library is still in use.`,
+            {
+              cause: error,
+              remediation: [
+                "Close Unity, IDE, terminal, and AI CLI processes using this Workspace.",
+                `Run honeybee workspace remove "${record.name}" again.`,
+              ],
+              ...(error.upstreamCode === undefined ? {} : { upstreamCode: error.upstreamCode }),
+            },
+          );
+        } else {
+          throw error;
+        }
+      }
+
+      try {
+        record = { ...record, state: "removing", updatedAt: now() };
+        await this.#registry.putWorkspace(record);
+      } catch (error) {
+        if (removalPrepared) {
+          try {
+            await this.#storage.abortRetainedRemoval(
+              project.storageCommand,
+              record.consumerId,
+              removalTransactionId,
+            );
+          } catch (abortError) {
+            removalPrepared = false;
+            throw new WorkspaceCoreError(
+              "storage.operation-failed",
+              "Workspace removal did not start, and storage could not confirm reservation cleanup.",
+              {
+                cause: new AggregateError([error, abortError]),
+                remediation: [`Run honeybee workspace remove "${record.name}" again.`],
+              },
+            );
+          }
+          removalPrepared = false;
+        }
+        throw error;
+      }
       cleanupStarted = true;
-      if (await this.#exists(record.workspacePath)) {
+      if (workspaceExists) {
         await this.#removeLibraryJunction(
           record.workspacePath,
           workspaceLibrary as string,
@@ -723,17 +803,15 @@ export class HoneyBeeWorkspaceCore {
           record.workspacePath,
         ]);
       }
-      try {
-        await this.#storage.removeRetained(project.storageCommand, record.consumerId);
-      } catch (error) {
-        if (!(
-          error instanceof WorkspaceCoreError &&
-          (error.code === "retained-not-found" ||
-            error.code === "storage.retained-not-found" ||
-            error.upstreamCode === "retained-not-found")
-        )) {
-          throw error;
-        }
+
+      if (!storageAlreadyRemoved && preparationState !== "committed") {
+        removalCommitStarted = true;
+        await this.#storage.commitRetainedRemoval(
+          project.storageCommand,
+          record.consumerId,
+          removalTransactionId,
+        );
+        removalPrepared = false;
       }
       await this.#registry.completeWorkspaceRemoval(record);
       return {
@@ -744,6 +822,26 @@ export class HoneyBeeWorkspaceCore {
         alreadyRemoved: false,
       };
     } catch (error) {
+      let failure: unknown = error;
+      if (removalPrepared && !removalCommitStarted) {
+        try {
+          await this.#storage.abortRetainedRemoval(
+            project.storageCommand,
+            record.consumerId,
+            removalTransactionId,
+          );
+          removalPrepared = false;
+        } catch (abortError) {
+          failure = new WorkspaceCoreError(
+            "workspace.cleanup-pending",
+            `Workspace "${record.name}" cleanup is incomplete, and storage could not confirm reservation cleanup.`,
+            {
+              cause: new AggregateError([error, abortError]),
+              remediation: [`Run honeybee workspace remove "${record.name}" again.`],
+            },
+          );
+        }
+      }
       if (cleanupStarted) {
         await this.#registry.putWorkspace({
           ...record,
@@ -751,7 +849,7 @@ export class HoneyBeeWorkspaceCore {
           updatedAt: now(),
         });
       }
-      throw error;
+      throw failure;
     }
   }
 

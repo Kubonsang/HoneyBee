@@ -1,7 +1,8 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 3 is a Workspace Workbench for Windows 11 x64. It uses the same registry
-and Workspace Core as the CLI. It does not schedule Agents or perform Git integration work.
+HoneyBee Desktop 0.1.0 Beta 4 is a Workspace Workbench candidate for Windows 11 x64. It uses the
+same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
+work.
 
 ## First start
 
@@ -33,13 +34,19 @@ Quick actions open CMD, PowerShell (PowerShell 7 preferred), VS Code, or the exa
 selected ready Workspace. These are detached user tools: HoneyBee does not watch, restart, verify, or
 interpret them.
 
-Dirty Workspace removal is disabled. Commit or discard changes first. Removal deletes the verified
-Git worktree and HoneyBee Library storage but always preserves the branch. `cleanup-pending` removal
-can be retried with the same action. A different-target Library junction is never replaced or
-deleted automatically.
+Dirty Workspace removal is disabled. Commit or discard changes first. Removal obtains an exclusive
+lock on the exact Library volume before changing the registry, junction, or Git worktree. If an
+external tool still holds it, close that tool and retry; HoneyBee does not terminate it. Successful
+removal deletes the verified Git worktree and HoneyBee Library storage but always preserves the
+branch. `cleanup-pending` removal can be retried with the same action. A different-target Library
+junction is never replaced or deleted automatically.
 
-## Current limitation
+## Reboot recovery
 
-Automatic repair after reboot is not released because the pinned storage component can reject a
-stale mount path before identity-checked native cleanup runs. Remove Beta Workspaces before a planned
-reboot. Desktop does not add an unsafe workaround or claim reboot recovery is complete.
+The retained-attach ordering fix and physical Windows reboot gate are complete for Beta 4. After a
+reboot, a retained Workspace appears as `repair-required` until the user chooses **Repair**. Do not
+open a tool in that Workspace until it returns to `ready`.
+
+Desktop uses the same identity-checked Core repair as the CLI. It does not recreate missing Git
+worktrees, modify dirty authored data, replace a different-target junction, or force-delete storage
+whose ownership is uncertain.

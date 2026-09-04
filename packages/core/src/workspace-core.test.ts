@@ -39,6 +39,10 @@ class FakeStorage implements WorkspaceStoragePort {
   readonly #parents = new Map<string, string>();
   readonly #transactions = new Map<string, { key: string; path: string }>();
   readonly #leases = new Map<string, StorageLease & { consumerId: string; workspaceId: string }>();
+  readonly #removals = new Map<
+    string,
+    { transactionId: string; state: "prepared" | "committed" }
+  >();
   public loseNextRemoveResponse = false;
   public failNextAttach = false;
   public failNextAcquire = false;
@@ -46,8 +50,13 @@ class FakeStorage implements WorkspaceStoragePort {
   public incompleteNextParent = false;
   public failNextRetain = false;
   public failNextRemove = false;
+  public failNextPrepare = false;
+  public inUseNextPrepare = false;
+  public failNextAbort = false;
+  public readonly removalEvents: string[] = [];
   public readonly abortedTransactions: string[] = [];
   public afterAcquire?: (lease: StorageLease) => Promise<void>;
+  public afterPrepare: (() => Promise<void>) | undefined;
 
   public constructor(root: string) {
     this.#root = root;
@@ -135,21 +144,93 @@ class FakeStorage implements WorkspaceStoragePort {
     return lease;
   }
 
-  public async removeRetained(_command: string, consumerId: string): Promise<void> {
+  public async prepareRetainedRemoval(
+    _command: string,
+    consumerId: string,
+    _workspaceId: string,
+    transactionId: string,
+  ) {
+    this.removalEvents.push(`prepare:${consumerId}:${transactionId}`);
+    if (this.inUseNextPrepare) {
+      this.inUseNextPrepare = false;
+      throw new WorkspaceCoreError("workspace.in-use", "simulated busy Library", {
+        upstreamCode: "retained-in-use",
+      });
+    }
+    if (this.failNextPrepare) {
+      this.failNextPrepare = false;
+      throw new WorkspaceCoreError("storage.operation-failed", "simulated prepare failure");
+    }
+    const lease = this.#leases.get(consumerId);
+    const removal = this.#removals.get(consumerId);
+    if (lease === undefined) {
+      if (removal?.transactionId === transactionId && removal.state === "committed") {
+        return { transactionId, runId: consumerId, state: "committed" as const };
+      }
+      throw new WorkspaceCoreError("retained-not-found", "missing retained lease");
+    }
+    if (removal !== undefined && removal.transactionId !== transactionId) {
+      throw new WorkspaceCoreError("storage.operation-failed", "simulated removal conflict", {
+        upstreamCode: "removal-transaction-conflict",
+      });
+    }
+    this.#removals.set(consumerId, { transactionId, state: "prepared" });
+    await this.afterPrepare?.();
+    return {
+      transactionId,
+      runId: consumerId,
+      leaseId: lease.leaseId,
+      state: "prepared" as const,
+      expiresAt: new Date(Date.now() + 300_000).toISOString(),
+    };
+  }
+
+  public async commitRetainedRemoval(_command: string, consumerId: string, transactionId: string) {
+    this.removalEvents.push(`commit:${consumerId}:${transactionId}`);
     if (this.failNextRemove) {
       this.failNextRemove = false;
       throw new WorkspaceCoreError("storage.operation-failed", "simulated remove failure");
     }
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) {
+      const completed = this.#removals.get(consumerId);
+      if (completed?.transactionId === transactionId && completed.state === "committed") {
+        return { transactionId, runId: consumerId, state: "committed" as const };
+      }
       throw new WorkspaceCoreError("retained-not-found", "missing retained lease");
+    }
+    const removal = this.#removals.get(consumerId);
+    if (removal?.transactionId !== transactionId || removal.state !== "prepared") {
+      throw new WorkspaceCoreError("storage.operation-failed", "removal was not prepared", {
+        upstreamCode: "removal-not-prepared",
+      });
     }
     await rm(lease.workspacePath, { recursive: true, force: true });
     this.#leases.delete(consumerId);
+    this.#removals.set(consumerId, { transactionId, state: "committed" });
     if (this.loseNextRemoveResponse) {
       this.loseNextRemoveResponse = false;
       throw new WorkspaceCoreError("storage.response-lost", "response was lost");
     }
+    return {
+      transactionId,
+      runId: consumerId,
+      leaseId: lease.leaseId,
+      state: "committed" as const,
+    };
+  }
+
+  public async abortRetainedRemoval(_command: string, consumerId: string, transactionId: string) {
+    this.removalEvents.push(`abort:${consumerId}:${transactionId}`);
+    if (this.failNextAbort) {
+      this.failNextAbort = false;
+      throw new WorkspaceCoreError("storage.operation-failed", "simulated abort failure");
+    }
+    const removal = this.#removals.get(consumerId);
+    if (removal?.transactionId === transactionId && removal.state === "prepared") {
+      this.#removals.delete(consumerId);
+    }
+    return { transactionId, runId: consumerId, state: "aborted" as const };
   }
 
   public async dropRetained(consumerId: string): Promise<void> {
@@ -273,6 +354,117 @@ describe("HoneyBeeWorkspaceCore", () => {
     expect(await git(source, "worktree", "list", "--porcelain")).not.toContain(
       created.workspacePath,
     );
+  }, 30_000);
+
+  it("fails busy removal before changing registry, junction, worktree, or branch", async () => {
+    const { source, core, storage } = await fixture();
+    const created = await core.createWorkspace({
+      name: "busy-library",
+      branch: "feature/busy-library",
+    });
+    const registryBefore = await readFile(core.registryPath, "utf8");
+    const targetBefore = await realpath(path.join(created.workspacePath, "Library"));
+    storage.inUseNextPrepare = true;
+
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.in-use",
+      remediation: expect.arrayContaining([
+        expect.stringContaining("Close Unity"),
+        expect.stringContaining("workspace remove"),
+      ]),
+    });
+
+    expect(await readFile(core.registryPath, "utf8")).toBe(registryBefore);
+    expect(await realpath(path.join(created.workspacePath, "Library"))).toBe(targetBefore);
+    expect(await git(source, "worktree", "list", "--porcelain")).toContain(
+      created.workspacePath.replaceAll("\\", "/"),
+    );
+    expect(await git(source, "rev-parse", "refs/heads/feature/busy-library")).toBe(
+      created.baseCommit,
+    );
+    expect((await core.workspaceStatus(created.workspaceId)).state).toBe("ready");
+  }, 30_000);
+
+  it("aborts the storage reservation when the removing registry write fails", async () => {
+    const { core, storage } = await fixture();
+    const created = await core.createWorkspace({
+      name: "remove-registry-failure",
+      branch: "feature/remove-registry-failure",
+    });
+    const spy = vi
+      .spyOn(WorkspaceRegistryStore.prototype, "putWorkspace")
+      .mockRejectedValueOnce(new WorkspaceCoreError("registry.lock-failed", "simulated"));
+
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "registry.lock-failed",
+    });
+    spy.mockRestore();
+
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual(["prepare", "abort"]);
+    expect((await core.workspaceStatus(created.workspaceId)).state).toBe("ready");
+    await expect(
+      readFile(path.join(created.workspacePath, "Library", "ArtifactDB"), "utf8"),
+    ).resolves.toBe("shared-cache\n");
+  }, 30_000);
+
+  it("aborts after a post-preflight Git failure and retries from cleanup-pending", async () => {
+    const { source, core, storage } = await fixture();
+    const created = await core.createWorkspace({
+      name: "late-dirty",
+      branch: "feature/late-dirty",
+    });
+    const lateFile = path.join(created.workspacePath, "Assets", "Late.cs");
+    storage.afterPrepare = async () => writeFile(lateFile, "class Late {}\n", "utf8");
+
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "git.command-failed",
+    });
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual(["prepare", "abort"]);
+    expect((await core.workspaceStatus(created.workspaceId)).state).toBe("cleanup-pending");
+    await expect(readFile(lateFile, "utf8")).resolves.toBe("class Late {}\n");
+    expect(await git(source, "rev-parse", "refs/heads/feature/late-dirty")).toBe(
+      created.baseCommit,
+    );
+
+    storage.afterPrepare = undefined;
+    await rm(lateFile);
+    await core.removeWorkspace(created.workspaceId);
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual([
+      "prepare",
+      "abort",
+      "prepare",
+      "commit",
+    ]);
+  }, 30_000);
+
+  it("keeps an abort failure retryable from cleanup-pending", async () => {
+    const { core, storage } = await fixture();
+    const created = await core.createWorkspace({
+      name: "abort-failure",
+      branch: "feature/abort-failure",
+    });
+    const lateFile = path.join(created.workspacePath, "Assets", "Late.cs");
+    storage.afterPrepare = async () => writeFile(lateFile, "class Late {}\n", "utf8");
+    storage.failNextAbort = true;
+
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.cleanup-pending",
+      remediation: expect.arrayContaining([expect.stringContaining("workspace remove")]),
+    });
+    expect((await core.workspaceStatus(created.workspaceId)).state).toBe("cleanup-pending");
+    await expect(readFile(lateFile, "utf8")).resolves.toBe("class Late {}\n");
+
+    storage.afterPrepare = undefined;
+    await rm(lateFile);
+    await expect(core.removeWorkspace(created.workspaceId)).resolves.toMatchObject({
+      alreadyRemoved: false,
+    });
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual([
+      "prepare",
+      "abort",
+      "prepare",
+      "commit",
+    ]);
   }, 30_000);
 
   it("attaches an existing branch, repairs its Library, and refuses dirty removal", async () => {

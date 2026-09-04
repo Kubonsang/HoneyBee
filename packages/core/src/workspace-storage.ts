@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
@@ -8,6 +8,7 @@ import {
   type StorageDiagnosticV1,
   type StorageLease,
   type StorageParentBuild,
+  type StorageRemovalPreparation,
   type WorkspaceStoragePort,
 } from "./workspace-types.js";
 
@@ -49,12 +50,31 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
         ? object(response.error, "error")
         : {};
     const upstreamCode = typeof body.code === "string" ? body.code : undefined;
+    const capacityUnavailable = upstreamCode === "storage-capacity-unavailable";
     throw new WorkspaceCoreError(
       upstreamCode === "retained-not-found"
         ? "storage.retained-not-found"
-        : "storage.operation-failed",
-      typeof body.message === "string" ? body.message : `${label} failed.`,
-      upstreamCode === undefined ? undefined : { upstreamCode },
+        : upstreamCode === "retained-in-use"
+          ? "workspace.in-use"
+          : "storage.operation-failed",
+      capacityUnavailable
+        ? "Workspace storage cannot reserve enough disk space for this operation."
+        : typeof body.message === "string"
+          ? body.message
+          : `${label} failed.`,
+      upstreamCode === undefined
+        ? undefined
+        : {
+            upstreamCode,
+            ...(capacityUnavailable
+              ? {
+                  remediation: [
+                    "Remove unused Workspaces or free disk space, then retry.",
+                    "A failed cache prepare keeps the previously registered cache unchanged.",
+                  ],
+                }
+              : {}),
+          },
     );
   }
   return response;
@@ -197,14 +217,16 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       }
       return lease;
     } catch (error) {
-      await rm(workspacePath).catch(() => undefined);
+      // Remove only the empty shell we created. Never recursively delete a path
+      // that the broker (or another process) may already have populated.
+      await rmdir(workspacePath).catch(() => undefined);
       throw error;
     }
   }
 
   public async retain(command: string, leaseId: string): Promise<void> {
     await this.#control(command, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       operation: "release",
       requestId: `hb-retain-${randomUUID()}`,
       leaseId,
@@ -219,7 +241,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   ): Promise<StorageLease> {
     return this.#lease(
       await this.#control(command, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         operation: "attach-retained",
         requestId: `hb-attach-${randomUUID()}`,
         runId: consumerId,
@@ -228,13 +250,57 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
-  public async removeRetained(command: string, consumerId: string): Promise<void> {
-    await this.#control(command, {
-      schemaVersion: 2,
-      operation: "remove-retained",
-      requestId: `hb-remove-${randomUUID()}`,
-      runId: consumerId,
-    });
+  public async prepareRetainedRemoval(
+    command: string,
+    consumerId: string,
+    workspaceId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "prepare-retained-removal",
+        requestId: `hb-remove-prepare-${randomUUID()}`,
+        runId: consumerId,
+        workspaceId,
+        transactionId,
+      }),
+      transactionId,
+    );
+  }
+
+  public async commitRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "commit-retained-removal",
+        requestId: `hb-remove-commit-${randomUUID()}`,
+        runId: consumerId,
+        transactionId,
+      }),
+      transactionId,
+    );
+  }
+
+  public async abortRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "abort-retained-removal",
+        requestId: `hb-remove-abort-${randomUUID()}`,
+        runId: consumerId,
+        transactionId,
+      }),
+      transactionId,
+    );
   }
 
   public async diagnose(command: string): Promise<StorageDiagnosticV1> {
@@ -296,6 +362,30 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       ...(typeof metrics?.childReadyAllocatedBytes === "number"
         ? { allocatedBytes: metrics.childReadyAllocatedBytes }
         : {}),
+    };
+  }
+
+  #removal(response: JsonObject, expectedTransactionId: string): StorageRemovalPreparation {
+    const removal = object(response.removal, "removal");
+    const transactionId = text(removal.transactionId, "removal.transactionId");
+    const state = text(removal.state, "removal.state");
+    if (
+      transactionId !== expectedTransactionId ||
+      !["prepared", "committed", "aborted"].includes(state)
+    ) {
+      throw new WorkspaceCoreError(
+        "storage.invalid-response",
+        "Workspace broker returned an unexpected removal transaction.",
+      );
+    }
+    return {
+      transactionId,
+      runId: text(removal.runId, "removal.runId"),
+      ...(typeof removal.leaseId === "string" && removal.leaseId.length > 0
+        ? { leaseId: removal.leaseId }
+        : {}),
+      state: state as StorageRemovalPreparation["state"],
+      ...(typeof removal.expiresAt === "string" ? { expiresAt: removal.expiresAt } : {}),
     };
   }
 

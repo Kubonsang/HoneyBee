@@ -1,4 +1,4 @@
-# HoneyBee 0.1.0 Beta 3
+# HoneyBee 0.1.0 Beta 4 Candidate
 
 HoneyBee is a Windows Unity Workspace provider. It creates independent Git worktrees and gives each
 one a differencing-VHDX-backed Unity `Library`.
@@ -25,12 +25,14 @@ codex
 
 ## Status
 
-`0.1.0-beta.3` is a Windows evaluation prerelease of the workspace-only product. Automatic repair
-after reboot is not released: the pinned `unity-workspace-storage` component rejects the stale mount
-path before its native identity-checked stale-mount cleanup can run. Remove beta Workspaces before a
-planned reboot and do not use this build where reboot recovery is required. The complete lifecycle
-remains blocked until the upstream fix is pinned and the real Windows reboot gate in
-[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passes.
+This repository is preparing `0.1.0-beta.4`; the currently published prerelease remains Beta 3.
+The candidate pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
+the native identity-checked stale-mount cleanup and adds an exclusive Library-volume removal
+handshake. It also refuses to publish a cache that leaves no capacity for its first child.
+The physical Windows reboot gate in
+[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passed on this candidate. Reboot
+recovery is explicit: wait for `workspace status` to report `repair-required`, run
+`workspace repair`, and do not open the Workspace until it reports `ready` again.
 
 The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
 The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and
@@ -68,8 +70,11 @@ and broker internals. Errors are JSON on stderr with `schemaVersion`, `ok: false
 `message`.
 
 `workspace launch` and tool configuration no longer exist. `workspace remove` refuses a dirty Git
-worktree, removes only a verified `Library` junction and the worktree, and preserves the branch.
-Interrupted removals remain `cleanup-pending` and can be retried.
+worktree and first reserves and exclusively locks the exact Library volume. If Unity, an IDE, an AI
+CLI, or another process still holds it, removal fails with `workspace.in-use` before the registry,
+junction, worktree, or branch changes. Successful removal deletes only a verified `Library`
+junction and worktree and preserves the branch. Interrupted removals remain `cleanup-pending` and
+can be retried.
 
 `doctor` is a read-only Windows readiness report. It checks the runtime, Git, packaged storage
 tools, service and receipt identity, registered projects, cache prerequisites, registry, and
@@ -143,7 +148,8 @@ corepack pnpm --filter honeybee-desktop package:win
 [ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) defines the storage layout and
 [ADR-032](docs/decisions/ADR-032-workspace-only-product-boundary.md) defines the product boundary,
 and [ADR-033](docs/decisions/ADR-033-desktop-onboarding-and-tool-launch.md) constrains Desktop
-onboarding and user-triggered tool launch.
+onboarding and user-triggered tool launch. [ADR-034](docs/decisions/ADR-034-exclusive-library-removal.md)
+defines fail-closed removal while an external process owns the Library volume.
 The [decision index](docs/decisions/README.md) distinguishes active decisions from retained
 historical control-plane decisions. Existing benchmark and validation evidence remains preserved
 under `docs/benchmarks` and `docs/validation`; it is evidence, not a supported product surface.

@@ -20,7 +20,7 @@ import {
 
 const execFileAsync = promisify(execFile);
 
-export const WORKSPACE_CLI_VERSION = "0.1.0-beta.3";
+export const WORKSPACE_CLI_VERSION = "0.1.0-beta.4";
 export const CLI_JSON_SCHEMA_VERSION = 1 as const;
 
 export const WORKSPACE_HELP = `HoneyBee ${WORKSPACE_CLI_VERSION}

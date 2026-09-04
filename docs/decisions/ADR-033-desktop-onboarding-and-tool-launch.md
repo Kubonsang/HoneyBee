@@ -36,4 +36,4 @@ not edit `.gitignore` automatically.
 - Authentication remains with Git Credential Manager or SSH; HoneyBee stores no credentials.
 - Clone failures and setup blockers require an explicit user decision instead of automatic cleanup.
 - Tool availability and exact Unity version failures are actionable UI errors, not supervised jobs.
-- ADR-031 storage safety, repair limits, branch preservation, and reboot blocker remain unchanged.
+- ADR-031 storage safety, explicit repair limits, and branch preservation remain unchanged.

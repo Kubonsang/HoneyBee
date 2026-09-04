@@ -125,6 +125,14 @@ export interface StorageLease {
   readonly allocatedBytes?: number;
 }
 
+export interface StorageRemovalPreparation {
+  readonly transactionId: string;
+  readonly runId: string;
+  readonly leaseId?: string;
+  readonly state: "prepared" | "committed" | "aborted";
+  readonly expiresAt?: string;
+}
+
 export interface WorkspaceStoragePort {
   beginParent(command: string, compatibilityKey: string): Promise<StorageParentBuild>;
   commitParent(command: string, transactionId: string): Promise<StorageParentBuild>;
@@ -140,7 +148,22 @@ export interface WorkspaceStoragePort {
   ): Promise<StorageLease>;
   retain(command: string, leaseId: string): Promise<void>;
   attachRetained(command: string, consumerId: string, workspaceId: string): Promise<StorageLease>;
-  removeRetained(command: string, consumerId: string): Promise<void>;
+  prepareRetainedRemoval(
+    command: string,
+    consumerId: string,
+    workspaceId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation>;
+  commitRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation>;
+  abortRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation>;
   diagnose?(command: string): Promise<StorageDiagnosticV1>;
   status?(
     command: string,

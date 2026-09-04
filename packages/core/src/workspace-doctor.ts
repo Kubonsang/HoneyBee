@@ -405,15 +405,6 @@ export const runWorkspaceDoctor = async (
         : check("workspace.ready", "pass", "Workspace is ready.", { subject }),
     );
   }
-  if (value.workspaces.length > 0) {
-    checks.push(
-      check(
-        "workspace.reboot-repair",
-        "warning",
-        "Automatic repair after reboot is not released; remove Workspaces before a planned reboot.",
-      ),
-    );
-  }
   return report(checks);
 };
 

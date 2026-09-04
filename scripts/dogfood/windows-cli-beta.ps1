@@ -21,6 +21,7 @@ $WorkspaceRoot = [IO.Path]::GetFullPath($WorkspaceRoot)
 $DataRoot = [IO.Path]::GetFullPath($DataRoot)
 $EvidencePath = [IO.Path]::GetFullPath($EvidencePath)
 $StorageClient = Join-Path (Split-Path -Parent $HoneyBee) "dist\unity-workspace-storage.exe"
+$StorageControl = Join-Path (Split-Path -Parent $HoneyBee) "dist\honeybee-workspace-storage-host.exe"
 $Names = @("combat", "ui", "enemy-ai", "level")
 $RunId = [DateTime]::UtcNow.ToString("yyyyMMdd-HHmmss")
 
@@ -58,7 +59,12 @@ function Measure-HoneyBeeJson {
 
 function Get-StorageStatus {
     $requestId = "hb-dogfood-$RunId-$([Guid]::NewGuid().ToString('N'))"
-    $output = & $StorageClient workspace status --schema 2 --request-id $requestId 2>&1
+    $request = [ordered]@{
+        schemaVersion = 3
+        operation = "status"
+        requestId = $requestId
+    } | ConvertTo-Json -Compress
+    $output = $request | & $StorageControl control 2>&1
     if ($LASTEXITCODE -ne 0) {
         throw "workspace storage status failed: $($output -join [Environment]::NewLine)"
     }
@@ -67,6 +73,9 @@ function Get-StorageStatus {
 
 if (-not (Test-Path -LiteralPath $StorageClient -PathType Leaf)) {
     throw "The packaged storage client is missing: $StorageClient"
+}
+if (-not (Test-Path -LiteralPath $StorageControl -PathType Leaf)) {
+    throw "The packaged storage control companion is missing: $StorageControl"
 }
 foreach ($target in @($WorkspaceRoot, $DataRoot)) {
     if (Test-Path -LiteralPath $target) {
@@ -132,6 +141,7 @@ $worktreeList = & git.exe -C $project.repositoryRoot worktree list --porcelain
 if ($LASTEXITCODE -ne 0) {
     throw "git worktree list failed."
 }
+$repoTopology = @{}
 foreach ($workspace in $created) {
     if (($worktreeList -join [Environment]::NewLine) -notmatch [regex]::Escape($workspace.workspacePath)) {
         throw "Git did not report Workspace $($workspace.name)."
@@ -141,6 +151,30 @@ foreach ($workspace in $created) {
     )
     if ($resolved.Payload.workspacePath -ne $workspace.workspacePath) {
         throw "workspace path returned a different path for $($workspace.name)."
+    }
+    $gitMarker = Join-Path $workspace.workspacePath ".git"
+    if (-not (Test-Path -LiteralPath $gitMarker -PathType Leaf)) {
+        throw "Workspace .git is not a linked-worktree file: $gitMarker"
+    }
+    $topLevel = (& git.exe -C $workspace.workspacePath rev-parse --show-toplevel).Trim()
+    $gitDirectory = (& git.exe -C $workspace.workspacePath rev-parse --git-dir).Trim()
+    $commonDirectory = (& git.exe -C $workspace.workspacePath rev-parse --git-common-dir).Trim()
+    if ($LASTEXITCODE -ne 0 -or [IO.Path]::GetFullPath($topLevel) -ne [IO.Path]::GetFullPath($workspace.workspacePath)) {
+        throw "Git did not resolve the linked Workspace root for $($workspace.name)."
+    }
+    if ([IO.Path]::GetFullPath($topLevel) -eq [IO.Path]::GetFullPath($project.repositoryRoot)) {
+        throw "Workspace Git root collapsed to the source worktree for $($workspace.name)."
+    }
+    if (Test-Path -LiteralPath (Join-Path $workspace.workspacePath ".honeybee")) {
+        throw "Workspace-local .honeybee state would pollute tool context: $($workspace.name)."
+    }
+    $repoTopology[$workspace.workspaceId] = [ordered]@{
+        name = $workspace.name
+        topLevel = $topLevel
+        gitDirectory = $gitDirectory
+        commonDirectory = $commonDirectory
+        dotGitIsFile = $true
+        workspaceHoneyBeeStateAbsent = $true
     }
 }
 $libraryTargets = @{}
@@ -182,13 +216,20 @@ foreach ($workspace in $created) {
     Write-Host "  $($workspace.name): $(Join-Path $workspace.workspacePath $project.unityRelativePath)"
 }
 Write-Host ""
-Write-Host "Wait for import/compile, make isolated authored changes in all four Workspaces, and commit them."
+Write-Host "In combat, run Codex from the Workspace root and commit with subject:"
+Write-Host "  dogfood(codex): verify linked worktree"
+Write-Host "In ui, run Claude Code from the Workspace root and commit with subject:"
+Write-Host "  dogfood(claude): verify linked worktree"
+Write-Host "Each agent must report pwd/Git roots, confirm .git is a file and .honeybee is absent,"
+Write-Host "make a bounded tracked edit, run this project's exact Unity batchmode command, and commit."
+Write-Host "Use enemy-ai and level for the remaining isolated Unity/editor changes and commits."
 $confirmation = Read-Host "Type CONTINUE only after both Editors and all commits are complete"
 if ($confirmation -ne "CONTINUE") {
     throw "Dogfood paused without cleanup. HoneyBee Workspaces and branches were preserved."
 }
 
 $afterUnityStorage = Get-StorageStatus
+$agentCommits = @{}
 foreach ($workspace in $created) {
     $status = Invoke-HoneyBeeJson -Arguments @(
         "workspace", "status", $workspace.workspaceId, "--project", $project.projectId
@@ -202,6 +243,64 @@ foreach ($workspace in $created) {
     ) {
         throw "Workspace $($workspace.name) does not contain the expected isolated branch commit."
     }
+    $agentCommits[$workspace.name] = (& git.exe -C $workspace.workspacePath log -1 --format=%s).Trim()
+}
+if ($agentCommits["combat"] -ne "dogfood(codex): verify linked worktree") {
+    throw "combat does not contain the required Codex dogfood commit."
+}
+if ($agentCommits["ui"] -ne "dogfood(claude): verify linked worktree") {
+    throw "ui does not contain the required Claude Code dogfood commit."
+}
+
+$handleWorkspace = $created[0]
+$handleLibrary = Join-Path (Join-Path $handleWorkspace.workspacePath $project.unityRelativePath) "Library"
+$handleFile = Get-ChildItem -LiteralPath $handleLibrary -File -Recurse -Force | Select-Object -First 1
+if ($null -eq $handleFile) {
+    throw "Active-handle dogfood requires at least one generated Library file."
+}
+$registryFile = Join-Path $DataRoot "workspace-registry-v2.json"
+$registryHashBefore = (Get-FileHash -LiteralPath $registryFile -Algorithm SHA256).Hash
+$branchBeforeBusyRemove = (& git.exe -C $project.repositoryRoot rev-parse "refs/heads/$($handleWorkspace.branch)").Trim()
+$held = [IO.File]::Open(
+    $handleFile.FullName,
+    [IO.FileMode]::Open,
+    [IO.FileAccess]::Read,
+    ([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+)
+try {
+    $busyRemove = Invoke-HoneyBeeJson -Arguments @(
+        "workspace", "remove", $handleWorkspace.workspaceId, "--project", $project.projectId
+    ) -AllowFailure
+    if ($busyRemove.ExitCode -eq 0 -or $busyRemove.Payload.code -ne "workspace.in-use") {
+        throw "An open Library handle was not rejected with workspace.in-use."
+    }
+    $busyStatus = Invoke-HoneyBeeJson -Arguments @(
+        "workspace", "status", $handleWorkspace.workspaceId, "--project", $project.projectId
+    )
+    if ($busyStatus.Payload.workspace.state -ne "ready") {
+        throw "Busy removal changed the Workspace registry state."
+    }
+    if (-not (Test-Path -LiteralPath $handleLibrary)) {
+        throw "Busy removal changed the Library junction."
+    }
+    $branchAfterBusyRemove = (& git.exe -C $project.repositoryRoot rev-parse "refs/heads/$($handleWorkspace.branch)").Trim()
+    if ($branchAfterBusyRemove -ne $branchBeforeBusyRemove) {
+        throw "Busy removal moved or removed the branch."
+    }
+    $registryHashAfter = (Get-FileHash -LiteralPath $registryFile -Algorithm SHA256).Hash
+    if ($registryHashAfter -ne $registryHashBefore) {
+        throw "Busy removal changed the registry file."
+    }
+}
+finally {
+    $held.Dispose()
+}
+$activeHandleEvidence = [ordered]@{
+    file = $handleFile.FullName
+    errorCode = $busyRemove.Payload.code
+    registryUnchanged = $registryHashAfter -eq $registryHashBefore
+    branchUnchanged = $branchAfterBusyRemove -eq $branchBeforeBusyRemove
+    libraryPreserved = Test-Path -LiteralPath $handleLibrary
 }
 
 $probeWorkspace = $created[0]
@@ -268,7 +367,7 @@ if (
 $sortedCreate = @($createTimings | Sort-Object)
 $sortedRemove = @($removeTimings | Sort-Object)
 $evidence = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     runId = $RunId
     honeybeeVersion = (& $HoneyBee --version).Trim()
     projectId = $project.projectId
@@ -289,6 +388,9 @@ $evidence = [ordered]@{
         [int64]$afterUnityStorage.status.retainedChildAllocatedBytes
     allocatedBytesFinal = [int64]$afterAttachRemovalStorage.status.capacity.allocatedBytes
     libraryTargets = $libraryTargets
+    repoTopology = $repoTopology
+    agentCommits = $agentCommits
+    activeHandle = $activeHandleEvidence
     branchHeads = $branchHeads
     repeatedRemoveSucceeded = $repeat.ExitCode -eq 0
     finalDoctorReady = [bool]$finalDoctor.Payload.ready

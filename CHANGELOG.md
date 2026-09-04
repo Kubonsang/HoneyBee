@@ -1,5 +1,36 @@
 # Changelog
 
+## 0.1.0-beta.4 - Unreleased
+
+Windows Workspace lifecycle hardening for externally launched tools and reboot repair.
+
+### Added
+
+- Transactional retained removal with prepare, commit, abort, expiry, and durable retry receipts.
+- Exclusive Library-volume locking before registry, junction, or Git worktree mutation.
+- `workspace.in-use` guidance when Unity or another external process holds the Library volume.
+- Linked-worktree, Codex, Claude Code, Unity batchmode, context-isolation, and active-handle dogfood
+  gates.
+
+### Fixed
+
+- Retained attach now reaches identity-checked native stale-mount preparation after reboot.
+- A lost remove response or failed reservation abort remains retryable with the same Workspace
+  removal transaction.
+- Storage cleanup no longer recursively removes a Workspace shell containing entries it does not
+  own.
+- Failed acquire removes only the empty pre-broker Workspace shell instead of leaving it behind.
+- Cache preparation refuses to publish a parent unless capacity remains for its first child.
+
+### Validation
+
+- A real Unity project sustained four concurrent linked worktrees, distinct Library volumes,
+  Codex and Claude Code commits, two concurrent Unity Editors, dirty and active-handle removal
+  refusal, clean removal, retry, and branch preservation.
+- The elevated create → work → shutdown/reboot → repair → Unity → remove gate passed on Windows 11
+  with the retained child identity, authored Git data, and branch preserved and no disposable
+  storage residuals after removal.
+
 ## 0.1.0-beta.2 - Unreleased
 
 Windows CLI lifecycle hardening before real-project dogfood.
