@@ -15,6 +15,8 @@ if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".
 const output = path.join(appRoot, outputDirectory);
 const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 const compatibilityManifest = path.join(appRoot, "resources", "component-compatibility-v1.json");
+const brandPng = path.join(appRoot, "resources", "brand", "honeybee.png");
+const windowsIcon = path.join(appRoot, "resources", "brand", "honeybee.ico");
 const require = createRequire(import.meta.url);
 const nodePtyRoot = path.dirname(require.resolve("node-pty/package.json"));
 const nodeAddonApiRoot = path.join(path.dirname(nodePtyRoot), "node-addon-api");
@@ -31,10 +33,18 @@ assertOwned(output, appRoot);
 await access(path.join(bundledTools, "unity-workspace-storage.exe"));
 await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
 await access(compatibilityManifest);
+await access(brandPng);
+await access(windowsIcon);
 const preparedTools = JSON.parse(await readFile(path.join(bundledTools, "manifest.json"), "utf8"));
 const compatibility = JSON.parse(await readFile(compatibilityManifest, "utf8"));
+const desktopPackage = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
+if (compatibility.honeybeeVersion !== desktopPackage.version) {
+  throw new Error("Desktop package version differs from the component compatibility manifest.");
+}
 const approvedStorage = compatibility.workspaceStorage?.find(
-  (release) => release.version === preparedTools.workspaceStorageVersion,
+  (release) =>
+    release.version === preparedTools.workspaceStorageVersion &&
+    release.honeybeeVersion === desktopPackage.version,
 );
 if (approvedStorage === undefined) {
   throw new Error("Prepared workspace-storage version is absent from the compatibility manifest.");
@@ -83,7 +93,6 @@ for (const entry of await (
   }
 }
 
-const desktopPackage = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
 const electronVersion = String(desktopPackage.devDependencies.electron).replace(/^[^\d]*/u, "");
 await writeFile(
   path.join(staging, "package.json"),
@@ -112,7 +121,8 @@ const paths = await packager({
   out: output,
   overwrite: true,
   asar: { unpack: "**/node_modules/node-pty/prebuilds/win32-x64/**/*" },
-  extraResource: [bundledTools, compatibilityManifest],
+  extraResource: [bundledTools, compatibilityManifest, brandPng],
+  icon: windowsIcon,
   appCopyright: "Copyright HoneyBee contributors",
   win32metadata: {
     CompanyName: "HoneyBee",

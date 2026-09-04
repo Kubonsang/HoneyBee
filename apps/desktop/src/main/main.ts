@@ -1,36 +1,111 @@
 import { execFile } from "node:child_process";
-import { writeFile } from "node:fs/promises";
+import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
-import { HoneyBeeWorkspaceCore, type WorkspaceViewV1 } from "@honeybee/core";
-import { app, BrowserWindow, ipcMain, Menu } from "electron";
+import { HoneyBeeWorkspaceCore, type ProjectRecordV2, type WorkspaceViewV1 } from "@honeybee/core";
+import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 
 import {
+  DesktopCloneRequestV1Schema,
+  DesktopExternalLaunchRequestV1Schema,
+  DesktopFolderPickerRequestV1Schema,
   DesktopGitDiffRequestV1Schema,
   DesktopIpcChannels,
+  DesktopProjectPathRequestV1Schema,
   DesktopProjectRequestV1Schema,
+  DesktopProjectSetupRequestV1Schema,
+  DesktopProjectUnityLaunchRequestV1Schema,
   DesktopPtyCreateRequestV1Schema,
   DesktopPtyResizeRequestV1Schema,
   DesktopPtySessionRequestV1Schema,
   DesktopPtySnapshotRequestV1Schema,
   DesktopPtyWriteRequestV1Schema,
+  DesktopWindowActionRequestV1Schema,
   DesktopWorkspaceCreateRequestV1Schema,
   DesktopWorkspaceRequestV1Schema,
+  type DesktopProjectV2,
+  type DesktopWorkspaceV2,
 } from "../shared/ipc.js";
+import { desktopError, DesktopMainError } from "./desktop-errors.js";
+import { launchExternalTool, resolveExternalTool } from "./external-tools.js";
+import {
+  cloneUnityProject,
+  discoverProjectCandidates,
+  inspectUnityProject,
+  readUnityVersion,
+} from "./project-onboarding.js";
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
 
 const execFileAsync = promisify(execFile);
 const core = new HoneyBeeWorkspaceCore();
 const ptySessions = new DesktopPtySessionManager();
-const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v1";
+const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v2";
+const captureDirectory = process.env.HONEYBEE_DESKTOP_CAPTURE_DIR;
+const captureMode = captureDirectory !== undefined;
+const fixtureMode = smokeMode || captureMode;
+const captureWidth = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_WIDTH ?? 1280);
+const captureHeight = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_HEIGHT ?? 820);
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
 const MAX_DIFF_BYTES = 1024 * 1024;
 let mainWindow: BrowserWindow | undefined;
 
-if (smokeMode) app.disableHardwareAcceleration();
+const smokeProject: DesktopProjectV2 = {
+  projectId: "smoke-project",
+  label: "GKF_",
+  unityProjectPath: "C:\\Unity\\GKF_",
+  unityRelativePath: "",
+  workspaceRoot: "D:\\HoneyBee\\GKF_",
+  cacheState: "ready",
+  unityVersion: "6000.0.42f1",
+};
+let smokeWorkspaces: DesktopWorkspaceV2[] = [
+  {
+    workspaceId: "smoke-combat",
+    projectId: smokeProject.projectId,
+    name: "combat",
+    workspacePath: "D:\\HoneyBee\\GKF_\\combat",
+    state: "ready",
+    available: true,
+    libraryConnected: true,
+    branch: "main",
+    baseCommit: "a1b2c3d4",
+    git: { branch: "main", head: "a1b2c3d4", dirty: false, changes: [] },
+  },
+  {
+    workspaceId: "smoke-ui",
+    projectId: smokeProject.projectId,
+    name: "ui",
+    workspacePath: "D:\\HoneyBee\\GKF_\\ui",
+    state: "ready",
+    available: true,
+    libraryConnected: true,
+    branch: "develop",
+    baseCommit: "b2c3d4e5",
+    git: {
+      branch: "develop",
+      head: "b2c3d4e5",
+      dirty: true,
+      changes: [" M Assets/UI/Hud.prefab", "?? Assets/UI/Hud.prefab.meta"],
+    },
+  },
+  {
+    workspaceId: "smoke-enemy",
+    projectId: smokeProject.projectId,
+    name: "enemy-ai",
+    workspacePath: "D:\\HoneyBee\\GKF_\\enemy-ai",
+    state: "repair-required",
+    available: false,
+    libraryConnected: false,
+    branch: "feature/ai",
+    baseCommit: "c3d4e5f6",
+    git: { branch: "feature/ai", head: "c3d4e5f6", dirty: false, changes: [] },
+  },
+];
+
+if (fixtureMode) app.disableHardwareAcceleration();
 
 const writeSmokeStage = async (stage: string): Promise<void> => {
   if (smokeResultPath === undefined) return;
@@ -40,29 +115,52 @@ const writeSmokeStage = async (stage: string): Promise<void> => {
   await writeFile(target, `${JSON.stringify({ stage })}\n`, "utf8");
 };
 
-const projectView = (project: Awaited<ReturnType<HoneyBeeWorkspaceCore["cacheStatus"]>>) => ({
+const storageCommand = async (): Promise<string> => {
+  const target = app.isPackaged
+    ? path.join(process.resourcesPath, "win32-x64", "unity-workspace-storage.exe")
+    : path.join(app.getAppPath(), ".tools", "win32-x64", "unity-workspace-storage.exe");
+  await access(target).catch((cause: unknown) => {
+    throw new DesktopMainError(
+      "storage.command-not-found",
+      `workspace-storage executable was not found: ${target}`,
+      ["Run the packaged HoneyBee Desktop build or prepare the pinned storage tools."],
+      { cause },
+    );
+  });
+  return target;
+};
+
+const projectView = async (project: ProjectRecordV2): Promise<DesktopProjectV2> => ({
   projectId: project.projectId,
   label: project.label,
   unityProjectPath: project.unityProjectPath,
+  unityRelativePath: project.unityRelativePath,
   workspaceRoot: project.workspaceRoot,
-  cacheState: project.cache === undefined ? ("missing" as const) : ("ready" as const),
+  cacheState: project.cache === undefined ? "missing" : "ready",
+  unityVersion: await readUnityVersion(project.unityProjectPath),
 });
 
-const workspaceView = (workspace: WorkspaceViewV1) => ({
+const workspaceView = (workspace: WorkspaceViewV1): DesktopWorkspaceV2 => ({
   workspaceId: workspace.workspaceId,
   projectId: workspace.projectId,
   name: workspace.name,
   workspacePath: workspace.workspacePath,
   state: workspace.state,
   available: workspace.available,
+  libraryConnected: workspace.libraryConnected,
   branch: workspace.branch,
   baseCommit: workspace.baseCommit,
-  git: workspace.git ?? null,
+  git:
+    workspace.git === undefined ? null : { ...workspace.git, changes: [...workspace.git.changes] },
 });
 
 const workspaceFor = async (projectId: string, workspaceId: string): Promise<WorkspaceViewV1> => {
   const workspace = await core.workspaceStatus(workspaceId, projectId);
-  if (workspace.projectId !== projectId) throw new Error("Workspace project identity mismatch.");
+  if (workspace.projectId !== projectId)
+    throw new DesktopMainError(
+      "workspace.project-mismatch",
+      "Workspace project identity mismatch.",
+    );
   return workspace;
 };
 
@@ -78,7 +176,10 @@ const normalizedDiffPath = (value: string | undefined): string | undefined => {
     normalized === ".." ||
     normalized.startsWith("../")
   ) {
-    throw new Error("Diff path must stay inside the Workspace.");
+    throw new DesktopMainError(
+      "git.diff-path-invalid",
+      "Diff path must stay inside the Workspace.",
+    );
   }
   return normalized;
 };
@@ -86,24 +187,27 @@ const normalizedDiffPath = (value: string | undefined): string | undefined => {
 const readDiff = async (workspace: WorkspaceViewV1, requestedPath?: string) => {
   const relativePath = normalizedDiffPath(requestedPath);
   const safeDirectory = workspace.workspacePath.replaceAll("\\", "/");
-  const args = [
-    "-c",
-    `safe.directory=${safeDirectory}`,
-    "diff",
-    "--no-ext-diff",
-    "--unified=3",
-    "HEAD",
-    "--",
-    ...(relativePath === undefined ? [] : [relativePath]),
-  ];
-  const { stdout } = await execFileAsync("git.exe", args, {
-    cwd: workspace.workspacePath,
-    encoding: "utf8",
-    timeout: 30_000,
-    maxBuffer: 2 * MAX_DIFF_BYTES,
-    windowsHide: true,
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-  });
+  const { stdout } = await execFileAsync(
+    "git.exe",
+    [
+      "-c",
+      `safe.directory=${safeDirectory}`,
+      "diff",
+      "--no-ext-diff",
+      "--unified=3",
+      "HEAD",
+      "--",
+      ...(relativePath === undefined ? [] : [relativePath]),
+    ],
+    {
+      cwd: workspace.workspacePath,
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 2 * MAX_DIFF_BYTES,
+      windowsHide: true,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    },
+  );
   const bytes = Buffer.from(stdout, "utf8");
   const truncated = bytes.byteLength > MAX_DIFF_BYTES;
   return {
@@ -114,33 +218,256 @@ const readDiff = async (workspace: WorkspaceViewV1, requestedPath?: string) => {
   };
 };
 
-const safeHandler =
-  <T>(handler: (value: unknown) => Promise<T> | T) =>
-  async (_event: Electron.IpcMainInvokeEvent, value?: unknown): Promise<T> =>
-    handler(value);
+const handler =
+  <T>(operation: (value: unknown, event: Electron.IpcMainInvokeEvent) => Promise<T> | T) =>
+  async (event: Electron.IpcMainInvokeEvent, value?: unknown) => {
+    try {
+      return { ok: true as const, value: await operation(value, event) };
+    } catch (reason) {
+      return { ok: false as const, error: desktopError(reason) };
+    }
+  };
 
 const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.projects,
-    safeHandler(async () =>
-      [...(await core.listProjects())]
-        .sort((left, right) => left.label.localeCompare(right.label))
-        .map(projectView),
+    handler(async () => {
+      if (fixtureMode) return [smokeProject];
+      return Promise.all(
+        [...(await core.listProjects())]
+          .sort((a, b) => a.label.localeCompare(b.label))
+          .map(projectView),
+      );
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectCandidates,
+    handler(async () => {
+      if (fixtureMode)
+        return [
+          {
+            source: "honeybee" as const,
+            label: "GKF_",
+            path: smokeProject.unityProjectPath,
+            unityVersion: smokeProject.unityVersion,
+            registeredProjectId: smokeProject.projectId,
+            setupState: "ready" as const,
+          },
+          {
+            source: "unity-hub" as const,
+            label: "NetRPG",
+            path: "C:\\Unity\\NetRPG",
+            unityVersion: "6000.0.42f1",
+            registeredProjectId: null,
+            setupState: "setup-required" as const,
+          },
+        ];
+      const hubFile =
+        process.env.APPDATA === undefined
+          ? undefined
+          : path.join(process.env.APPDATA, "UnityHub", "projects-v1.json");
+      return discoverProjectCandidates(await core.listProjects(), hubFile);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectInspect,
+    handler(async (value) => {
+      const request = DesktopProjectPathRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          label: path.basename(request.path),
+          path: request.path,
+          repositoryRoot: request.path,
+          defaultWorkspaceRoot: `${request.path}-workspaces`,
+          unityVersion: "6000.0.42f1",
+          registeredProjectId: null,
+          readyForSetup: true,
+          checks: [
+            {
+              code: "project.unity-layout",
+              status: "pass" as const,
+              message: "Unity project layout is valid.",
+              remediation: [],
+            },
+            {
+              code: "cache.source-library",
+              status: "pass" as const,
+              message: "The source Library is present.",
+              remediation: [],
+            },
+            {
+              code: "cache.library-ignored",
+              status: "pass" as const,
+              message: "Library is ignored by Git.",
+              remediation: [],
+            },
+          ],
+        };
+      return inspectUnityProject(request.path, await core.listProjects());
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectPickFolder,
+    handler(async (value) => {
+      const request = DesktopFolderPickerRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return request.kind === "workspace-root"
+          ? "D:\\HoneyBee\\NetRPG"
+          : request.kind === "clone-destination"
+            ? `C:\\Unity\\${request.childName ?? "Game"}`
+            : "C:\\Unity\\NetRPG";
+      if (mainWindow === undefined)
+        throw new DesktopMainError(
+          "desktop.window-unavailable",
+          "The Desktop window is unavailable.",
+        );
+      const result = await dialog.showOpenDialog(mainWindow, {
+        title:
+          request.kind === "unity-project"
+            ? "Select Unity project"
+            : request.kind === "workspace-root"
+              ? "Select Workspace root"
+              : "Select clone parent folder",
+        ...(request.defaultPath === undefined ? {} : { defaultPath: request.defaultPath }),
+        properties: [
+          "openDirectory",
+          ...(request.kind === "clone-destination" ? ["createDirectory" as const] : []),
+        ],
+      });
+      const selected = result.canceled ? null : (result.filePaths[0] ?? null);
+      return selected !== null &&
+        request.kind === "clone-destination" &&
+        request.childName !== undefined
+        ? path.join(selected, request.childName)
+        : selected;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectClone,
+    handler(async (value) => {
+      const request = DesktopCloneRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          path: request.destination,
+          label: path.basename(request.destination),
+          unityVersion: "6000.0.42f1",
+        };
+      return cloneUnityProject(request.url, request.destination);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectSetup,
+    handler(async (value) => {
+      const request = DesktopProjectSetupRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          ...smokeProject,
+          projectId: "smoke-setup",
+          label: request.label ?? path.basename(request.path),
+          unityProjectPath: request.path,
+          workspaceRoot: request.workspaceRoot,
+        };
+      const inspection = await inspectUnityProject(request.path, await core.listProjects());
+      if (!inspection.readyForSetup)
+        throw new DesktopMainError(
+          "project.setup-blocked",
+          "Project setup checks have not passed.",
+          inspection.checks
+            .filter((item) => item.status !== "pass")
+            .flatMap((item) => item.remediation),
+        );
+      const command = await storageCommand();
+      const report = await core.doctor({ storageCommand: command });
+      const blockers = report.checks.filter(
+        (item) =>
+          item.status === "fail" &&
+          (item.code.startsWith("system.") ||
+            item.code.startsWith("git.") ||
+            item.code.startsWith("storage.")),
+      );
+      if (blockers.length > 0)
+        throw new DesktopMainError(
+          "project.setup-blocked",
+          blockers.map((item) => item.message).join(" "),
+          blockers.flatMap((item) => item.remediation ?? []),
+        );
+      const project = await core.initProject({
+        unityProjectPath: request.path,
+        workspaceRoot: request.workspaceRoot,
+        storageCommand: command,
+        ...(request.label === undefined ? {} : { label: request.label }),
+      });
+      return projectView(await core.prepareCache(project.projectId));
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.cachePrepare,
+    handler(async (value) => {
+      const request = DesktopProjectRequestV1Schema.parse(value);
+      if (fixtureMode) return smokeProject;
+      return projectView(await core.prepareCache(request.projectId));
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.doctor,
+    handler(async () =>
+      fixtureMode
+        ? {
+            schemaVersion: 1 as const,
+            ready: true,
+            summary: { pass: 3, warning: 0, fail: 0 },
+            checks: [
+              {
+                code: "storage.command",
+                status: "pass" as const,
+                message: "workspace-storage executable is present.",
+              },
+              {
+                code: "storage.service",
+                status: "pass" as const,
+                message: "UnityWorkspaceStorage service is running.",
+              },
+              {
+                code: "storage.install-receipt",
+                status: "pass" as const,
+                message: "Storage install receipt is valid.",
+              },
+            ],
+          }
+        : core.doctor({ storageCommand: await storageCommand() }),
     ),
   );
   ipcMain.handle(
     DesktopIpcChannels.workspaces,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopProjectRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return smokeWorkspaces.filter((item) => item.projectId === request.projectId);
       return [...(await core.listWorkspaces(request.projectId))]
-        .sort((left, right) => left.name.localeCompare(right.name))
+        .sort((a, b) => a.name.localeCompare(b.name))
         .map(workspaceView);
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.workspaceCreate,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopWorkspaceCreateRequestV1Schema.parse(value);
+      if (fixtureMode) {
+        const created: DesktopWorkspaceV2 = {
+          workspaceId: `smoke-${request.name}`,
+          projectId: request.projectId,
+          name: request.name,
+          workspacePath: `${smokeProject.workspaceRoot}\\${request.name}`,
+          state: "ready",
+          available: true,
+          libraryConnected: true,
+          branch: request.branch,
+          baseCommit: request.base ?? "a1b2c3d4",
+          git: { branch: request.branch, head: "a1b2c3d4", dirty: false, changes: [] },
+        };
+        smokeWorkspaces = [...smokeWorkspaces, created];
+        return created;
+      }
       const workspace = request.existingBranch
         ? await core.attachWorkspace({
             project: request.projectId,
@@ -158,32 +485,119 @@ const registerIpc = (): void => {
   );
   ipcMain.handle(
     DesktopIpcChannels.workspaceRepair,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
+      if (fixtureMode) {
+        smokeWorkspaces = smokeWorkspaces.map((item) =>
+          item.workspaceId === request.workspaceId
+            ? { ...item, state: "ready", available: true, libraryConnected: true }
+            : item,
+        );
+        const repaired = smokeWorkspaces.find((item) => item.workspaceId === request.workspaceId);
+        if (repaired === undefined)
+          throw new DesktopMainError("workspace.not-found", "Workspace was not found.");
+        return repaired;
+      }
       return workspaceView(await core.repairWorkspace(request.workspaceId, request.projectId));
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.workspaceRemove,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
+      if (fixtureMode) {
+        smokeWorkspaces = smokeWorkspaces.filter(
+          (item) => item.workspaceId !== request.workspaceId,
+        );
+        return true;
+      }
       await core.removeWorkspace(request.workspaceId, request.projectId);
       return true;
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.externalLaunch,
+    handler(async (value) => {
+      const request = DesktopExternalLaunchRequestV1Schema.parse(value);
+      if (fixtureMode) return true;
+      const workspace = await workspaceFor(request.projectId, request.workspaceId);
+      if (!workspace.available || workspace.state !== "ready")
+        throw new DesktopMainError(
+          "workspace.repair-required",
+          "Repair this Workspace before opening an external tool.",
+          [`Run honeybee workspace repair "${workspace.name}".`],
+        );
+      const project = await core.cacheStatus(request.projectId);
+      const toolPath =
+        request.tool === "unity"
+          ? path.join(workspace.workspacePath, project.unityRelativePath)
+          : workspace.workspacePath;
+      await launchExternalTool(
+        await resolveExternalTool(request.tool, toolPath),
+        workspace.workspacePath,
+      );
+      return true;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.projectUnityLaunch,
+    handler(async (value) => {
+      const request = DesktopProjectUnityLaunchRequestV1Schema.parse(value);
+      if (fixtureMode) return true;
+      await launchExternalTool(await resolveExternalTool("unity", request.path), request.path);
+      return true;
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.windowAction,
+    handler((value, event) => {
+      const request = DesktopWindowActionRequestV1Schema.parse(value);
+      const window = BrowserWindow.fromWebContents(event.sender);
+      if (window === null)
+        throw new DesktopMainError(
+          "desktop.window-unavailable",
+          "The Desktop window is unavailable.",
+        );
+      if (request.action === "minimize") window.minimize();
+      else if (request.action === "toggle-maximize") {
+        if (window.isMaximized()) window.unmaximize();
+        else window.maximize();
+      } else window.close();
+      return true;
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.gitDiff,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopGitDiffRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          workspaceId: request.workspaceId,
+          ...(request.path === undefined ? {} : { path: request.path }),
+          content:
+            request.path === undefined
+              ? "diff --git a/Assets/UI/Hud.prefab b/Assets/UI/Hud.prefab\n+smoke change"
+              : "+smoke change",
+          truncated: false,
+        };
       return readDiff(await workspaceFor(request.projectId, request.workspaceId), request.path);
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.ptyCreate,
-    safeHandler(async (value) => {
+    handler(async (value) => {
       const request = DesktopPtyCreateRequestV1Schema.parse(value);
+      if (fixtureMode)
+        throw new DesktopMainError(
+          "desktop.smoke-terminal-disabled",
+          "PTY creation is disabled in visual smoke mode.",
+        );
       const workspace = await workspaceFor(request.projectId, request.workspaceId);
-      if (!workspace.available) throw new Error("Repair the Workspace before opening a shell.");
+      if (!workspace.available)
+        throw new DesktopMainError(
+          "workspace.repair-required",
+          "Repair the Workspace before opening a shell.",
+        );
       return ptySessions.create(
         workspace.workspaceId,
         workspace.workspacePath,
@@ -194,28 +608,28 @@ const registerIpc = (): void => {
   );
   ipcMain.handle(
     DesktopIpcChannels.ptySnapshot,
-    safeHandler((value) => {
+    handler((value) => {
       const request = DesktopPtySnapshotRequestV1Schema.parse(value);
       return ptySessions.snapshot(request.sessionId, request.afterCursor);
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.ptyWrite,
-    safeHandler((value) => {
+    handler((value) => {
       const request = DesktopPtyWriteRequestV1Schema.parse(value);
       return ptySessions.write(request.sessionId, request.data);
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.ptyResize,
-    safeHandler((value) => {
+    handler((value) => {
       const request = DesktopPtyResizeRequestV1Schema.parse(value);
       return ptySessions.resize(request.sessionId, request.columns, request.rows);
     }),
   );
   ipcMain.handle(
     DesktopIpcChannels.ptyClose,
-    safeHandler((value) => {
+    handler((value) => {
       const request = DesktopPtySessionRequestV1Schema.parse(value);
       return ptySessions.close(request.sessionId);
     }),
@@ -224,7 +638,6 @@ const registerIpc = (): void => {
 
 const desktopPreloadPath = (): string =>
   fileURLToPath(new URL(/* @vite-ignore */ "../../preload/preload.cjs", import.meta.url));
-
 const loadRenderer = async (window: BrowserWindow): Promise<void> => {
   const developmentUrl = process.env.HONEYBEE_DESKTOP_DEV_URL;
   if (
@@ -239,15 +652,70 @@ const loadRenderer = async (window: BrowserWindow): Promise<void> => {
   );
 };
 
+const captureVisualFixture = async (window: BrowserWindow, directory: string): Promise<void> => {
+  const target = path.resolve(directory);
+  await mkdir(target, { recursive: true });
+  const waitFor = async (selector: string): Promise<void> => {
+    const deadline = Date.now() + 8_000;
+    while (Date.now() < deadline) {
+      if (
+        await window.webContents.executeJavaScript(
+          `Boolean(document.querySelector(${JSON.stringify(selector)}))`,
+        )
+      ) {
+        await new Promise((resolve) => setTimeout(resolve, 150));
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    throw new Error(`Visual fixture timed out: ${selector}`);
+  };
+  const capture = async (name: string): Promise<void> => {
+    await writeFile(
+      path.join(target, `${name}.png`),
+      (await window.webContents.capturePage()).toPNG(),
+    );
+  };
+  const click = async (selector: string): Promise<void> => {
+    await window.webContents.executeJavaScript(
+      `document.querySelector(${JSON.stringify(selector)})?.click()`,
+    );
+  };
+  await waitFor("[data-testid='workspace-workbench']");
+  await click("[data-testid='new-workspace']");
+  await waitFor("[data-testid='workspace-dialog']");
+  await capture("02-create-dialog");
+  await click("[data-testid='workspace-dialog'] header .icon-button");
+  await waitFor("[data-testid='workspace-workbench']");
+  await capture("01-workbench");
+  await click(".breadcrumb-project");
+  await waitFor("[data-testid='project-picker']");
+  await capture("03-project-picker");
+  await click("[data-testid='project-picker'] .project-row:last-child");
+  await waitFor("[data-testid='project-setup']");
+  await capture("04-project-setup");
+  await click(".back-button");
+  await waitFor("[data-testid='project-picker']");
+  await click(".back-button");
+  await waitFor("[data-testid='project-home']");
+  await capture("05-project-home");
+  await click(".locale-button");
+  await capture("06-language-toggle");
+};
+
 const createWindow = async (): Promise<void> => {
   mainWindow = new BrowserWindow({
-    width: 1280,
-    height: 820,
+    width: captureMode ? captureWidth : 1280,
+    height: captureMode ? captureHeight : 820,
     minWidth: 900,
     minHeight: 620,
     show: false,
+    frame: false,
     autoHideMenuBar: true,
-    backgroundColor: "#111715",
+    backgroundColor: "#090c0e",
+    icon: app.isPackaged
+      ? path.join(process.resourcesPath, "honeybee.png")
+      : path.join(app.getAppPath(), "resources", "brand", "honeybee.png"),
     webPreferences: {
       preload: desktopPreloadPath(),
       contextIsolation: true,
@@ -257,28 +725,29 @@ const createWindow = async (): Promise<void> => {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (!smokeMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
+  if (!fixtureMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
   await writeSmokeStage("window-created");
   await loadRenderer(mainWindow);
   await writeSmokeStage("renderer-loaded");
+  if (captureMode && captureDirectory !== undefined) {
+    try {
+      await captureVisualFixture(mainWindow, captureDirectory);
+      process.stdout.write(`HONEYBEE_DESKTOP_CAPTURE_OK ${captureDirectory}\n`);
+      mainWindow.destroy();
+      app.exit(0);
+    } catch (error) {
+      process.stderr.write(
+        `${error instanceof Error ? (error.stack ?? error.message) : String(error)}\n`,
+      );
+      mainWindow.destroy();
+      app.exit(1);
+    }
+    return;
+  }
   if (smokeMode) {
     try {
       const result = (await mainWindow.webContents.executeJavaScript(
-        `new Promise((resolve, reject) => {
-          const deadline = Date.now() + 5000;
-          const inspect = async () => {
-            try {
-              if (window.honeybee && document.querySelector('.app-shell')) {
-                const projects = await window.honeybee.projects();
-                resolve({ ready: true, projects: Array.isArray(projects) });
-                return;
-              }
-              if (Date.now() >= deadline) throw new Error('renderer timeout');
-              setTimeout(() => void inspect(), 50);
-            } catch (error) { reject(error); }
-          };
-          void inspect();
-        })`,
+        `new Promise((resolve, reject) => { const deadline = Date.now() + 8000; const inspect = async () => { try { if (window.honeybee && document.querySelector('.app-shell')) { const projects = await window.honeybee.projects(); resolve({ ready: true, projects: projects.length === 1 }); return; } if (Date.now() >= deadline) throw new Error('renderer timeout'); setTimeout(() => void inspect(), 50); } catch (error) { reject(error); } }; void inspect(); })`,
       )) as { ready?: boolean; projects?: boolean };
       if (result.ready !== true || result.projects !== true)
         throw new Error("invalid smoke result");
@@ -305,10 +774,8 @@ const startDesktop = async (): Promise<void> => {
   registerIpc();
   await createWindow();
 };
-
-if (!app.requestSingleInstanceLock()) {
-  app.quit();
-} else {
+if (!app.requestSingleInstanceLock()) app.quit();
+else {
   app.on("second-instance", () => {
     if (mainWindow?.isMinimized() === true) mainWindow.restore();
     mainWindow?.show();
@@ -322,7 +789,6 @@ if (!app.requestSingleInstanceLock()) {
     app.exit(1);
   });
 }
-
 app.on("activate", () => {
   if (BrowserWindow.getAllWindows().length === 0) void createWindow();
 });

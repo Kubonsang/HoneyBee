@@ -1,6 +1,6 @@
 {
   "name": "honeybee-cli",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.4",
   "private": true,
   "type": "module",
   "files": [
@@ -10,7 +10,8 @@
     "honeybee": "./dist/cli.js"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json --pretty false",
+    "build": "corepack pnpm clean && tsc -p tsconfig.build.json --pretty false",
+    "clean": "node -e \"require('node:fs').rmSync('dist',{recursive:true,force:true})\"",
     "package:win": "corepack pnpm --filter honeybee-desktop prepare:tools && corepack pnpm --filter honeybee-cli... build && node scripts/package.mjs",
     "package:smoke": "corepack pnpm package:win && node scripts/smoke.mjs",
     "start": "node dist/cli.js",

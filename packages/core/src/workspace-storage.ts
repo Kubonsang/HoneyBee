@@ -1,12 +1,14 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { access, lstat, mkdir, readFile, rm } from "node:fs/promises";
+import { access, lstat, mkdir, readFile, rmdir } from "node:fs/promises";
 import path from "node:path";
 
 import {
   WorkspaceCoreError,
+  type StorageDiagnosticV1,
   type StorageLease,
   type StorageParentBuild,
+  type StorageRemovalPreparation,
   type WorkspaceStoragePort,
 } from "./workspace-types.js";
 
@@ -47,9 +49,32 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
       typeof response.error === "object" && response.error !== null
         ? object(response.error, "error")
         : {};
+    const upstreamCode = typeof body.code === "string" ? body.code : undefined;
+    const capacityUnavailable = upstreamCode === "storage-capacity-unavailable";
     throw new WorkspaceCoreError(
-      typeof body.code === "string" ? body.code : "storage.operation-failed",
-      typeof body.message === "string" ? body.message : `${label} failed.`,
+      upstreamCode === "retained-not-found"
+        ? "storage.retained-not-found"
+        : upstreamCode === "retained-in-use"
+          ? "workspace.in-use"
+          : "storage.operation-failed",
+      capacityUnavailable
+        ? "Workspace storage cannot reserve enough disk space for this operation."
+        : typeof body.message === "string"
+          ? body.message
+          : `${label} failed.`,
+      upstreamCode === undefined
+        ? undefined
+        : {
+            upstreamCode,
+            ...(capacityUnavailable
+              ? {
+                  remediation: [
+                    "Remove unused Workspaces or free disk space, then retry.",
+                    "A failed cache prepare keeps the previously registered cache unchanged.",
+                  ],
+                }
+              : {}),
+          },
     );
   }
   return response;
@@ -80,7 +105,9 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
           }
           reject(
             new WorkspaceCoreError(
-              "storage.command-failed",
+              (error as NodeJS.ErrnoException).code === "ENOENT"
+                ? "storage.command-not-found"
+                : "storage.operation-failed",
               stderr.trim().length > 0 ? stderr.trim() : error.message,
               { cause: error },
             ),
@@ -190,14 +217,16 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       }
       return lease;
     } catch (error) {
-      await rm(workspacePath).catch(() => undefined);
+      // Remove only the empty shell we created. Never recursively delete a path
+      // that the broker (or another process) may already have populated.
+      await rmdir(workspacePath).catch(() => undefined);
       throw error;
     }
   }
 
   public async retain(command: string, leaseId: string): Promise<void> {
     await this.#control(command, {
-      schemaVersion: 2,
+      schemaVersion: 3,
       operation: "release",
       requestId: `hb-retain-${randomUUID()}`,
       leaseId,
@@ -212,7 +241,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   ): Promise<StorageLease> {
     return this.#lease(
       await this.#control(command, {
-        schemaVersion: 2,
+        schemaVersion: 3,
         operation: "attach-retained",
         requestId: `hb-attach-${randomUUID()}`,
         runId: consumerId,
@@ -221,13 +250,101 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
-  public async removeRetained(command: string, consumerId: string): Promise<void> {
-    await this.#control(command, {
-      schemaVersion: 2,
-      operation: "remove-retained",
-      requestId: `hb-remove-${randomUUID()}`,
-      runId: consumerId,
-    });
+  public async prepareRetainedRemoval(
+    command: string,
+    consumerId: string,
+    workspaceId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "prepare-retained-removal",
+        requestId: `hb-remove-prepare-${randomUUID()}`,
+        runId: consumerId,
+        workspaceId,
+        transactionId,
+      }),
+      transactionId,
+    );
+  }
+
+  public async commitRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "commit-retained-removal",
+        requestId: `hb-remove-commit-${randomUUID()}`,
+        runId: consumerId,
+        transactionId,
+      }),
+      transactionId,
+    );
+  }
+
+  public async abortRetainedRemoval(
+    command: string,
+    consumerId: string,
+    transactionId: string,
+  ): Promise<StorageRemovalPreparation> {
+    return this.#removal(
+      await this.#control(command, {
+        schemaVersion: 3,
+        operation: "abort-retained-removal",
+        requestId: `hb-remove-abort-${randomUUID()}`,
+        runId: consumerId,
+        transactionId,
+      }),
+      transactionId,
+    );
+  }
+
+  public async diagnose(command: string): Promise<StorageDiagnosticV1> {
+    const response = await run(await this.#controlCommand(command), ["diagnose"]);
+    const diagnostic = object(response.diagnostic, "diagnostic");
+    return {
+      serviceExists: diagnostic.serviceExists === true,
+      ...(typeof diagnostic.serviceState === "string"
+        ? { serviceState: diagnostic.serviceState }
+        : {}),
+      receiptExists: diagnostic.receiptExists === true,
+      receiptValid: diagnostic.receiptValid === true,
+      ...(typeof diagnostic.componentVersion === "string"
+        ? { componentVersion: diagnostic.componentVersion }
+        : {}),
+      ...(typeof diagnostic.workspaceRoot === "string"
+        ? { workspaceRoot: diagnostic.workspaceRoot }
+        : {}),
+      workspaceRootAccessible: diagnostic.workspaceRootAccessible === true,
+      executableExists: diagnostic.executableExists === true,
+      executableDigestMatches: diagnostic.executableDigestMatches === true,
+      userMatches: diagnostic.userMatches === true,
+    };
+  }
+
+  public async status(
+    command: string,
+  ): Promise<Readonly<{ parentCount: number; manualRecoveryRequired: boolean }>> {
+    const response = await run(command, [
+      "workspace",
+      "status",
+      "--schema",
+      "2",
+      "--request-id",
+      `hb-status-${randomUUID()}`,
+    ]);
+    const status = object(response.status, "status");
+    return {
+      parentCount:
+        typeof status.parentCount === "number" && Number.isSafeInteger(status.parentCount)
+          ? status.parentCount
+          : 0,
+      manualRecoveryRequired: status.manualRecoveryRequired === true,
+    };
   }
 
   #lease(response: JsonObject): StorageLease {
@@ -245,6 +362,30 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       ...(typeof metrics?.childReadyAllocatedBytes === "number"
         ? { allocatedBytes: metrics.childReadyAllocatedBytes }
         : {}),
+    };
+  }
+
+  #removal(response: JsonObject, expectedTransactionId: string): StorageRemovalPreparation {
+    const removal = object(response.removal, "removal");
+    const transactionId = text(removal.transactionId, "removal.transactionId");
+    const state = text(removal.state, "removal.state");
+    if (
+      transactionId !== expectedTransactionId ||
+      !["prepared", "committed", "aborted"].includes(state)
+    ) {
+      throw new WorkspaceCoreError(
+        "storage.invalid-response",
+        "Workspace broker returned an unexpected removal transaction.",
+      );
+    }
+    return {
+      transactionId,
+      runId: text(removal.runId, "removal.runId"),
+      ...(typeof removal.leaseId === "string" && removal.leaseId.length > 0
+        ? { leaseId: removal.leaseId }
+        : {}),
+      state: state as StorageRemovalPreparation["state"],
+      ...(typeof removal.expiresAt === "string" ? { expiresAt: removal.expiresAt } : {}),
     };
   }
 
@@ -291,6 +432,11 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   async #control(command: string, request: JsonObject): Promise<JsonObject> {
+    const controlCommand = await this.#controlCommand(command);
+    return run(controlCommand, ["control"], JSON.stringify(request));
+  }
+
+  async #controlCommand(command: string): Promise<string> {
     const explicit = process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL;
     const controlCommand =
       explicit === undefined
@@ -305,6 +451,6 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
         { cause: error },
       );
     }
-    return run(controlCommand, ["control"], JSON.stringify(request));
+    return controlCommand;
   }
 }

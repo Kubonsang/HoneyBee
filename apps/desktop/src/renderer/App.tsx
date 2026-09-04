@@ -1,397 +1,352 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { ArrowLeft, Warning } from "@phosphor-icons/react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import type { DesktopGitDiffV1, DesktopProjectV1, DesktopWorkspaceV1 } from "../shared/ipc.js";
+import {
+  DesktopApiError,
+  type DesktopDoctorReportV1,
+  type DesktopProjectCandidateV1,
+  type DesktopProjectInspectionV1,
+  type DesktopProjectV2,
+  type DesktopWorkspaceCreateRequestV1,
+  type DesktopWorkspaceV2,
+} from "../shared/ipc.js";
+import { AppFrame } from "./components/AppFrame.js";
+import { CloneProject } from "./components/CloneProject.js";
+import { ProjectHome } from "./components/ProjectHome.js";
+import { ProjectPicker } from "./components/ProjectPicker.js";
+import { ProjectSetup } from "./components/ProjectSetup.js";
+import { WorkspaceDialog } from "./components/WorkspaceDialog.js";
+import { WorkspaceWorkbench } from "./components/WorkspaceWorkbench.js";
+import { message, type Locale, type MessageKey } from "./i18n.js";
+import { selectInitialProject } from "./navigation.js";
 
-const changedPath = (line: string): string => {
-  const value = line.length > 3 ? line.slice(3) : line;
-  const rename = value.lastIndexOf(" -> ");
-  return rename < 0 ? value : value.slice(rename + 4);
+type Route = "loading" | "home" | "picker" | "clone" | "setup" | "workbench";
+const RECENT_PROJECT_KEY = "honeybee.desktop.recent-project.v1";
+const LOCALE_KEY = "honeybee.desktop.locale.v1";
+
+const initialLocale = (): Locale => {
+  const saved = localStorage.getItem(LOCALE_KEY);
+  if (saved === "ko" || saved === "en") return saved;
+  return navigator.language.toLocaleLowerCase().startsWith("ko") ? "ko" : "en";
 };
 
-function WorkspaceTerminal({
-  projectId,
-  workspace,
-}: {
-  projectId: string;
-  workspace: DesktopWorkspaceV1;
-}) {
-  const host = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    if (host.current === null || !workspace.available) return;
-    const terminal = new Terminal({
-      convertEol: true,
-      cursorBlink: true,
-      fontFamily: "Cascadia Mono, Consolas, monospace",
-      fontSize: 13,
-      theme: { background: "#0d1311", foreground: "#d7e4dc", cursor: "#f2b84b" },
-    });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host.current);
-    fit.fit();
-    let stopped = false;
-    let sessionId: string | undefined;
-    let cursor = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const input = terminal.onData((data) => {
-      if (sessionId !== undefined) void window.honeybee.writePty({ sessionId, data });
-    });
-    const resize = (): void => {
-      fit.fit();
-      if (sessionId !== undefined) {
-        void window.honeybee.resizePty({ sessionId, columns: terminal.cols, rows: terminal.rows });
-      }
-    };
-    const observer = new ResizeObserver(resize);
-    observer.observe(host.current);
-    const poll = async (): Promise<void> => {
-      if (stopped || sessionId === undefined) return;
-      try {
-        const snapshot = await window.honeybee.ptySnapshot({ sessionId, afterCursor: cursor });
-        if (snapshot.truncated) terminal.writeln("\r\n[earlier terminal output was truncated]");
-        for (const chunk of snapshot.chunks) terminal.write(chunk.data);
-        cursor = snapshot.cursor;
-        if (snapshot.session.state === "exited") {
-          terminal.writeln(`\r\n[PowerShell exited ${snapshot.session.exitCode ?? ""}]`);
-          return;
-        }
-        timer = setTimeout(() => void poll(), 100);
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Terminal polling failed.");
-      }
-    };
-    void window.honeybee
-      .createPty({
-        projectId,
-        workspaceId: workspace.workspaceId,
-        columns: terminal.cols,
-        rows: terminal.rows,
-      })
-      .then((session) => {
-        if (stopped) {
-          void window.honeybee.closePty({ sessionId: session.sessionId });
-          return;
-        }
-        sessionId = session.sessionId;
-        terminal.focus();
-        void poll();
-      })
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : "Could not open PowerShell."),
-      );
-    return () => {
-      stopped = true;
-      if (timer !== undefined) clearTimeout(timer);
-      observer.disconnect();
-      input.dispose();
-      terminal.dispose();
-      if (sessionId !== undefined) void window.honeybee.closePty({ sessionId });
-    };
-  }, [projectId, workspace.available, workspace.workspaceId]);
-
-  return (
-    <section className="terminal-panel">
-      {!workspace.available && <p>Repair this Workspace before opening a shell.</p>}
-      {error !== undefined && <p className="error">{error}</p>}
-      <div className="terminal-host" ref={host} />
-    </section>
-  );
-}
-
 export function App() {
-  const [projects, setProjects] = useState<readonly DesktopProjectV1[]>([]);
+  const initialized = useRef(false);
+  const [locale, updateLocale] = useState<Locale>(initialLocale);
+  const [route, setRoute] = useState<Route>("loading");
+  const [projects, setProjects] = useState<readonly DesktopProjectV2[]>([]);
+  const [candidates, setCandidates] = useState<readonly DesktopProjectCandidateV1[]>([]);
   const [projectId, setProjectId] = useState<string>();
-  const [workspaces, setWorkspaces] = useState<readonly DesktopWorkspaceV1[]>([]);
+  const [workspaces, setWorkspaces] = useState<readonly DesktopWorkspaceV2[]>([]);
   const [workspaceId, setWorkspaceId] = useState<string>();
-  const [name, setName] = useState("");
-  const [branch, setBranch] = useState("");
-  const [existingBranch, setExistingBranch] = useState(false);
-  const [diff, setDiff] = useState<DesktopGitDiffV1>();
-  const [selectedPath, setSelectedPath] = useState<string>();
-  const [tab, setTab] = useState<"changes" | "terminal">("changes");
+  const [inspection, setInspection] = useState<DesktopProjectInspectionV1>();
+  const [doctor, setDoctor] = useState<DesktopDoctorReportV1>();
+  const [workspaceRoot, setWorkspaceRoot] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
+  const [error, setError] = useState<{ message: string; remediation: readonly string[] }>();
   const project = projects.find((item) => item.projectId === projectId);
-  const workspace = workspaces.find((item) => item.workspaceId === workspaceId);
-  const changes = useMemo(() => workspace?.git?.changes ?? [], [workspace]);
+  const t = useCallback((key: MessageKey) => message(locale, key), [locale]);
 
-  const refreshProjects = async (): Promise<void> => {
+  const setLocale = (next: Locale): void => {
+    localStorage.setItem(LOCALE_KEY, next);
+    updateLocale(next);
+  };
+  const reportError = (reason: unknown): void => {
+    if (reason instanceof DesktopApiError)
+      setError({ message: reason.message, remediation: reason.remediation });
+    else
+      setError({
+        message: reason instanceof Error ? reason.message : String(reason),
+        remediation: [],
+      });
+  };
+  const run = (operation: () => Promise<void>): void => {
+    setBusy(true);
+    setError(undefined);
+    void operation()
+      .catch(reportError)
+      .finally(() => setBusy(false));
+  };
+
+  const refreshProjects = useCallback(async (): Promise<readonly DesktopProjectV2[]> => {
     const next = await window.honeybee.projects();
     setProjects(next);
-    setProjectId((current) => current ?? next[0]?.projectId);
-  };
-
-  const refreshWorkspaces = async (selectedProject = projectId): Promise<void> => {
-    if (selectedProject === undefined) return;
-    const next = await window.honeybee.workspaces({ projectId: selectedProject });
-    setWorkspaces(next);
-    setWorkspaceId((current) =>
-      current !== undefined && next.some((item) => item.workspaceId === current)
-        ? current
-        : next[0]?.workspaceId,
-    );
-  };
+    return next;
+  }, []);
+  const refreshWorkspaces = useCallback(
+    async (selectedProject = projectId): Promise<void> => {
+      if (selectedProject === undefined) return;
+      const next = await window.honeybee.workspaces({ projectId: selectedProject });
+      setWorkspaces(next);
+      setWorkspaceId((current) =>
+        current !== undefined && next.some((item) => item.workspaceId === current)
+          ? current
+          : next[0]?.workspaceId,
+      );
+    },
+    [projectId],
+  );
+  const openProject = useCallback(
+    (selected: DesktopProjectV2): void => {
+      localStorage.setItem(RECENT_PROJECT_KEY, selected.projectId);
+      setProjectId(selected.projectId);
+      setRoute("workbench");
+      void refreshWorkspaces(selected.projectId).catch(reportError);
+    },
+    [refreshWorkspaces],
+  );
 
   useEffect(() => {
-    void refreshProjects().catch((reason: unknown) =>
-      setError(reason instanceof Error ? reason.message : "Could not load projects."),
-    );
+    if (initialized.current) return;
+    initialized.current = true;
+    void window.honeybee
+      .projects()
+      .then(async (next) => {
+        setProjects(next);
+        if (next.length === 0) {
+          setRoute("home");
+          return;
+        }
+        const selected = selectInitialProject(next, localStorage.getItem(RECENT_PROJECT_KEY));
+        if (selected !== undefined) {
+          localStorage.setItem(RECENT_PROJECT_KEY, selected.projectId);
+          setProjectId(selected.projectId);
+          const nextWorkspaces = await window.honeybee.workspaces({
+            projectId: selected.projectId,
+          });
+          setWorkspaces(nextWorkspaces);
+          setWorkspaceId(nextWorkspaces[0]?.workspaceId);
+          setRoute("workbench");
+        } else setRoute("picker");
+      })
+      .catch((reason: unknown) => {
+        reportError(reason);
+        setRoute("home");
+      });
   }, []);
 
   useEffect(() => {
-    setDiff(undefined);
-    setSelectedPath(undefined);
-    void refreshWorkspaces(projectId).catch((reason: unknown) =>
-      setError(reason instanceof Error ? reason.message : "Could not load Workspaces."),
-    );
-  }, [projectId]);
+    if (route !== "workbench" || projectId === undefined) return;
+    const refresh = (): void => {
+      if (document.visibilityState === "visible")
+        void refreshWorkspaces(projectId).catch(reportError);
+    };
+    const timer = window.setInterval(refresh, 5_000);
+    window.addEventListener("focus", refresh);
+    document.addEventListener("visibilitychange", refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refresh);
+      document.removeEventListener("visibilitychange", refresh);
+    };
+  }, [projectId, refreshWorkspaces, route]);
 
-  const run = async (operation: () => Promise<void>): Promise<void> => {
-    setBusy(true);
-    setError(undefined);
-    try {
-      await operation();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    } finally {
-      setBusy(false);
-    }
+  const showPicker = (): void => {
+    run(async () => {
+      setCandidates(await window.honeybee.projectCandidates());
+      setRoute("picker");
+    });
   };
-
-  const createWorkspace = (): void => {
-    if (projectId === undefined || name.trim() === "" || branch.trim() === "") return;
-    void run(async () => {
-      const created = await window.honeybee.createWorkspace({
-        projectId,
-        name: name.trim(),
-        branch: branch.trim(),
-        existingBranch,
+  const inspectPath = (selectedPath: string): void => {
+    run(async () => {
+      const [nextInspection, nextDoctor] = await Promise.all([
+        window.honeybee.inspectProject({ path: selectedPath }),
+        window.honeybee.doctor(),
+      ]);
+      setInspection(nextInspection);
+      setDoctor(nextDoctor);
+      setWorkspaceRoot(nextInspection.defaultWorkspaceRoot);
+      setRoute("setup");
+    });
+  };
+  const chooseCandidate = (candidate: DesktopProjectCandidateV1): void => {
+    const registered =
+      candidate.registeredProjectId === null
+        ? undefined
+        : projects.find((item) => item.projectId === candidate.registeredProjectId);
+    if (registered?.cacheState === "ready") openProject(registered);
+    else inspectPath(candidate.path);
+  };
+  const browseProject = (): void => {
+    run(async () => {
+      const selected = await window.honeybee.pickFolder({ kind: "unity-project" });
+      if (selected !== null) {
+        const [nextInspection, nextDoctor] = await Promise.all([
+          window.honeybee.inspectProject({ path: selected }),
+          window.honeybee.doctor(),
+        ]);
+        setInspection(nextInspection);
+        setDoctor(nextDoctor);
+        setWorkspaceRoot(nextInspection.defaultWorkspaceRoot);
+        setRoute("setup");
+      }
+    });
+  };
+  const cloneProject = (url: string, destination: string): void => {
+    run(async () => {
+      const cloned = await window.honeybee.cloneProject({ url, destination });
+      const [nextInspection, nextDoctor] = await Promise.all([
+        window.honeybee.inspectProject({ path: cloned.path }),
+        window.honeybee.doctor(),
+      ]);
+      setInspection(nextInspection);
+      setDoctor(nextDoctor);
+      setWorkspaceRoot(nextInspection.defaultWorkspaceRoot);
+      setRoute("setup");
+    });
+  };
+  const checkSetup = (): void => {
+    if (inspection !== undefined) inspectPath(inspection.path);
+  };
+  const setupProject = (): void => {
+    if (inspection === undefined) return;
+    run(async () => {
+      const setup = await window.honeybee.setupProject({
+        path: inspection.path,
+        workspaceRoot: workspaceRoot.trim(),
+        label: inspection.label,
       });
-      setName("");
-      setBranch("");
-      await refreshWorkspaces(projectId);
+      const next = await refreshProjects();
+      const selected = next.find((item) => item.projectId === setup.projectId) ?? setup;
+      openProject(selected);
+    });
+  };
+  const createWorkspace = (request: DesktopWorkspaceCreateRequestV1): void => {
+    run(async () => {
+      const created = await window.honeybee.createWorkspace(request);
+      setDialogOpen(false);
+      await refreshWorkspaces(request.projectId);
       setWorkspaceId(created.workspaceId);
     });
   };
-
-  const loadDiff = (path?: string): void => {
-    if (projectId === undefined || workspace === undefined) return;
-    setSelectedPath(path);
-    void run(async () => {
-      setDiff(
-        await window.honeybee.gitDiff({
-          projectId,
-          workspaceId: workspace.workspaceId,
-          ...(path === undefined ? {} : { path }),
-        }),
-      );
-    });
+  const openSettings = (): void => {
+    if (project === undefined) return;
+    inspectPath(project.unityProjectPath);
   };
+  const cacheReady = useMemo(
+    () =>
+      inspection?.registeredProjectId !== null &&
+      projects.find((item) => item.projectId === inspection?.registeredProjectId)?.cacheState ===
+        "ready",
+    [inspection, projects],
+  );
 
+  const backTarget =
+    route === "picker" || route === "clone"
+      ? "home"
+      : route === "setup"
+        ? projects.length > 0
+          ? "picker"
+          : "home"
+        : undefined;
   return (
-    <main className="app-shell">
-      <header className="app-header">
-        <div>
-          <span>HONEYBEE 0.7</span>
-          <h1>Workspace Workbench</h1>
+    <AppFrame locale={locale} setLocale={setLocale} t={t}>
+      {error !== undefined && (
+        <div className="error-banner">
+          <Warning size={20} weight="fill" />
+          <div>
+            <strong>{error.message}</strong>
+            {error.remediation.map((item) => (
+              <small key={item}>{item}</small>
+            ))}
+          </div>
+          <button onClick={() => setError(undefined)}>×</button>
         </div>
-        <p>Git worktrees with Library-only CoW</p>
-      </header>
-      {error !== undefined && <div className="error-banner">{error}</div>}
-      <div className="layout">
-        <aside className="sidebar">
-          <h2>Projects</h2>
-          {projects.length === 0 ? (
-            <div className="empty">
-              <p>No registered projects.</p>
-              <code>honeybee project init &lt;path&gt; --workspace-root &lt;path&gt;</code>
-            </div>
-          ) : (
-            projects.map((item) => (
-              <button
-                className={item.projectId === projectId ? "selected" : ""}
-                key={item.projectId}
-                onClick={() => setProjectId(item.projectId)}
-              >
-                <strong>{item.label}</strong>
-                <small>{item.cacheState} cache</small>
-              </button>
-            ))
-          )}
-          <h2>Workspaces</h2>
-          {workspaces.map((item) => (
-            <button
-              className={item.workspaceId === workspaceId ? "selected" : ""}
-              key={item.workspaceId}
-              onClick={() => setWorkspaceId(item.workspaceId)}
-            >
-              <strong>{item.name}</strong>
-              <small>{item.branch}</small>
-            </button>
-          ))}
-        </aside>
-        <section className="content">
-          {project === undefined ? (
-            <div className="welcome">
-              <h2>Register a Unity project from the CLI</h2>
-              <p>HoneyBee only owns Workspace and Library storage lifecycle.</p>
-            </div>
-          ) : (
-            <>
-              <div className="project-summary">
-                <div>
-                  <small>PROJECT</small>
-                  <h2>{project.label}</h2>
-                  <code>{project.unityProjectPath}</code>
-                </div>
-                <span className={`pill ${project.cacheState}`}>{project.cacheState} cache</span>
-              </div>
-              <div className="create-row">
-                <input
-                  aria-label="Workspace name"
-                  placeholder="Workspace name"
-                  value={name}
-                  onChange={(event) => setName(event.target.value)}
-                />
-                <input
-                  aria-label="Branch"
-                  placeholder="feature/branch"
-                  value={branch}
-                  onChange={(event) => setBranch(event.target.value)}
-                />
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={existingBranch}
-                    onChange={(event) => setExistingBranch(event.target.checked)}
-                  />
-                  Attach existing
-                </label>
-                <button disabled={busy || project.cacheState !== "ready"} onClick={createWorkspace}>
-                  Create
-                </button>
-              </div>
-              {workspace === undefined ? (
-                <div className="welcome">
-                  <h2>No Workspaces yet</h2>
-                  <p>Prepare the cache, then create one above.</p>
-                </div>
-              ) : (
-                <>
-                  <div className="workspace-header">
-                    <div>
-                      <small>{workspace.state.toUpperCase()}</small>
-                      <h2>{workspace.name}</h2>
-                      <code>{workspace.workspacePath}</code>
-                    </div>
-                    <div className="actions">
-                      <button disabled={busy} onClick={() => void refreshWorkspaces()}>
-                        Refresh
-                      </button>
-                      <button
-                        disabled={busy}
-                        onClick={() =>
-                          void run(async () => {
-                            await window.honeybee.repairWorkspace({
-                              projectId: project.projectId,
-                              workspaceId: workspace.workspaceId,
-                            });
-                            await refreshWorkspaces(project.projectId);
-                          })
-                        }
-                      >
-                        Repair
-                      </button>
-                      <button
-                        className="danger"
-                        disabled={busy || workspace.git?.dirty === true}
-                        onClick={() => {
-                          if (
-                            window.confirm(
-                              `Remove ${workspace.name}? Its branch will be preserved.`,
-                            )
-                          )
-                            void run(async () => {
-                              await window.honeybee.removeWorkspace({
-                                projectId: project.projectId,
-                                workspaceId: workspace.workspaceId,
-                              });
-                              await refreshWorkspaces(project.projectId);
-                            });
-                        }}
-                      >
-                        Remove
-                      </button>
-                    </div>
-                  </div>
-                  <div className="metadata">
-                    <span>
-                      Branch <b>{workspace.branch}</b>
-                    </span>
-                    <span>
-                      HEAD <b>{workspace.git?.head.slice(0, 10) ?? "unavailable"}</b>
-                    </span>
-                    <span>{workspace.git?.dirty ? "Dirty" : "Clean"}</span>
-                  </div>
-                  <nav className="tabs">
-                    <button
-                      className={tab === "changes" ? "active" : ""}
-                      onClick={() => setTab("changes")}
-                    >
-                      Changed files ({changes.length})
-                    </button>
-                    <button
-                      className={tab === "terminal" ? "active" : ""}
-                      onClick={() => setTab("terminal")}
-                    >
-                      Terminal
-                    </button>
-                  </nav>
-                  {tab === "terminal" ? (
-                    <WorkspaceTerminal projectId={project.projectId} workspace={workspace} />
-                  ) : (
-                    <div className="changes-layout">
-                      <aside className="changes-list">
-                        <button
-                          className={selectedPath === undefined ? "selected" : ""}
-                          onClick={() => loadDiff()}
-                        >
-                          All changes
-                        </button>
-                        {changes.map((change) => {
-                          const file = changedPath(change);
-                          return (
-                            <button
-                              className={selectedPath === file ? "selected" : ""}
-                              key={change}
-                              onClick={() => loadDiff(file)}
-                            >
-                              <code>{change.slice(0, 2)}</code>
-                              {file}
-                            </button>
-                          );
-                        })}
-                      </aside>
-                      <pre className="diff-view">
-                        {diff?.content ||
-                          (changes.length === 0
-                            ? "Working tree is clean."
-                            : "Select a changed file to inspect its diff.")}
-                        {diff?.truncated ? "\n\n[diff truncated at 1 MiB]" : ""}
-                      </pre>
-                    </div>
-                  )}
-                </>
-              )}
-            </>
-          )}
-        </section>
-      </div>
-    </main>
+      )}
+      {backTarget !== undefined && (
+        <button
+          className="back-button"
+          onClick={() => {
+            if (backTarget === "home") setRoute("home");
+            else showPicker();
+          }}
+        >
+          <ArrowLeft size={19} />
+          {t("back")}
+        </button>
+      )}
+      {route === "loading" && (
+        <div className="loading-screen">
+          <span className="spinner large" />
+          <p>HoneyBee</p>
+        </div>
+      )}
+      {route === "home" && (
+        <ProjectHome onHub={showPicker} onClone={() => setRoute("clone")} t={t} />
+      )}
+      {route === "picker" && (
+        <ProjectPicker
+          candidates={candidates}
+          onChoose={chooseCandidate}
+          onBrowse={browseProject}
+          t={t}
+        />
+      )}
+      {route === "clone" && (
+        <CloneProject
+          busy={busy}
+          onBrowse={(childName) =>
+            window.honeybee.pickFolder({
+              kind: "clone-destination",
+              ...(childName === undefined ? {} : { childName }),
+            })
+          }
+          onClone={cloneProject}
+          t={t}
+        />
+      )}
+      {route === "setup" && inspection !== undefined && (
+        <ProjectSetup
+          inspection={inspection}
+          doctor={doctor}
+          workspaceRoot={workspaceRoot}
+          setWorkspaceRoot={setWorkspaceRoot}
+          busy={busy}
+          cacheReady={cacheReady === true}
+          onBrowseRoot={() =>
+            run(async () => {
+              const selected = await window.honeybee.pickFolder({
+                kind: "workspace-root",
+                defaultPath: workspaceRoot,
+              });
+              if (selected !== null) setWorkspaceRoot(selected);
+            })
+          }
+          onCheck={checkSetup}
+          onOpenUnity={() =>
+            run(async () => {
+              await window.honeybee.launchProjectUnity({ path: inspection.path });
+            })
+          }
+          onSetup={setupProject}
+          t={t}
+        />
+      )}
+      {route === "workbench" && project !== undefined && (
+        <WorkspaceWorkbench
+          project={project}
+          workspaces={workspaces}
+          workspaceId={workspaceId}
+          setWorkspaceId={setWorkspaceId}
+          busy={busy}
+          onCreate={() => setDialogOpen(true)}
+          onSwitchProject={showPicker}
+          onSettings={openSettings}
+          onRefresh={() => refreshWorkspaces(project.projectId)}
+          run={run}
+          t={t}
+        />
+      )}
+      {dialogOpen && project !== undefined && (
+        <WorkspaceDialog
+          projectId={project.projectId}
+          busy={busy}
+          onClose={() => setDialogOpen(false)}
+          onCreate={createWorkspace}
+          t={t}
+        />
+      )}
+    </AppFrame>
   );
 }

@@ -114,4 +114,40 @@ describe("WorkspaceRegistryStore", () => {
       code: "registry.layout-unsupported",
     });
   });
+
+  it("atomically replaces an active Workspace with a bounded removal receipt", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-workspace-registry-"));
+    roots.push(root);
+    const store = new WorkspaceRegistryStore(root);
+    await store.putProject(project);
+    await store.putWorkspace(workspace(999));
+    await store.update((current) => ({
+      ...current,
+      removalReceipts: Array.from({ length: 256 }, (_, index) => ({
+        workspaceId: `removed-${index}`,
+        projectId: project.projectId,
+        name: `removed-${index}`,
+        branch: `removed/${index}`,
+        removedAt: new Date(Date.UTC(2026, 8, 1, 0, 0, index)).toISOString(),
+      })),
+    }));
+
+    const receipt = await store.completeWorkspaceRemoval(workspace(999));
+    const registry = await store.read();
+
+    expect(receipt).toMatchObject({
+      workspaceId: "workspace-999",
+      name: "work-999",
+      branch: "work/999",
+    });
+    expect(registry.workspaces).toEqual([]);
+    expect(registry.removalReceipts).toHaveLength(256);
+    expect(registry.removalReceipts).toContainEqual(receipt);
+    const persisted = JSON.parse(await readFile(store.path, "utf8")) as {
+      workspaces: unknown[];
+      removalReceipts: unknown[];
+    };
+    expect(persisted.workspaces).toEqual([]);
+    expect(persisted.removalReceipts).toHaveLength(256);
+  }, 30_000);
 });

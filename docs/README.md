@@ -4,9 +4,13 @@
 
 - [Repository README](../README.md): v0.7 product, CLI, Desktop, and safety contract.
 - [ADR-031](decisions/ADR-031-git-worktree-library-only-cow.md): Git worktree and Library-only CoW
-  architecture, including the reboot-repair blocker.
+  architecture, including the completed reboot-repair gate.
 - [ADR-032](decisions/ADR-032-workspace-only-product-boundary.md): Workspace-only responsibility
   boundary.
+- [ADR-033](decisions/ADR-033-desktop-onboarding-and-tool-launch.md): Desktop project onboarding and
+  user-triggered external tool boundary.
+- [Windows Desktop Beta](operations/windows-desktop-beta.md): Workbench onboarding, setup, and
+  Workspace operation guide.
 - [v0.7 migration](migrations/v0.7-workspace-only.md): breaking cleanup, registry migration, tests,
   and rollback.
 
