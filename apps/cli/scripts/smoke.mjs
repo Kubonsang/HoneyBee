@@ -48,15 +48,11 @@ await Promise.all([
 
 const dataRoot = await mkdtemp(path.join(tmpdir(), "honeybee-cli-package-smoke-"));
 try {
-  const version = await execFileAsync(
-    "cmd.exe",
-    ["/d", "/c", path.join(bundleRoot, "honeybee.cmd"), "--version"],
-    {
-      cwd: bundleRoot,
-      timeout: 30_000,
-      windowsHide: true,
-    },
-  );
+  const version = await execFileAsync("cmd.exe", ["/d", "/c", ".\\honeybee.cmd --version"], {
+    cwd: bundleRoot,
+    timeout: 30_000,
+    windowsHide: true,
+  });
   if (version.stdout.trim() !== "0.1.0-beta.4") {
     throw new Error(`Unexpected packaged CLI version: ${version.stdout.trim()}`);
   }

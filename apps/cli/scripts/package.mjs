@@ -68,15 +68,11 @@ await writeFile(
 );
 
 const cliPackage = JSON.parse(await readFile(path.join(appRoot, "package.json"), "utf8"));
-const result = await execFileAsync(
-  "cmd.exe",
-  ["/d", "/c", path.join(bundleRoot, "honeybee.cmd"), "--version"],
-  {
-    cwd: bundleRoot,
-    timeout: 30_000,
-    windowsHide: true,
-  },
-);
+const result = await execFileAsync("cmd.exe", ["/d", "/c", ".\\honeybee.cmd --version"], {
+  cwd: bundleRoot,
+  timeout: 30_000,
+  windowsHide: true,
+});
 if (result.stdout.trim() !== cliPackage.version) {
   throw new Error(`Packaged CLI version mismatch: ${result.stdout.trim()}`);
 }
