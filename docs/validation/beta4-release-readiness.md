@@ -21,7 +21,9 @@ evidence; do not relabel it as a test of newly assembled archives.
 - [x] Desktop visual/interaction smoke at 1280 × 820 and 900 × 620.
 - Final-head Windows CI, CodeQL, and review status: [PR #39 checks](https://github.com/Kubonsang/HoneyBee/pull/39/checks).
   A successful `windows-quality-<head SHA>` artifact contains the tested CLI/Desktop ZIPs, checksums,
-  source commit, and logs. Local pass marks above do not substitute for these PR checks.
+  PR head (`pr-head.txt`), tested checkout (`source-commit.txt`), and logs. Pull-request builds use
+  GitHub's merge checkout, so those two commits can differ. Local pass marks above do not substitute
+  for these PR checks.
 
 The initial versioned run passed 62 TypeScript tests. After CodeQL review, the rename parser was
 changed from an ambiguous regular expression to a single delimiter scan. A 50,000-separator input,

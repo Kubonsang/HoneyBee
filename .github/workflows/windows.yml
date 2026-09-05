@@ -46,6 +46,8 @@ jobs:
           exit $LASTEXITCODE
       - name: Archive tested packages
         shell: pwsh
+        env:
+          HONEYBEE_PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: |
           Compress-Archive -LiteralPath apps/cli/release/HoneyBee-cli-win32-x64 -DestinationPath artifacts/quality/HoneyBee-cli-win32-x64.zip
           Compress-Archive -LiteralPath apps/desktop/release/HoneyBee-win32-x64 -DestinationPath artifacts/quality/HoneyBee-win32-x64.zip
@@ -53,11 +55,12 @@ jobs:
             '{0}  {1}' -f $_.Hash.ToLowerInvariant(), (Split-Path -Leaf $_.Path)
           } | Set-Content -Encoding utf8 artifacts/quality/SHA256SUMS.txt
           git rev-parse HEAD | Set-Content -Encoding utf8 artifacts/quality/source-commit.txt
+          $env:HONEYBEE_PR_HEAD | Set-Content -Encoding utf8 artifacts/quality/pr-head.txt
       - name: Preserve quality evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: windows-quality-${{ github.sha }}
+          name: windows-quality-${{ github.event.pull_request.head.sha || github.sha }}
           path: artifacts/quality/
           if-no-files-found: warn
           retention-days: 14
