@@ -23,7 +23,7 @@
     "node-pty": "1.1.0",
     "react": "^19.2.8",
     "react-dom": "^19.2.8",
-    "zod": "^4.0.0"
+    "zod": "^4.5.4"
   },
   "devDependencies": {
     "@electron/packager": "20.0.4",
