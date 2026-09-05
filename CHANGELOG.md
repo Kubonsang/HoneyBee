@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0-beta.5 - Unreleased
+## 0.1.0-beta.5 - 2026-09-05
 
 - Preserve Git status columns and decode quoted paths for accurate file selection, including
   Unicode, spaces, and renames. Diff requests use literal paths and bound streamed output to 1 MiB.

@@ -1,3 +1,4 @@
+import { desktopApi } from "./desktop-api.js";
 import { ArrowLeft, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
@@ -78,7 +79,7 @@ export function App() {
   };
 
   const refreshProjects = useCallback(async (): Promise<readonly DesktopProjectV2[]> => {
-    const next = await window.honeybee.projects();
+    const next = await desktopApi.projects();
     setProjects(next);
     return next;
   }, []);
@@ -88,7 +89,7 @@ export function App() {
       const isCurrent = workspaceRequests.current.begin();
       let next: readonly DesktopWorkspaceV2[];
       try {
-        next = await window.honeybee.workspaces({ projectId: selectedProject });
+        next = await desktopApi.workspaces({ projectId: selectedProject });
       } catch (error) {
         if (isCurrent() && selectedProject === activeProject.current) throw error;
         return;
@@ -120,7 +121,7 @@ export function App() {
   useEffect(() => {
     if (initialized.current) return;
     initialized.current = true;
-    void window.honeybee
+    void desktopApi
       .projects()
       .then(async (next) => {
         setProjects(next);
@@ -157,15 +158,15 @@ export function App() {
 
   const showPicker = (): void => {
     run(async () => {
-      setCandidates(await window.honeybee.projectCandidates());
+      setCandidates(await desktopApi.projectCandidates());
       setRoute("picker");
     });
   };
   const inspectPath = (selectedPath: string): void => {
     run(async () => {
       const [nextInspection, nextDoctor] = await Promise.all([
-        window.honeybee.inspectProject({ path: selectedPath }),
-        window.honeybee.doctor(),
+        desktopApi.inspectProject({ path: selectedPath }),
+        desktopApi.doctor(),
       ]);
       setInspection(nextInspection);
       setDoctor(nextDoctor);
@@ -183,11 +184,11 @@ export function App() {
   };
   const browseProject = (): void => {
     run(async () => {
-      const selected = await window.honeybee.pickFolder({ kind: "unity-project" });
+      const selected = await desktopApi.pickFolder({ kind: "unity-project" });
       if (selected !== null) {
         const [nextInspection, nextDoctor] = await Promise.all([
-          window.honeybee.inspectProject({ path: selected }),
-          window.honeybee.doctor(),
+          desktopApi.inspectProject({ path: selected }),
+          desktopApi.doctor(),
         ]);
         setInspection(nextInspection);
         setDoctor(nextDoctor);
@@ -198,10 +199,10 @@ export function App() {
   };
   const cloneProject = (url: string, destination: string): void => {
     run(async () => {
-      const cloned = await window.honeybee.cloneProject({ url, destination });
+      const cloned = await desktopApi.cloneProject({ url, destination });
       const [nextInspection, nextDoctor] = await Promise.all([
-        window.honeybee.inspectProject({ path: cloned.path }),
-        window.honeybee.doctor(),
+        desktopApi.inspectProject({ path: cloned.path }),
+        desktopApi.doctor(),
       ]);
       setInspection(nextInspection);
       setDoctor(nextDoctor);
@@ -215,7 +216,7 @@ export function App() {
   const setupProject = (): void => {
     if (inspection === undefined) return;
     run(async () => {
-      const setup = await window.honeybee.setupProject({
+      const setup = await desktopApi.setupProject({
         path: inspection.path,
         workspaceRoot: workspaceRoot.trim(),
         label: inspection.label,
@@ -227,7 +228,7 @@ export function App() {
   };
   const createWorkspace = (request: DesktopWorkspaceCreateRequestV1): void => {
     run(async () => {
-      const created = await window.honeybee.createWorkspace(request);
+      const created = await desktopApi.createWorkspace(request);
       setDialogOpen(false);
       await refreshWorkspaces(request.projectId);
       if (activeProject.current === request.projectId) setWorkspaceId(created.workspaceId);
@@ -300,7 +301,7 @@ export function App() {
         <CloneProject
           busy={busy}
           onBrowse={(childName) =>
-            window.honeybee.pickFolder({
+            desktopApi.pickFolder({
               kind: "clone-destination",
               ...(childName === undefined ? {} : { childName }),
             })
@@ -319,7 +320,7 @@ export function App() {
           cacheReady={cacheReady === true}
           onBrowseRoot={() =>
             run(async () => {
-              const selected = await window.honeybee.pickFolder({
+              const selected = await desktopApi.pickFolder({
                 kind: "workspace-root",
                 defaultPath: workspaceRoot,
               });
@@ -329,7 +330,7 @@ export function App() {
           onCheck={checkSetup}
           onOpenUnity={() =>
             run(async () => {
-              await window.honeybee.launchProjectUnity({ path: inspection.path });
+              await desktopApi.launchProjectUnity({ path: inspection.path });
             })
           }
           onSetup={setupProject}

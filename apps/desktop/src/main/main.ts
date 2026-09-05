@@ -1,4 +1,4 @@
-import { access, mkdir, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -51,6 +51,7 @@ const captureWidth = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_WIDTH ?? 1280);
 const captureHeight = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_HEIGHT ?? 820);
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
 let mainWindow: BrowserWindow | undefined;
+let smokeTerminalRoot: string | undefined;
 
 const smokeProject: DesktopProjectV2 = {
   projectId: "smoke-project",
@@ -462,13 +463,15 @@ const registerIpc = (): void => {
     DesktopIpcChannels.workspaceRemove,
     handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
-      if (fixtureMode) {
-        smokeWorkspaces = smokeWorkspaces.filter(
-          (item) => item.workspaceId !== request.workspaceId,
-        );
-        return true;
-      }
-      await core.removeWorkspace(request.workspaceId, request.projectId);
+      await ptySessions.withWorkspaceRemoval(request.projectId, request.workspaceId, async () => {
+        if (fixtureMode) {
+          smokeWorkspaces = smokeWorkspaces.filter(
+            (item) => item.workspaceId !== request.workspaceId,
+          );
+          return;
+        }
+        await core.removeWorkspace(request.workspaceId, request.projectId);
+      });
       return true;
     }),
   );
@@ -546,24 +549,44 @@ const registerIpc = (): void => {
     DesktopIpcChannels.ptyCreate,
     handler(async (value) => {
       const request = DesktopPtyCreateRequestV1Schema.parse(value);
+      if (smokeMode && smokeTerminalRoot !== undefined) {
+        const workspace = smokeWorkspaces.find(
+          (item) =>
+            item.projectId === request.projectId && item.workspaceId === request.workspaceId,
+        );
+        if (workspace === undefined || workspace.state !== "ready")
+          throw new DesktopMainError("workspace.repair-required", "Workspace is unavailable.");
+        return ptySessions.create(
+          request.projectId,
+          request.workspaceId,
+          smokeTerminalRoot,
+          request.columns,
+          request.rows,
+        );
+      }
       if (fixtureMode)
         throw new DesktopMainError(
           "desktop.smoke-terminal-disabled",
-          "PTY creation is disabled in visual smoke mode.",
+          "PTY creation is disabled in visual capture mode.",
         );
       const workspace = await workspaceFor(request.projectId, request.workspaceId);
-      if (!workspace.available)
+      if (!workspace.available || workspace.state !== "ready")
         throw new DesktopMainError(
           "workspace.repair-required",
           "Repair the Workspace before opening a shell.",
         );
       return ptySessions.create(
+        request.projectId,
         workspace.workspaceId,
         workspace.workspacePath,
         request.columns,
         request.rows,
       );
     }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.ptyList,
+    handler(() => ptySessions.list()),
   );
   ipcMain.handle(
     DesktopIpcChannels.ptySnapshot,
@@ -683,6 +706,9 @@ const createWindow = async (): Promise<void> => {
     },
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  mainWindow.on("close", (event) => {
+    if (!confirmTerminalQuit()) event.preventDefault();
+  });
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
   if (!fixtureMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
   await writeSmokeStage("window-created");
@@ -710,7 +736,18 @@ const createWindow = async (): Promise<void> => {
       )) as { ready?: boolean; projects?: boolean };
       if (result.ready !== true || result.projects !== true)
         throw new Error("invalid smoke result");
-      await verifyWorkbench(mainWindow);
+      try {
+        await verifyWorkbench(mainWindow);
+      } finally {
+        ptySessions.closeAll();
+        if (smokeTerminalRoot !== undefined)
+          await rm(smokeTerminalRoot, {
+            recursive: true,
+            force: true,
+            maxRetries: 10,
+            retryDelay: 100,
+          });
+      }
       await writeSmokeStage("passed");
       process.stdout.write("HONEYBEE_DESKTOP_SMOKE_OK\n");
       mainWindow.destroy();
@@ -731,6 +768,8 @@ const startDesktop = async (): Promise<void> => {
   await app.whenReady();
   await writeSmokeStage("app-ready");
   Menu.setApplicationMenu(null);
+  if (smokeMode)
+    smokeTerminalRoot = await mkdtemp(path.join(tmpdir(), "honeybee-desktop-terminal-"));
   registerIpc();
   await createWindow();
 };
@@ -755,4 +794,23 @@ app.on("activate", () => {
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();
 });
-app.on("before-quit", () => ptySessions.closeAll());
+const confirmTerminalQuit = (): boolean =>
+  ptySessions.requestQuit((running) => {
+    const korean = app.getLocale().startsWith("ko");
+    const response = dialog.showMessageBoxSync({
+      type: "question",
+      title: "HoneyBee",
+      message: korean
+        ? `실행 중인 터미널 ${running.length}개를 종료하고 앱을 닫을까요?`
+        : `Close the app and its ${running.length} running terminals?`,
+      detail: running.map((session) => session.cwd).join("\n"),
+      buttons: korean ? ["취소", "터미널 종료 후 앱 닫기"] : ["Cancel", "Close terminals and quit"],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    });
+    return response === 1;
+  });
+app.on("before-quit", (event) => {
+  if (!confirmTerminalQuit()) event.preventDefault();
+});

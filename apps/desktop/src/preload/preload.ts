@@ -2,7 +2,6 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 
 import {
-  DesktopApiError,
   DesktopCloneResultV1Schema,
   DesktopDoctorReportV1Schema,
   DesktopGitDiffV1Schema,
@@ -19,7 +18,7 @@ import {
 
 const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknown): Promise<T> => {
   const result = DesktopResultSchema(schema).parse(await ipcRenderer.invoke(channel, request));
-  if (!result.ok) throw new DesktopApiError(result.error);
+  if (!result.ok) throw new Error(JSON.stringify({ honeybeeError: result.error }));
   return result.value;
 };
 
@@ -51,6 +50,7 @@ const api: HoneyBeeDesktopApi = {
   windowAction: (request) => invoke(DesktopIpcChannels.windowAction, z.boolean(), request),
   gitDiff: (request) => invoke(DesktopIpcChannels.gitDiff, DesktopGitDiffV1Schema, request),
   createPty: (request) => invoke(DesktopIpcChannels.ptyCreate, DesktopPtySessionV1Schema, request),
+  listPtys: () => invoke(DesktopIpcChannels.ptyList, DesktopPtySessionV1Schema.array()),
   ptySnapshot: (request) =>
     invoke(DesktopIpcChannels.ptySnapshot, DesktopPtySnapshotV1Schema, request),
   writePty: (request) => invoke(DesktopIpcChannels.ptyWrite, z.boolean(), request),

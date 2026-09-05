@@ -1,3 +1,4 @@
+import { desktopApi } from "../desktop-api.js";
 import { ArrowsOutSimple, Minus, X } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 
@@ -28,20 +29,20 @@ export function AppFrame({
         <div className="window-controls">
           <button
             aria-label="Minimize"
-            onClick={() => void window.honeybee.windowAction({ action: "minimize" })}
+            onClick={() => void desktopApi.windowAction({ action: "minimize" })}
           >
             <Minus size={15} />
           </button>
           <button
             aria-label="Maximize"
-            onClick={() => void window.honeybee.windowAction({ action: "toggle-maximize" })}
+            onClick={() => void desktopApi.windowAction({ action: "toggle-maximize" })}
           >
             <ArrowsOutSimple size={14} />
           </button>
           <button
             className="window-close"
             aria-label="Close"
-            onClick={() => void window.honeybee.windowAction({ action: "close" })}
+            onClick={() => void desktopApi.windowAction({ action: "close" })}
           >
             <X size={15} />
           </button>
