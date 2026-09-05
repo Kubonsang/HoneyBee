@@ -26,13 +26,13 @@
     "zod": "^4.0.0"
   },
   "devDependencies": {
-    "@electron/packager": "20.0.4",
+    "@electron/packager": "20.3.0",
     "@types/react": "^19.2.18",
-    "@types/react-dom": "^19.2.4",
-    "@vitejs/plugin-react": "^6.0.5",
-    "electron": "^43.4.0",
-    "png-to-ico": "3.0.1",
-    "vite": "^8.2.1"
+    "@types/react-dom": "^19.2.5",
+    "@vitejs/plugin-react": "^6.1.1",
+    "electron": "^44.1.1",
+    "png-to-ico": "3.0.2",
+    "vite": "^8.2.2"
   },
   "license": "MIT"
 }
