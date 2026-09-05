@@ -15,6 +15,7 @@ interface Entry {
   session: Promise<DesktopPtySessionV1>;
   cursor: number;
   ended: boolean;
+  failed: boolean;
   detach?: () => void;
 }
 
@@ -51,7 +52,7 @@ class TerminalStore {
         columns: Math.max(20, Math.min(400, terminal.cols)),
         rows: Math.max(5, Math.min(200, terminal.rows)),
       });
-      entry = { terminal, fit, element, session, cursor: 0, ended: false };
+      entry = { terminal, fit, element, session, cursor: 0, ended: false, failed: false };
       this.entries.set(key, entry);
     }
     const current = entry;
@@ -111,13 +112,24 @@ class TerminalStore {
         current.terminal.focus();
         void poll();
       })
-      .catch(fail);
+      .catch((error: unknown) => {
+        current.failed = true;
+        if (!active) {
+          current.terminal.dispose();
+          this.entries.delete(key);
+        }
+        fail(error);
+      });
     const detach = (): void => {
       active = false;
       if (timer !== undefined) clearTimeout(timer);
       observer.disconnect();
       input.dispose();
       current.element.remove();
+      if (current.failed) {
+        current.terminal.dispose();
+        this.entries.delete(key);
+      }
     };
     current.detach = detach;
     return detach;

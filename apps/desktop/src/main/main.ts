@@ -28,6 +28,7 @@ import {
   type DesktopWorkspaceV2,
 } from "../shared/ipc.js";
 import { readDiff } from "./git-diff.js";
+import { verifyWorkspaceFeedback } from "./workspace-feedback-smoke.js";
 import { verifyWorkbench } from "./workbench-smoke.js";
 import { setupBlockers } from "../shared/setup-checks.js";
 import compatibility from "../../resources/component-compatibility-v1.json" with { type: "json" };
@@ -52,6 +53,8 @@ const captureHeight = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_HEIGHT ?? 820)
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
 let mainWindow: BrowserWindow | undefined;
 let smokeTerminalRoot: string | undefined;
+let smokeRefreshFailure = false;
+let smokeLaunchFailure = false;
 
 const smokeProject: DesktopProjectV2 = {
   projectId: "smoke-project",
@@ -196,7 +199,10 @@ const registerIpc = (): void => {
   ipcMain.handle(
     DesktopIpcChannels.projects,
     handler(async () => {
-      if (fixtureMode) return [smokeProject];
+      if (fixtureMode)
+        return smokeMode
+          ? [smokeProject, { ...smokeProject, projectId: "smoke-other", label: "Other project" }]
+          : [smokeProject];
       return Promise.all(
         [...(await core.listProjects())]
           .sort((a, b) => a.label.localeCompare(b.label))
@@ -217,6 +223,18 @@ const registerIpc = (): void => {
             registeredProjectId: smokeProject.projectId,
             setupState: "ready" as const,
           },
+          ...(smokeMode
+            ? [
+                {
+                  source: "honeybee" as const,
+                  label: "Other project",
+                  path: "C:\\Unity\\Other",
+                  unityVersion: smokeProject.unityVersion,
+                  registeredProjectId: "smoke-other",
+                  setupState: "ready" as const,
+                },
+              ]
+            : []),
           {
             source: "unity-hub" as const,
             label: "NetRPG",
@@ -399,6 +417,8 @@ const registerIpc = (): void => {
     DesktopIpcChannels.workspaces,
     handler(async (value) => {
       const request = DesktopProjectRequestV1Schema.parse(value);
+      if (smokeMode && smokeRefreshFailure)
+        throw new DesktopMainError("desktop.status-test-failed", "Simulated status read failure.");
       if (fixtureMode)
         return smokeWorkspaces.filter((item) => item.projectId === request.projectId);
       return [...(await core.listWorkspaces(request.projectId))]
@@ -479,6 +499,10 @@ const registerIpc = (): void => {
     DesktopIpcChannels.externalLaunch,
     handler(async (value) => {
       const request = DesktopExternalLaunchRequestV1Schema.parse(value);
+      if (smokeMode && smokeLaunchFailure) {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        throw new DesktopMainError("workspace.in-use", "Simulated late tool failure.");
+      }
       if (fixtureMode) return true;
       const workspace = await workspaceFor(request.projectId, request.workspaceId);
       if (!workspace.available || workspace.state !== "ready")
@@ -732,12 +756,26 @@ const createWindow = async (): Promise<void> => {
   if (smokeMode) {
     try {
       const result = (await mainWindow.webContents.executeJavaScript(
-        `new Promise((resolve, reject) => { const deadline = Date.now() + 8000; const inspect = async () => { try { if (window.honeybee && document.querySelector('.app-shell')) { const projects = await window.honeybee.projects(); resolve({ ready: true, projects: projects.length === 1 }); return; } if (Date.now() >= deadline) throw new Error('renderer timeout'); setTimeout(() => void inspect(), 50); } catch (error) { reject(error); } }; void inspect(); })`,
+        `new Promise((resolve, reject) => { const deadline = Date.now() + 8000; const inspect = async () => { try { if (window.honeybee && document.querySelector('.app-shell')) { const projects = await window.honeybee.projects(); resolve({ ready: true, projects: projects.length === 2 }); return; } if (Date.now() >= deadline) throw new Error('renderer timeout'); setTimeout(() => void inspect(), 50); } catch (error) { reject(error); } }; void inspect(); })`,
       )) as { ready?: boolean; projects?: boolean };
       if (result.ready !== true || result.projects !== true)
         throw new Error("invalid smoke result");
       try {
         await verifyWorkbench(mainWindow);
+        const original = structuredClone(smokeWorkspaces);
+        await verifyWorkspaceFeedback(mainWindow, (scenario) => {
+          smokeRefreshFailure = scenario === "refresh-failed";
+          smokeLaunchFailure = scenario === "late-error";
+          smokeWorkspaces = structuredClone(original).map((workspace) => {
+            if (workspace.workspaceId !== "smoke-combat") return workspace;
+            if (scenario === "unknown") return { ...workspace, git: null };
+            if (scenario === "cleanup")
+              return { ...workspace, git: null, state: "cleanup-pending", available: false };
+            if (scenario === "repair")
+              return { ...workspace, state: "repair-required", available: false };
+            return workspace;
+          });
+        });
       } finally {
         ptySessions.closeAll();
         if (smokeTerminalRoot !== undefined)

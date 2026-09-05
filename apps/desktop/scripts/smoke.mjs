@@ -13,7 +13,16 @@ const require = createRequire(import.meta.url);
 const electronExecutable = require("electron");
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const packagedExecutable =
-  process.argv[2] === undefined ? undefined : path.resolve(appRoot, process.argv[2]);
+  process.argv[2] === "--packaged"
+    ? path.join(
+        appRoot,
+        process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release",
+        "HoneyBee-win32-x64",
+        "HoneyBee.exe",
+      )
+    : process.argv[2] === undefined
+      ? undefined
+      : path.resolve(appRoot, process.argv[2]);
 if (packagedExecutable !== undefined) {
   const outputDirectory = process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release";
   if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".") {

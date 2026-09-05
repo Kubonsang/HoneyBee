@@ -22,7 +22,14 @@ export class DesktopMainError extends Error {
 
 export const desktopError = (reason: unknown): DesktopErrorV1 => {
   if (reason instanceof WorkspaceCoreError || reason instanceof DesktopMainError) {
-    return { code: reason.code, message: reason.message, remediation: [...reason.remediation] };
+    return {
+      code: reason.code,
+      message: reason.message,
+      remediation: [...reason.remediation],
+      ...(reason instanceof WorkspaceCoreError && reason.upstreamCode !== undefined
+        ? { upstreamCode: reason.upstreamCode }
+        : {}),
+    };
   }
   if (reason instanceof ZodError) {
     return {

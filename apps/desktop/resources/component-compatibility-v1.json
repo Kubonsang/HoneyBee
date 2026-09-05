@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "honeybeeVersion": "0.1.0-beta.5",
+  "honeybeeVersion": "0.1.0-beta.6",
   "workspaceStorage": [
     {
       "componentId": "workspace-storage",
       "version": "0.0.0+68e05e0bf0e4.hb8",
-      "honeybeeVersion": "0.1.0-beta.5",
+      "honeybeeVersion": "0.1.0-beta.6",
       "platform": "win32",
       "architecture": "x64",
       "payloads": [

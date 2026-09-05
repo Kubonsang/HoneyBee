@@ -1025,3 +1025,33 @@ pre,
   justify-content: space-between;
   gap: 12px;
 }
+
+.refresh-status {
+  padding: 6px 20px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.refresh-status.stale {
+  color: var(--amber);
+}
+.operation-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 20px;
+  color: var(--amber);
+}
+.diff-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: auto;
+}
+.diff-panel .diff-view {
+  flex: 1;
+  min-height: 0;
+}
+.diff-error {
+  padding: 10px;
+  color: #ff9b94;
+}
