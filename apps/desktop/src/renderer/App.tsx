@@ -2,14 +2,13 @@ import { desktopApi } from "./desktop-api.js";
 import { ArrowLeft, Warning } from "@phosphor-icons/react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
-import {
-  DesktopApiError,
-  type DesktopDoctorReportV1,
-  type DesktopProjectCandidateV1,
-  type DesktopProjectInspectionV1,
-  type DesktopProjectV2,
-  type DesktopWorkspaceCreateRequestV1,
-  type DesktopWorkspaceV2,
+import type {
+  DesktopDoctorReportV1,
+  DesktopProjectCandidateV1,
+  DesktopProjectInspectionV1,
+  DesktopProjectV2,
+  DesktopWorkspaceCreateRequestV1,
+  DesktopWorkspaceV2,
 } from "../shared/ipc.js";
 import { AppFrame } from "./components/AppFrame.js";
 import { CloneProject } from "./components/CloneProject.js";
@@ -20,6 +19,9 @@ import { WorkspaceDialog } from "./components/WorkspaceDialog.js";
 import { WorkspaceWorkbench } from "./components/WorkspaceWorkbench.js";
 import { message, type Locale, type MessageKey } from "./i18n.js";
 import { selectInitialProject } from "./navigation.js";
+import { useOperations } from "./use-operations.js";
+import { canRetryManually, errorGuidance } from "./operation-errors.js";
+import type { RefreshStatus } from "./workspace-feedback.js";
 import { LatestRequest } from "./latest-request.js";
 
 type Route = "loading" | "home" | "picker" | "clone" | "setup" | "workbench";
@@ -36,7 +38,6 @@ export function App() {
   const initialized = useRef(false);
   const workspaceRequests = useRef(new LatestRequest());
   const activeProject = useRef<string | undefined>(undefined);
-  const operationCount = useRef(0);
   const [locale, updateLocale] = useState<Locale>(initialLocale);
   const [route, setRoute] = useState<Route>("loading");
   const [projects, setProjects] = useState<readonly DesktopProjectV2[]>([]);
@@ -48,8 +49,25 @@ export function App() {
   const [doctor, setDoctor] = useState<DesktopDoctorReportV1>();
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<{ message: string; remediation: readonly string[] }>();
+  const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>({ failed: false });
+  const scope =
+    route === "workbench"
+      ? JSON.stringify([route, projectId, workspaceId])
+      : route === "setup"
+        ? JSON.stringify([route, inspection?.path])
+        : route;
+  const target =
+    route === "workbench"
+      ? `${projects.find((item) => item.projectId === projectId)?.label ?? ""} / ${workspaces.find((item) => item.workspaceId === workspaceId)?.name ?? ""}`
+      : (inspection?.label ?? "HoneyBee");
+  const {
+    run,
+    reportError,
+    clear: clearError,
+    error,
+    busy,
+    pending,
+  } = useOperations(scope, target);
   const project = projects.find((item) => item.projectId === projectId);
   const t = useCallback((key: MessageKey) => message(locale, key), [locale]);
 
@@ -57,27 +75,6 @@ export function App() {
     localStorage.setItem(LOCALE_KEY, next);
     updateLocale(next);
   };
-  const reportError = (reason: unknown): void => {
-    if (reason instanceof DesktopApiError)
-      setError({ message: reason.message, remediation: reason.remediation });
-    else
-      setError({
-        message: reason instanceof Error ? reason.message : String(reason),
-        remediation: [],
-      });
-  };
-  const run = (operation: () => Promise<void>): void => {
-    operationCount.current++;
-    setBusy(true);
-    setError(undefined);
-    void operation()
-      .catch(reportError)
-      .finally(() => {
-        operationCount.current--;
-        setBusy(operationCount.current > 0);
-      });
-  };
-
   const refreshProjects = useCallback(async (): Promise<readonly DesktopProjectV2[]> => {
     const next = await desktopApi.projects();
     setProjects(next);
@@ -91,11 +88,15 @@ export function App() {
       try {
         next = await desktopApi.workspaces({ projectId: selectedProject });
       } catch (error) {
-        if (isCurrent() && selectedProject === activeProject.current) throw error;
+        if (isCurrent() && selectedProject === activeProject.current) {
+          setRefreshStatus((previous) => ({ ...previous, failed: true }));
+          throw error;
+        }
         return;
       }
       if (!isCurrent() || selectedProject !== activeProject.current) return;
       setWorkspaces(next);
+      setRefreshStatus({ updatedAt: Date.now(), failed: false });
       setWorkspaceId((current) =>
         current !== undefined && next.some((item) => item.workspaceId === current)
           ? current
@@ -110,10 +111,11 @@ export function App() {
       activeProject.current = selected.projectId;
       workspaceRequests.current.invalidate();
       setWorkspaces([]);
+      setRefreshStatus({ failed: false });
       setWorkspaceId(undefined);
       setProjectId(selected.projectId);
       setRoute("workbench");
-      void refreshWorkspaces(selected.projectId).catch(reportError);
+      void refreshWorkspaces(selected.projectId).catch(() => undefined);
     },
     [refreshWorkspaces],
   );
@@ -135,7 +137,7 @@ export function App() {
         } else setRoute("picker");
       })
       .catch((reason: unknown) => {
-        reportError(reason);
+        reportError(reason, "home");
         setRoute("home");
       });
   }, []);
@@ -144,7 +146,7 @@ export function App() {
     if (route !== "workbench" || projectId === undefined) return;
     const refresh = (): void => {
       if (document.visibilityState === "visible")
-        void refreshWorkspaces(projectId).catch(reportError);
+        void refreshWorkspaces(projectId).catch(() => undefined);
     };
     const timer = window.setInterval(refresh, 5_000);
     window.addEventListener("focus", refresh);
@@ -160,7 +162,7 @@ export function App() {
     run(async () => {
       setCandidates(await desktopApi.projectCandidates());
       setRoute("picker");
-    });
+    }, "projects");
   };
   const inspectPath = (selectedPath: string): void => {
     run(async () => {
@@ -172,7 +174,7 @@ export function App() {
       setDoctor(nextDoctor);
       setWorkspaceRoot(nextInspection.defaultWorkspaceRoot);
       setRoute("setup");
-    });
+    }, "projectSetup");
   };
   const chooseCandidate = (candidate: DesktopProjectCandidateV1): void => {
     const registered =
@@ -208,7 +210,7 @@ export function App() {
       setDoctor(nextDoctor);
       setWorkspaceRoot(nextInspection.defaultWorkspaceRoot);
       setRoute("setup");
-    });
+    }, "projectSetup");
   };
   const checkSetup = (): void => {
     if (inspection !== undefined) inspectPath(inspection.path);
@@ -224,7 +226,7 @@ export function App() {
       const next = await refreshProjects();
       const selected = next.find((item) => item.projectId === setup.projectId) ?? setup;
       openProject(selected);
-    });
+    }, "setupProject");
   };
   const createWorkspace = (request: DesktopWorkspaceCreateRequestV1): void => {
     run(async () => {
@@ -232,7 +234,7 @@ export function App() {
       setDialogOpen(false);
       await refreshWorkspaces(request.projectId);
       if (activeProject.current === request.projectId) setWorkspaceId(created.workspaceId);
-    });
+    }, "newWorkspace");
   };
   const openSettings = (): void => {
     if (project === undefined) return;
@@ -260,14 +262,38 @@ export function App() {
         <div className="error-banner">
           <Warning size={20} weight="fill" />
           <div>
-            <strong>{error.message}</strong>
-            {error.remediation.map((item) => (
-              <small key={item}>{item}</small>
-            ))}
+            <strong>
+              {t(error.label)} · {error.target}
+            </strong>
+            <p>{t(errorGuidance(error.code, error.upstreamCode))}</p>
+            <details>
+              <summary>{t("diagnosticDetails")}</summary>
+              <code>
+                {error.code}
+                {error.upstreamCode === undefined ? "" : ` / ${error.upstreamCode}`}
+              </code>
+              <p>{error.message}</p>
+              {error.remediation.map((item) => (
+                <small key={item}>{item}</small>
+              ))}
+            </details>
+            {canRetryManually(error.code) && error.retry !== undefined && (
+              <button disabled={busy} onClick={error.retry}>
+                {t("retry")}
+              </button>
+            )}
           </div>
-          <button onClick={() => setError(undefined)}>×</button>
+          <button aria-label={t("dismiss")} onClick={clearError}>
+            ×
+          </button>
         </div>
       )}
+      {pending.map((item) => (
+        <div className="operation-progress" role="status" key={item.id}>
+          <span className="spinner" />
+          {t(item.label)} · {item.seconds}s
+        </div>
+      ))}
       {backTarget !== undefined && (
         <button
           className="back-button"
@@ -349,6 +375,7 @@ export function App() {
           onSwitchProject={showPicker}
           onSettings={openSettings}
           onRefresh={() => refreshWorkspaces(project.projectId)}
+          refreshStatus={refreshStatus}
           run={run}
           t={t}
         />

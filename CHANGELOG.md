@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.6 - Unreleased
+
+- Preserve built-in PowerShell sessions, input, and scroll position across tabs, Workspaces, and projects.
+- Confirm terminal/app closure and require built-in terminals to close before Workspace removal.
+- Distinguish unknown Git and stale refresh results; offer the correct repair or removal-retry action.
+- Keep errors with their original task target, preserve diagnostic codes across Electron IPC, and separate diff loading from mutations.
+- Limit evaluation to existing matching hb8 installations; fresh install and Beta 3 upgrade remain unverified.
+
 ## 0.1.0-beta.5 - 2026-09-05
 
 - Preserve Git status columns and decode quoted paths for accurate file selection, including

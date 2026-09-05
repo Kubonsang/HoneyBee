@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { access, mkdtemp, readdir, rm } from "node:fs/promises";
+import { access, mkdtemp, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
@@ -54,7 +54,10 @@ try {
     timeout: 30_000,
     windowsHide: true,
   });
-  if (version.stdout.trim() !== "0.1.0-beta.5") {
+  const expectedVersion = JSON.parse(
+    await readFile(path.join(appRoot, "package.json"), "utf8"),
+  ).version;
+  if (version.stdout.trim() !== expectedVersion) {
     throw new Error(`Unexpected packaged CLI version: ${version.stdout.trim()}`);
   }
   const listed = await execFileAsync(

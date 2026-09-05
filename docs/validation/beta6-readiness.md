@@ -38,3 +38,34 @@ it does not register or remove any existing user Workspace or Library storage.
 Before publishing Beta 6, record final PR heads, successful Windows CI archives/checksums, package
 smoke results, and a final existing-install evaluation. Merge and publication are separate steps;
 this document does not claim that a Beta 6 release exists.
+
+## Workspace feedback implementation
+
+Unknown Git never displays clean or zero files and disables normal removal. Cleanup-pending retains
+its Core-protected retry, while provisioning/removing refuse duplicate actions. Existing 5-second
+refresh and focus/visibility triggers now retain previous results with a stale notice on failure and
+show the last successful check time. Diff reads have independent loading and errors.
+
+Operation failures capture their originating project/Workspace and action label. Late failures stay
+with that target, and in-use retry is explicit. Error details retain both Core and upstream storage
+codes so capacity remediation is translated without changing the CLI error contract.
+
+## 2026-09-06 local candidate result
+
+- `pnpm verify`: 82 tests in 20 suites passed, plus Go tests, type/lint/build and dependency checks.
+- CLI, Desktop IPC/UI, and packaged PTY smoke passed with the `release-beta6` output directories.
+- Desktop smoke uses real PowerShell and production renderer/IPC in isolated fixture projects. It
+  verifies tab/Workspace/project continuity, unknown Git, lifecycle actions, stale refresh, late
+  errors and successful manual retry. Native quit confirmation is covered by policy tests; no
+  physical reboot or new real-Unity storage lifecycle run is claimed for this UI-only candidate.
+- Six visual fixtures rendered at 1280x820; the Workbench capture was inspected.
+- Existing-host preservation passed: original registry SHA-256 remained
+  `8a1b676f36b88da550ff37ca984e22c83e43a56e5251921de713e8f37a1fa50b`; the one pre-existing retained
+  child, receipt, journal hashes, VHDX file identity/size/mtime, and storage boot identity matched.
+  This is metadata preservation evidence, not a full VHDX content hash.
+- Evidence: `output/beta6-verify-feedback.log`, `output/beta6-package.log`,
+  `output/beta6-existing-host-preserved.json`, and `output/beta6-visual/`.
+
+PR #41 at `d3203b6e51bf2d66db49c07e0e442c1785f8f4d7` passed all seven GitHub checks with no
+unresolved review threads. The follow-up PR and final CI package provenance must be recorded before
+publication. Neither PR has been merged or publicly released by this implementation step.

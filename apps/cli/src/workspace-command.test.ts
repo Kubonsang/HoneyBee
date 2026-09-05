@@ -40,7 +40,7 @@ describe("Workspace CLI", () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-workspace-cli-"));
     roots.push(root);
     const version = await runCli(["--version"], root);
-    expect(version).toEqual({ stdout: "0.1.0-beta.5\n", stderr: "", exitCode: 0 });
+    expect(version).toEqual({ stdout: "0.1.0-beta.6\n", stderr: "", exitCode: 0 });
 
     const source = path.join(root, "source");
     const workspaces = path.join(root, "workspaces");

@@ -17,6 +17,13 @@ import type { DesktopGitDiffV1, DesktopProjectV2, DesktopWorkspaceV2 } from "../
 import type { MessageKey } from "../i18n.js";
 import { WorkspaceActions } from "./WorkspaceActions.js";
 import { WorkspaceTerminal } from "./WorkspaceTerminal.js";
+import {
+  canRemoveWorkspace,
+  workspaceStateKey,
+  type RefreshStatus,
+} from "../workspace-feedback.js";
+import { operationError, errorGuidance, type OperationError } from "../operation-errors.js";
+import { useTerminalStore } from "../terminal-store.js";
 import { LatestRequest } from "../latest-request.js";
 
 export function WorkspaceWorkbench({
@@ -29,6 +36,7 @@ export function WorkspaceWorkbench({
   onSwitchProject,
   onSettings,
   onRefresh,
+  refreshStatus,
   run,
   t,
 }: {
@@ -41,12 +49,16 @@ export function WorkspaceWorkbench({
   onSwitchProject: () => void;
   onSettings: () => void;
   onRefresh: () => Promise<void>;
-  run: (operation: () => Promise<void>) => void;
+  refreshStatus: RefreshStatus;
+  run: (operation: () => Promise<void>, label?: MessageKey) => void;
   t: (key: MessageKey) => string;
 }) {
+  const terminalStore = useTerminalStore();
   const workspace = workspaces.find((item) => item.workspaceId === workspaceId) ?? workspaces[0];
   const [tab, setTab] = useState<"changes" | "diff" | "terminal">("changes");
   const [terminalRunning, setTerminalRunning] = useState(false);
+  const [diffLoading, setDiffLoading] = useState(false);
+  const [diffError, setDiffError] = useState<OperationError>();
   const [diff, setDiff] = useState<DesktopGitDiffV1>();
   const [selectedPath, setSelectedPath] = useState<string>();
   const [untrackedSelected, setUntrackedSelected] = useState(false);
@@ -91,15 +103,17 @@ export function WorkspaceWorkbench({
   }, [project.projectId, workspace?.workspaceId]);
 
   const loadDiff = (requestedPath?: string): void => {
-    if (workspace === undefined) return;
+    if (workspace === undefined || workspace.git === null) return;
     const isCurrent = requests.current.begin();
     const untracked = parsedChanges.some((item) => item.path === requestedPath && item.untracked);
     setUntrackedSelected(untracked);
     setDiff(undefined);
     setSelectedPath(requestedPath);
     setTab("diff");
+    setDiffError(undefined);
+    setDiffLoading(!untracked);
     if (untracked) return;
-    run(async () => {
+    void (async () => {
       try {
         const result = await desktopApi.gitDiff({
           projectId: project.projectId,
@@ -108,19 +122,30 @@ export function WorkspaceWorkbench({
         });
         if (isCurrent()) setDiff(result);
       } catch (error) {
-        if (isCurrent()) throw error;
+        if (isCurrent()) setDiffError(operationError(error));
+      } finally {
+        if (isCurrent()) setDiffLoading(false);
       }
-    });
+    })();
   };
   const launch = (tool: "cmd" | "powershell" | "vscode" | "unity"): void => {
     if (workspace === undefined) return;
-    run(async () => {
-      await desktopApi.launchExternal({
-        projectId: project.projectId,
-        workspaceId: workspace.workspaceId,
-        tool,
-      });
-    });
+    run(
+      async () => {
+        await desktopApi.launchExternal({
+          projectId: project.projectId,
+          workspaceId: workspace.workspaceId,
+          tool,
+        });
+      },
+      tool === "unity"
+        ? "openUnityWorkspace"
+        : tool === "vscode"
+          ? "openCode"
+          : tool === "cmd"
+            ? "openCmd"
+            : "openPowerShell",
+    );
   };
 
   return (
@@ -137,7 +162,7 @@ export function WorkspaceWorkbench({
           <button className="icon-button" title={t("settings")} onClick={onSettings}>
             <GearSix size={19} />
           </button>
-          <button className="secondary" disabled={busy} onClick={() => run(onRefresh)}>
+          <button className="secondary" disabled={busy} onClick={() => run(onRefresh, "refresh")}>
             <ArrowClockwise size={18} />
             {t("refresh")}
           </button>
@@ -152,6 +177,17 @@ export function WorkspaceWorkbench({
           </button>
         </div>
       </header>
+      <div
+        className={refreshStatus.failed ? "refresh-status stale" : "refresh-status"}
+        role="status"
+      >
+        {refreshStatus.failed && <span>{t("refreshFailed")} </span>}
+        {refreshStatus.updatedAt === undefined
+          ? refreshStatus.failed
+            ? ""
+            : t("checking")
+          : `${t("lastUpdated")}: ${new Date(refreshStatus.updatedAt).toLocaleTimeString()}`}
+      </div>
       <div className="workbench-main">
         <aside className="workspace-pane">
           <div className="pane-title">
@@ -179,11 +215,9 @@ export function WorkspaceWorkbench({
                 </span>
                 <span className="workspace-status">
                   <i className={`state-dot ${item.state}`} />
-                  {item.git?.dirty
+                  {item.state === "ready" && item.git?.dirty
                     ? `${item.git.changes.length} ${t("files")}`
-                    : item.state === "ready"
-                      ? t("clean")
-                      : item.state}
+                    : t(workspaceStateKey(item))}
                 </span>
               </button>
             ))}
@@ -193,7 +227,15 @@ export function WorkspaceWorkbench({
           {workspace === undefined ? (
             <div className="empty-state">
               <FolderSimple size={58} weight="duotone" />
-              <h2>{t("noWorkspaces")}</h2>
+              <h2>
+                {t(
+                  refreshStatus.failed
+                    ? "gitUnknown"
+                    : refreshStatus.updatedAt === undefined
+                      ? "checking"
+                      : "noWorkspaces",
+                )}
+              </h2>
               <p>{t("noWorkspacesHelp")}</p>
               <button className="primary" onClick={onCreate}>
                 <Plus size={18} />
@@ -210,7 +252,9 @@ export function WorkspaceWorkbench({
                       <h1>{workspace.name}</h1>
                       <p>{workspace.workspacePath}</p>
                     </div>
-                    <span className={`large-state ${workspace.state}`}>{workspace.state}</span>
+                    <span className={`large-state ${workspace.state}`}>
+                      {workspace.state === "ready" ? t("ready") : t(workspaceStateKey(workspace))}
+                    </span>
                   </div>
                   <dl>
                     <div>
@@ -219,18 +263,30 @@ export function WorkspaceWorkbench({
                     </div>
                     <div>
                       <dt>{t("head")}</dt>
-                      <dd className="mono">{workspace.git?.head.slice(0, 10) ?? "unavailable"}</dd>
+                      <dd className="mono">
+                        {workspace.git?.head.slice(0, 10) ?? t("gitUnknown")}
+                      </dd>
                     </div>
                     <div>
                       <dt>{t("git")}</dt>
-                      <dd className={workspace.git?.dirty ? "bad" : "good"}>
-                        {workspace.git?.dirty ? t("dirty") : t("clean")}
+                      <dd
+                        className={
+                          workspace.git === null ? "" : workspace.git.dirty ? "bad" : "good"
+                        }
+                      >
+                        {workspace.git === null
+                          ? t("gitUnknown")
+                          : workspace.git.dirty
+                            ? t("dirty")
+                            : t("clean")}
                       </dd>
                     </div>
                     <div>
                       <dt>{t("changes")}</dt>
                       <dd>
-                        {workspace.git?.changes.length ?? 0} {t("files")}
+                        {workspace.git === null
+                          ? t("gitUnknown")
+                          : `${workspace.git.changes.length} ${t("files")}`}
                       </dd>
                     </div>
                     <div>
@@ -247,7 +303,8 @@ export function WorkspaceWorkbench({
                     </div>
                   </dl>
                   <div className="lifecycle-actions">
-                    {(workspace.state === "repair-required" || !workspace.available) && (
+                    {(workspace.state === "repair-required" ||
+                      (workspace.state === "ready" && !workspace.available)) && (
                       <button
                         className="primary"
                         disabled={busy}
@@ -258,7 +315,7 @@ export function WorkspaceWorkbench({
                               workspaceId: workspace.workspaceId,
                             });
                             await onRefresh();
-                          })
+                          }, "repair")
                         }
                       >
                         <Wrench size={17} />
@@ -269,8 +326,14 @@ export function WorkspaceWorkbench({
                       className={
                         workspace.state === "cleanup-pending" ? "primary" : "danger-button"
                       }
-                      disabled={busy || terminalRunning || workspace.git?.dirty === true}
-                      title={workspace.git?.dirty ? t("dirtyRemove") : t("removeConfirm")}
+                      disabled={busy || terminalRunning || !canRemoveWorkspace(workspace)}
+                      title={
+                        workspace.git === null && workspace.state !== "cleanup-pending"
+                          ? t("gitUnknownHelp")
+                          : workspace.git?.dirty
+                            ? t("dirtyRemove")
+                            : t("removeConfirm")
+                      }
                       onClick={() => {
                         if (
                           window.confirm(
@@ -282,14 +345,13 @@ export function WorkspaceWorkbench({
                               projectId: project.projectId,
                               workspaceId: workspace.workspaceId,
                             });
+                            await terminalStore.close(project.projectId, workspace.workspaceId);
                             await onRefresh();
-                          });
+                          }, "remove");
                       }}
                     >
                       <Trash size={17} />
-                      {workspace.state === "cleanup-pending"
-                        ? `${t("remove")} · retry`
-                        : t("remove")}
+                      {workspace.state === "cleanup-pending" ? t("removeRetry") : t("remove")}
                     </button>
                     {terminalRunning && (
                       <small className="dirty-help">
@@ -309,10 +371,11 @@ export function WorkspaceWorkbench({
                   className={tab === "changes" ? "active" : ""}
                   onClick={() => setTab("changes")}
                 >
-                  {t("changes")} <span>{changes.length}</span>
+                  {t("changes")} <span>{workspace.git === null ? "?" : changes.length}</span>
                 </button>
                 <button
                   className={tab === "diff" ? "active" : ""}
+                  disabled={workspace.git === null}
                   onClick={() => loadDiff(selectedPath)}
                 >
                   {t("diff")}
@@ -328,24 +391,44 @@ export function WorkspaceWorkbench({
                 {tab === "terminal" ? (
                   <WorkspaceTerminal projectId={project.projectId} workspace={workspace} t={t} />
                 ) : tab === "diff" ? (
-                  <pre className="diff-view">
-                    {untrackedSelected
-                      ? t("untrackedDiff")
-                      : diff?.content ||
-                        (diff !== undefined
-                          ? t("noTrackedDiff")
-                          : changes.length === 0
-                            ? t("clean")
-                            : t("selectFile"))}
-                    {diff?.truncated ? `\n\n${t("diffTruncated")}` : ""}
-                    {selectedPath === undefined && parsedChanges.some((item) => item.untracked)
-                      ? `\n\n${t("untrackedDiff")}`
-                      : ""}
-                  </pre>
+                  <section className="diff-panel">
+                    {diffError !== undefined && (
+                      <div className="diff-error" role="alert">
+                        <p>{t(errorGuidance(diffError.code, diffError.upstreamCode))}</p>
+                        <details>
+                          <summary>{t("diagnosticDetails")}</summary>
+                          <code>{diffError.code}</code>
+                          <p>{diffError.message}</p>
+                        </details>
+                        <button onClick={() => loadDiff(selectedPath)}>{t("retry")}</button>
+                      </div>
+                    )}
+                    <pre className="diff-view">
+                      {diffLoading
+                        ? t("diffLoading")
+                        : diffError !== undefined
+                          ? ""
+                          : workspace.git === null
+                            ? t("gitUnknown")
+                            : untrackedSelected
+                              ? t("untrackedDiff")
+                              : diff?.content ||
+                                (diff !== undefined
+                                  ? t("noTrackedDiff")
+                                  : changes.length === 0
+                                    ? t("clean")
+                                    : t("selectFile"))}
+                      {diff?.truncated ? `\n\n${t("diffTruncated")}` : ""}
+                      {selectedPath === undefined && parsedChanges.some((item) => item.untracked)
+                        ? `\n\n${t("untrackedDiff")}`
+                        : ""}
+                    </pre>
+                  </section>
                 ) : (
                   <div className="changed-files">
                     <button
                       className={selectedPath === undefined ? "selected" : ""}
+                      disabled={workspace.git === null}
                       onClick={() => loadDiff()}
                     >
                       <CheckCircle size={17} />
@@ -360,7 +443,9 @@ export function WorkspaceWorkbench({
                         </button>
                       );
                     })}
-                    {changes.length === 0 && <p>{t("clean")}</p>}
+                    {changes.length === 0 && (
+                      <p>{workspace.git === null ? t("gitUnknown") : t("clean")}</p>
+                    )}
                   </div>
                 )}
               </div>

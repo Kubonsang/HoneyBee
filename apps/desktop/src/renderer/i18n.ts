@@ -1,6 +1,27 @@
 export type Locale = "ko" | "en";
 
 const en = {
+  gitUnknown: "Status unavailable",
+  gitUnknownHelp: "Refresh Git status before removing this Workspace.",
+  refreshFailed: "Could not verify the latest status. Showing the previous result.",
+  lastUpdated: "Last checked",
+  checking: "Checking status…",
+  provisioning: "Preparing",
+  repairRequired: "Repair required",
+  removing: "Removing",
+  cleanupPending: "Removal incomplete",
+  removeRetry: "Retry removal",
+  retry: "Retry",
+  dismiss: "Dismiss",
+  inUseHelp:
+    "Close Unity, terminals, IDEs, and other tools using this Workspace, then retry manually.",
+  repairHelp: "Repair this Workspace and confirm it is ready before opening tools.",
+  capacityHelp: "Free space on the storage drive, then retry the operation.",
+  operationHelp: "Review the error details, resolve the reported problem, then try again.",
+  terminalLimitHelp:
+    "The app has 16 terminals. Close an existing session from App terminals before opening another.",
+  diffLoading: "Reading diff…",
+
   tagline: "Manage Unity projects and Workspaces faster and with confidence.",
   homeTitle: "Smart Project & Workspace Manager",
   unityHub: "Unity Hub projects",
@@ -125,6 +146,26 @@ export type MessageKey = keyof typeof en;
 export const messageKeys = Object.keys(en) as MessageKey[];
 
 const ko: Record<MessageKey, string> = {
+  gitUnknown: "상태 확인 불가",
+  gitUnknownHelp: "Git 상태를 새로 확인한 뒤 워크스페이스를 삭제하세요.",
+  refreshFailed: "최신 상태 확인 실패. 이전 결과를 표시하고 있습니다.",
+  lastUpdated: "마지막 확인",
+  checking: "상태 확인 중…",
+  provisioning: "준비 중",
+  repairRequired: "복구 필요",
+  removing: "삭제 중",
+  cleanupPending: "삭제 미완료",
+  removeRetry: "삭제 재시도",
+  retry: "다시 시도",
+  dismiss: "닫기",
+  inUseHelp: "워크스페이스를 사용하는 Unity, 터미널, IDE 등의 도구를 닫은 뒤 직접 다시 시도하세요.",
+  repairHelp: "워크스페이스를 복구하고 준비됨 상태를 확인한 뒤 도구를 여세요.",
+  capacityHelp: "스토리지 드라이브의 여유 공간을 확보한 뒤 다시 시도하세요.",
+  operationHelp: "오류 상세를 확인하고 원인을 해결한 뒤 다시 시도하세요.",
+  terminalLimitHelp:
+    "앱 터미널이 16개입니다. 앱 터미널 목록에서 기존 세션을 종료한 뒤 새로 여세요.",
+  diffLoading: "Diff 읽는 중…",
+
   tagline: "프로젝트와 워크스페이스를 더 빠르고 쉽게 관리하세요.",
   homeTitle: "스마트 프로젝트 & 워크스페이스 매니저",
   unityHub: "Unity Hub 프로젝트",

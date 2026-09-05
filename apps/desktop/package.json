@@ -1,6 +1,6 @@
 {
   "name": "honeybee-desktop",
-  "version": "0.1.0-beta.5",
+  "version": "0.1.0-beta.6",
   "private": true,
   "type": "module",
   "main": "./dist/main/main/main.js",
@@ -9,7 +9,7 @@
     "build:icon": "node scripts/build-icon.mjs",
     "prepare:tools": "node scripts/prepare-tools.mjs",
     "package:win": "corepack pnpm build:icon && corepack pnpm prepare:tools && corepack pnpm build && node scripts/package.mjs",
-    "package:smoke": "corepack pnpm package:win && node scripts/smoke.mjs release/HoneyBee-win32-x64/HoneyBee.exe && node scripts/pty-smoke.mjs release/HoneyBee-win32-x64/HoneyBee.exe",
+    "package:smoke": "corepack pnpm package:win && node scripts/smoke.mjs --packaged && node scripts/pty-smoke.mjs",
     "smoke": "corepack pnpm build && node scripts/smoke.mjs",
     "visual:smoke": "corepack pnpm build && node scripts/visual-smoke.mjs",
     "start": "corepack pnpm prepare:tools && electron .",
