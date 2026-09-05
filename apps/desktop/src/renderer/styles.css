@@ -988,3 +988,40 @@ pre,
     max-width: 330px;
   }
 }
+
+.terminal-panel {
+  display: flex;
+  flex-direction: column;
+}
+.terminal-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 30px;
+}
+.terminal-toolbar button,
+.terminal-sessions button {
+  color: var(--amber);
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.terminal-mount {
+  flex: 1;
+  min-height: 0;
+}
+.terminal-error {
+  color: #ff9b94;
+  margin: 4px;
+}
+.terminal-sessions {
+  max-height: 100px;
+  overflow: auto;
+}
+.terminal-sessions li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}

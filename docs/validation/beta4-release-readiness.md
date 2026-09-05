@@ -8,7 +8,11 @@ PR's parser hardening. Use archives from the final successful Windows CI run for
 The [current-PC existing-install route](windows-shared-host.md) completed its functional and actual
 reboot gates on 2026-09-05 using the final CLI archive. Final Doctor passed 19 checks with no
 warnings/failures, the test registry is empty, and the original retained child is preserved. This
-supports limited evaluation with the existing matching hb8 service; no release has been published.
+supports limited evaluation with the existing matching hb8 service.
+[Beta 5](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.5) was published on
+2026-09-05 at 11:16:53 UTC, targeting `246226e`. Both original CI ZIPs and SHA256SUMS were
+verified against their public download digests. General publication remains blocked by the
+fresh-install, upgrade, and external-tool conformance gaps.
 
 Public release inspection on 2026-09-05 found that Beta 4 was already published on 2026-09-04 at
 13:32:07 UTC, from commit `794f8f8f6b5ef7f872be8daeebceae76d975abb9`. Its source tree

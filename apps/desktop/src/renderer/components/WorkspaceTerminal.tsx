@@ -1,93 +1,129 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Terminal } from "@xterm/xterm";
+import { desktopApi } from "../desktop-api.js";
 import { useEffect, useRef, useState } from "react";
-
-import type { DesktopWorkspaceV2 } from "../../shared/ipc.js";
+import type { DesktopPtySessionV1, DesktopWorkspaceV2 } from "../../shared/ipc.js";
+import type { MessageKey } from "../i18n.js";
+import { useTerminalStore, type TerminalView } from "../terminal-store.js";
 
 export function WorkspaceTerminal({
   projectId,
   workspace,
+  t,
 }: {
   projectId: string;
   workspace: DesktopWorkspaceV2;
+  t: (key: MessageKey) => string;
 }) {
+  const store = useTerminalStore();
   const host = useRef<HTMLDivElement>(null);
-  const [error, setError] = useState<string>();
+  const [view, setView] = useState<TerminalView>({});
+  const [closed, setClosed] = useState(false);
+  const [sessions, setSessions] = useState<readonly DesktopPtySessionV1[]>([]);
+  const [closing, setClosing] = useState(false);
   useEffect(() => {
-    if (host.current === null || !workspace.available) return;
-    const terminal = new Terminal({
-      convertEol: true,
-      cursorBlink: true,
-      fontFamily: "Cascadia Mono, Consolas, monospace",
-      fontSize: 13,
-      theme: { background: "#090b0d", foreground: "#e1e1e1", cursor: "#ffc52f" },
-    });
-    const fit = new FitAddon();
-    terminal.loadAddon(fit);
-    terminal.open(host.current);
-    fit.fit();
-    let stopped = false;
-    let sessionId: string | undefined;
-    let cursor = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const input = terminal.onData((data) => {
-      if (sessionId !== undefined) void window.honeybee.writePty({ sessionId, data });
-    });
-    const resize = (): void => {
-      fit.fit();
-      if (sessionId !== undefined)
-        void window.honeybee.resizePty({ sessionId, columns: terminal.cols, rows: terminal.rows });
+    if (host.current === null || closed) return;
+    return store.attach(projectId, workspace.workspaceId, host.current, setView);
+  }, [store, projectId, workspace.workspaceId, closed]);
+  useEffect(() => {
+    let active = true;
+    const refresh = (): void => {
+      void desktopApi
+        .listPtys()
+        .then((next) => {
+          if (active) setSessions(next);
+        })
+        .catch((error: unknown) => {
+          if (active) setView({ error });
+        });
     };
-    const observer = new ResizeObserver(resize);
-    observer.observe(host.current);
-    const poll = async (): Promise<void> => {
-      if (stopped || sessionId === undefined) return;
-      try {
-        const snapshot = await window.honeybee.ptySnapshot({ sessionId, afterCursor: cursor });
-        if (snapshot.truncated) terminal.writeln("\r\n[earlier output truncated]");
-        for (const chunk of snapshot.chunks) terminal.write(chunk.data);
-        cursor = snapshot.cursor;
-        if (snapshot.session.state === "exited") {
-          terminal.writeln(`\r\n[PowerShell exited ${snapshot.session.exitCode ?? ""}]`);
-          return;
-        }
-        timer = setTimeout(() => void poll(), 100);
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Terminal polling failed.");
-      }
-    };
-    void window.honeybee
-      .createPty({
-        projectId,
-        workspaceId: workspace.workspaceId,
-        columns: terminal.cols,
-        rows: terminal.rows,
-      })
-      .then((session) => {
-        if (stopped) {
-          void window.honeybee.closePty({ sessionId: session.sessionId });
-          return;
-        }
-        sessionId = session.sessionId;
-        terminal.focus();
-        void poll();
-      })
-      .catch((reason: unknown) =>
-        setError(reason instanceof Error ? reason.message : "Could not open PowerShell."),
-      );
+    refresh();
+    const timer = setInterval(refresh, 1_000);
     return () => {
-      stopped = true;
-      if (timer !== undefined) clearTimeout(timer);
-      observer.disconnect();
-      input.dispose();
-      terminal.dispose();
-      if (sessionId !== undefined) void window.honeybee.closePty({ sessionId });
+      active = false;
+      clearInterval(timer);
     };
-  }, [projectId, workspace.available, workspace.workspaceId]);
+  }, []);
+  const close = async (): Promise<void> => {
+    if (view.session?.state === "running" && !window.confirm(t("terminalCloseConfirm"))) return;
+    setClosing(true);
+    try {
+      await store.close(projectId, workspace.workspaceId);
+      setClosed(true);
+      setView({});
+    } catch (error) {
+      setView({ error });
+    } finally {
+      setClosing(false);
+    }
+  };
   return (
     <section className="terminal-panel">
-      {error !== undefined && <p className="inline-error">{error}</p>}
-      <div className="terminal-host" ref={host} />
+      <div className="terminal-toolbar">
+        <span>
+          {view.session?.state === "exited"
+            ? `${t("terminalExited")} (${view.session.exitCode ?? ""})`
+            : t("terminal")}
+        </span>
+        {closed ? (
+          <button
+            disabled={!workspace.available || workspace.state !== "ready"}
+            onClick={() => setClosed(false)}
+          >
+            {t("terminalOpen")}
+          </button>
+        ) : (
+          <button
+            disabled={closing || (view.session === undefined && view.error === undefined)}
+            onClick={() => void close()}
+          >
+            {t("terminalClose")}
+          </button>
+        )}
+      </div>
+      {view.error !== undefined && (
+        <p className="terminal-error">
+          {view.error instanceof Error ? view.error.message : String(view.error)}
+        </p>
+      )}
+      <div className="terminal-mount" ref={host} />
+      <details className="terminal-sessions">
+        <summary>
+          {t("terminalSessions")} ({sessions.length}/16)
+        </summary>
+        <ul>
+          {sessions
+            .filter(
+              (session) =>
+                session.projectId !== projectId || session.workspaceId !== workspace.workspaceId,
+            )
+            .map((session) => (
+              <li key={session.sessionId}>
+                <span>{session.cwd}</span>
+                <button
+                  disabled={closing}
+                  onClick={() => {
+                    if (
+                      session.state === "running" &&
+                      !window.confirm(`${t("terminalCloseConfirm")}\n${session.cwd}`)
+                    )
+                      return;
+                    setClosing(true);
+                    void store
+                      .close(session.projectId, session.workspaceId)
+                      .then(() =>
+                        setSessions((current) =>
+                          current.filter((item) => item.sessionId !== session.sessionId),
+                        ),
+                      )
+                      .catch((error: unknown) => setView({ error }))
+                      .finally(() => setClosing(false));
+                  }}
+                >
+                  {t("terminalClose")}
+                </button>
+              </li>
+            ))}
+        </ul>
+      </details>
     </section>
   );
 }
