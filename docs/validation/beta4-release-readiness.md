@@ -1,6 +1,8 @@
 # Beta 4 quality follow-up readiness
 
-Status: `0.1.0-beta.5` local archives verified; **follow-up not cleared for publication**.
+Status: `0.1.0-beta.5` is under review in [PR #39](https://github.com/Kubonsang/HoneyBee/pull/39);
+**follow-up not cleared for publication**. The initial local archives below are superseded by the
+PR's parser hardening. Use archives from the final successful Windows CI run for subsequent testing.
 
 Public release inspection on 2026-09-05 found that Beta 4 was already published on 2026-09-04 at
 13:32:07 UTC, from commit `794f8f8f6b5ef7f872be8daeebceae76d975abb9`. Its source tree
@@ -17,10 +19,17 @@ evidence; do not relabel it as a test of newly assembled archives.
       regressions, Go host tests, and dependency boundaries.
 - [x] CLI package smoke, Desktop package IPC/UI smoke, and packaged PTY smoke.
 - [x] Desktop visual/interaction smoke at 1280 × 820 and 900 × 620.
-- [ ] Windows CI passed on the candidate commit; logs and tested archives retained.
+- Final-head Windows CI, CodeQL, and review status: [PR #39 checks](https://github.com/Kubonsang/HoneyBee/pull/39/checks).
+  A successful `windows-quality-<head SHA>` artifact contains the tested CLI/Desktop ZIPs, checksums,
+  source commit, and logs. Local pass marks above do not substitute for these PR checks.
 
-The final versioned run passed **62 TypeScript tests in 16 suites**, Go host tests, and all
-verification stages. Packaged UI smoke exercises untracked guidance, out-of-order diff replies,
+The initial versioned run passed 62 TypeScript tests. After CodeQL review, the rename parser was
+changed from an ambiguous regular expression to a single delimiter scan. A 50,000-separator input,
+escaped quotes, and unterminated quoted paths are covered. The follow-up local run passed
+**63 TypeScript tests in 16 suites**, Go host tests, and every `pnpm verify` stage, with its log at
+`output/beta4-release-validation/verify-pr39-parser.log`.
+
+Packaged UI smoke exercises untracked guidance, out-of-order diff replies,
 and navigation while a request is pending. Visual captures are under `output/beta4-qa/1280` and
 `output/beta4-qa/900`. Verification and packaging logs are retained in
 `output/beta4-release-validation/verify-beta5.log` and `package-smoke-beta5.log`.
@@ -64,7 +73,7 @@ directory ownership check was disabled.
 - [ ] Publish only the tested archives after every gate above passes; rebuilding invalidates the
       archive hashes and requires package verification again.
 
-The local artifacts are under `artifacts/v0.1.0-beta.5-candidate-20260905/`:
+The **superseded initial local artifacts** are under `artifacts/v0.1.0-beta.5-candidate-20260905/`:
 
 | Archive                                        | SHA-256                                                            |
 | ---------------------------------------------- | ------------------------------------------------------------------ |
@@ -76,6 +85,18 @@ and local/pending validation status. `SHA256SUMS.txt` applies to these exact arc
 extracted under the app-specific `release-beta5-extracted` directories and passed CLI smoke,
 Desktop IPC/UI interactions, and packaged PTY smoke again. These are local uncommitted candidates;
 no GitHub CI run, tag, release, or service migration was performed in this session.
+
+The later continuation committed the implementation on `fix/beta5-release-quality`, opened PR #39,
+and started GitHub CI. The first CodeQL run identified polynomial-time rename matching; that real
+finding is addressed by the scan and regression above. The initial archives' manifest now records
+their superseded status. No public Beta 4 asset has been replaced.
+
+Read-only diagnosis of the extracted candidate against the existing hb8 installation passed 12
+checks with one expected warning for the empty probe registry and no failures. This verifies
+installed-service compatibility without mutating it; it is not a fresh-install or upgrade test.
+Hyper-V enumeration failed for lack of management permissions in the current Windows account,
+and no installation ISO was found in the user's Downloads folder. The dedicated physical gates
+remain pending; no existing Workspace or service was removed to manufacture an empty baseline.
 
 The extracted PTY check initially hit Electron GPU/OS-crypt initialization failures in the
 restricted sandbox account. It passed when rerun in the same normal Windows user context used for

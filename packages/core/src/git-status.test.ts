@@ -23,5 +23,18 @@ describe("Git porcelain paths", () => {
       path: "Assets/새 파일.cs",
       status: "R ",
     });
+    expect(parseGitStatusLine('R  "Assets/a\\" -> b.cs" -> target.cs')).toMatchObject({
+      originalPath: 'Assets/a" -> b.cs',
+      path: "target.cs",
+    });
+  });
+  it("handles repeated separators and rejects unterminated quoted sources in one scan", () => {
+    const repeated = " -> a".repeat(50_000);
+    expect(parseGitStatusLine(`R  source -> ${repeated}`).path).toBe(repeated);
+    expect(() => parseGitStatusLine(`R  "${repeated}`)).toThrow("Invalid Git rename record");
+    expect(() => parseGitStatusLine(`R  ${repeated}\n`)).toThrow("raw line breaks");
+    expect(() => parseGitStatusLine('R  "source"missing -> target')).toThrow(
+      "Invalid Git rename record",
+    );
   });
 });

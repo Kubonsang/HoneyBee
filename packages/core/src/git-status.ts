@@ -19,9 +19,9 @@ const decodePath = (value: string): string => {
   for (let index = 0; index < contents.length;) {
     const character = contents[index];
     if (character === "\\") {
-      const octal = /^[0-7]{3}/u.exec(contents.slice(index + 1));
-      if (octal !== null) {
-        bytes.push(Number.parseInt(octal[0], 8));
+      const octal = contents.slice(index + 1, index + 4);
+      if (/^[0-7]{3}$/u.test(octal)) {
+        bytes.push(Number.parseInt(octal, 8));
         index += 4;
         continue;
       }
@@ -41,16 +41,28 @@ const decodePath = (value: string): string => {
 };
 
 export const parseGitStatusLine = (line: string) => {
+  if (line.includes("\n") || line.includes("\r"))
+    throw new Error("Git status records must not contain raw line breaks.");
   const status = line.slice(0, 2);
   const value = line.slice(3);
   if (status.includes("R") || status.includes("C")) {
-    const match = /^("(?:\\.|[^"\\])*"|.*?) -> (.*)$/u.exec(value);
-    if (match?.[1] === undefined || match[2] === undefined)
+    let separator = -1;
+    if (value.startsWith('"')) {
+      // Scan the quoted source once; escaped quotes and arrows belong to its path.
+      for (let index = 1; index < value.length; index++) {
+        if (value[index] === "\\") index++;
+        else if (value[index] === '"') {
+          if (value.startsWith(" -> ", index + 1)) separator = index + 1;
+          break;
+        }
+      }
+    } else separator = value.indexOf(" -> ");
+    if (separator <= 0 || separator + 4 >= value.length)
       throw new Error("Invalid Git rename record.");
     return {
       status,
-      path: decodePath(match[2]),
-      originalPath: decodePath(match[1]),
+      path: decodePath(value.slice(separator + 4)),
+      originalPath: decodePath(value.slice(0, separator)),
       untracked: false,
     };
   }
