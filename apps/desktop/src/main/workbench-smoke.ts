@@ -112,6 +112,23 @@ export const verifyWorkbench = async (browser: BrowserWindow): Promise<void> => 
       if (!(error instanceof Error) || !error.message.includes("desktop.terminal-running"))
         throw error;
     }
+    document.querySelector<HTMLButtonElement>(".breadcrumb-project")?.click();
+    await waitFor(() => document.querySelector("[data-testid='project-picker']") !== null);
+    button(".project-row", "Other project").click();
+    await waitFor(
+      () => document.querySelector(".workbench-header strong")?.textContent === "Other project",
+    );
+    document.querySelector<HTMLButtonElement>(".breadcrumb-project")?.click();
+    await waitFor(() => document.querySelector("[data-testid='project-picker']") !== null);
+    button(".project-row", "GKF_").click();
+    await waitFor(() => document.querySelector(".workspace-name h1")?.textContent === "combat");
+    document.querySelector<HTMLButtonElement>(".detail-tabs button:last-child")?.click();
+    await waitFor(() => document.querySelector(".xterm") !== null);
+    if (
+      document.querySelector(".xterm") !== terminal ||
+      (await api.listPtys())[0]?.sessionId !== session.sessionId
+    )
+      throw new Error("Project navigation replaced the terminal.");
     await api.closePty({ sessionId: session.sessionId });
   };
   await browser.webContents.executeJavaScript(`(${interact.toString()})()`);

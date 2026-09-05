@@ -2,6 +2,7 @@ import { desktopApi } from "../desktop-api.js";
 import { useEffect, useRef, useState } from "react";
 import type { DesktopPtySessionV1, DesktopWorkspaceV2 } from "../../shared/ipc.js";
 import type { MessageKey } from "../i18n.js";
+import { operationError, errorGuidance } from "../operation-errors.js";
 import { useTerminalStore, type TerminalView } from "../terminal-store.js";
 
 export function WorkspaceTerminal({
@@ -16,13 +17,14 @@ export function WorkspaceTerminal({
   const store = useTerminalStore();
   const host = useRef<HTMLDivElement>(null);
   const [view, setView] = useState<TerminalView>({});
+  const [generation, setGeneration] = useState(0);
   const [closed, setClosed] = useState(false);
   const [sessions, setSessions] = useState<readonly DesktopPtySessionV1[]>([]);
   const [closing, setClosing] = useState(false);
   useEffect(() => {
     if (host.current === null || closed) return;
     return store.attach(projectId, workspace.workspaceId, host.current, setView);
-  }, [store, projectId, workspace.workspaceId, closed]);
+  }, [store, projectId, workspace.workspaceId, closed, generation]);
   useEffect(() => {
     let active = true;
     const refresh = (): void => {
@@ -43,11 +45,16 @@ export function WorkspaceTerminal({
     };
   }, []);
   const close = async (): Promise<void> => {
-    if (view.session?.state === "running" && !window.confirm(t("terminalCloseConfirm"))) return;
     setClosing(true);
     try {
+      const current = (await desktopApi.listPtys()).find(
+        (session) =>
+          session.projectId === projectId && session.workspaceId === workspace.workspaceId,
+      );
+      if (current?.state === "running" && !window.confirm(t("terminalCloseConfirm"))) return;
       await store.close(projectId, workspace.workspaceId);
-      setClosed(true);
+      if (view.session?.state === "exited") setGeneration((current) => current + 1);
+      else setClosed(true);
       setView({});
     } catch (error) {
       setView({ error });
@@ -75,14 +82,23 @@ export function WorkspaceTerminal({
             disabled={closing || (view.session === undefined && view.error === undefined)}
             onClick={() => void close()}
           >
-            {t("terminalClose")}
+            {t(view.session?.state === "exited" ? "terminalOpen" : "terminalClose")}
           </button>
         )}
       </div>
       {view.error !== undefined && (
-        <p className="terminal-error">
-          {view.error instanceof Error ? view.error.message : String(view.error)}
-        </p>
+        <details className="terminal-error">
+          <summary>
+            {t(
+              errorGuidance(
+                operationError(view.error).code,
+                operationError(view.error).upstreamCode,
+              ),
+            )}
+          </summary>
+          <code>{operationError(view.error).code}</code>
+          <p>{operationError(view.error).message}</p>
+        </details>
       )}
       <div className="terminal-mount" ref={host} />
       <details className="terminal-sessions">

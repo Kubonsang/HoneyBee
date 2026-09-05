@@ -10,8 +10,13 @@ const execFileAsync = promisify(execFile);
 const require = createRequire(import.meta.url);
 const electronExecutable = require("electron");
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const packagedExecutable = path.resolve(appRoot, process.argv[2] ?? "");
 const outputDirectory = process.env.HONEYBEE_DESKTOP_PACKAGE_DIR ?? "release";
+if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".")
+  throw new Error("Packaged smoke output must be one directory inside the Desktop app.");
+const packagedExecutable = path.resolve(
+  appRoot,
+  process.argv[2] ?? path.join(outputDirectory, "HoneyBee-win32-x64", "HoneyBee.exe"),
+);
 const releaseRoot = path.join(appRoot, outputDirectory);
 const relative = path.relative(releaseRoot, packagedExecutable);
 if (relative.startsWith("..") || path.isAbsolute(relative)) {

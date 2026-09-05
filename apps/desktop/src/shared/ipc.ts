@@ -5,6 +5,7 @@ export const DesktopErrorV1Schema = z
     code: z.string().min(1),
     message: z.string().min(1),
     remediation: z.array(z.string().min(1)).max(16),
+    upstreamCode: z.string().min(1).optional(),
   })
   .strict();
 export type DesktopErrorV1 = z.infer<typeof DesktopErrorV1Schema>;
@@ -274,11 +275,13 @@ export const DesktopIpcChannels = {
 export class DesktopApiError extends Error {
   public readonly code: string;
   public readonly remediation: readonly string[];
+  public readonly upstreamCode: string | undefined;
   public constructor(error: DesktopErrorV1) {
     super(error.message);
     this.name = "DesktopApiError";
     this.code = error.code;
     this.remediation = error.remediation;
+    this.upstreamCode = error.upstreamCode;
   }
 }
 
