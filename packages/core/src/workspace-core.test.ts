@@ -296,6 +296,24 @@ afterEach(async () => {
 });
 
 describe("HoneyBeeWorkspaceCore", () => {
+  it("preserves the first unstaged status column and quoted Unicode paths", async () => {
+    const { core } = await fixture();
+    const created = await core.createWorkspace({
+      name: "status-paths",
+      branch: "feature/status-paths",
+    });
+    await writeFile(path.join(created.workspacePath, "Assets", "Player.cs"), "changed\n");
+    const status = await core.workspaceStatus(created.workspaceId);
+    expect(status.git?.changes).toEqual([" M Assets/Player.cs"]);
+    const { parseGitStatusLine } = await import("./git-status.js");
+    await writeFile(path.join(created.workspacePath, "Assets", "한글 파일.cs"), "new\n");
+    const changed = await core.workspaceStatus(created.workspaceId);
+    expect(changed.git?.changes.map(parseGitStatusLine)).toContainEqual({
+      status: "??",
+      path: "Assets/한글 파일.cs",
+      untracked: true,
+    });
+  }, 30_000);
   it("mounts a Library-only child in a real Git worktree and preserves its branch on removal", async () => {
     const { source, core, project } = await fixture();
     await writeFile(path.join(source, "Assets", "SourceOnly.cs"), "dirty\n", "utf8");

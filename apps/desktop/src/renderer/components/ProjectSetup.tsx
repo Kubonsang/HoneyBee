@@ -9,6 +9,8 @@ import {
 
 import type { DesktopDoctorReportV1, DesktopProjectInspectionV1 } from "../../shared/ipc.js";
 import type { MessageKey } from "../i18n.js";
+import { isSetupCheck, setupBlockers } from "../../shared/setup-checks.js";
+import { setupGuidance } from "../setup-guidance.js";
 
 const CheckIcon = ({ status }: { status: "pass" | "warning" | "fail" }) =>
   status === "pass" ? (
@@ -50,7 +52,8 @@ export function ProjectSetup({
   const sourceMissing = inspection.checks.some(
     (item) => item.code === "cache.source-library" && item.status !== "pass",
   );
-  const canSetup = inspection.readyForSetup && storageReady;
+  const canSetup =
+    inspection.readyForSetup && storageReady && setupBlockers(doctor?.checks ?? []).length === 0;
   return (
     <section
       className="content-screen screen-pad narrow-screen setup-screen"
@@ -129,6 +132,25 @@ export function ProjectSetup({
           </div>
         </div>
       </div>
+      {doctor?.checks
+        .filter((item) => isSetupCheck(item) && item.status !== "pass")
+        .map((item) => (
+          <div className="setup-check" key={item.code}>
+            <CheckIcon status={item.status} />
+            <div>
+              <strong>{t(setupGuidance(item.code))}</strong>
+              <details>
+                <summary>{t("diagnosticDetails")}</summary>
+                <small>
+                  {item.code}: {item.message}
+                </small>
+                {item.remediation?.map((step) => (
+                  <small key={step}>{step}</small>
+                ))}
+              </details>
+            </div>
+          </div>
+        ))}
       {sourceMissing && (
         <button className="secondary full-button" onClick={onOpenUnity}>
           <ShieldCheck size={19} />

@@ -25,6 +25,8 @@ if (packagedExecutable !== undefined) {
     throw new Error("Packaged smoke executable escaped the Desktop release directory.");
   }
   await access(path.join(path.dirname(packagedExecutable), "resources", "honeybee.png"));
+  await access(path.join(path.dirname(packagedExecutable), "README.md"));
+  await access(path.join(path.dirname(packagedExecutable), "STORAGE-SETUP.md"));
 }
 const userData = await mkdtemp(path.join(tmpdir(), "honeybee-desktop-smoke-"));
 const resultPath = path.join(userData, "smoke-result.json");

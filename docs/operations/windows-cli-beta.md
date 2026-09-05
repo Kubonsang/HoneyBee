@@ -1,6 +1,6 @@
 # HoneyBee Windows CLI Beta
 
-HoneyBee 0.1.0 Beta 4 is an unsigned Windows 11 x64 evaluation candidate. It requires Node.js 24 or
+HoneyBee 0.1.0 Beta 5 is an unsigned Windows 11 x64 evaluation candidate. It requires Node.js 24 or
 newer, Git for Windows, and a one-time elevated installation of the bundled
 UnityWorkspaceStorage service. HoneyBee does not install or repair the service automatically.
 
@@ -49,10 +49,8 @@ parents. If the new parent cannot be verified, published, or admitted with capac
 child, HoneyBee aborts the new transaction and leaves the previously registered cache unchanged.
 Remove unused Workspaces or free disk space before retrying a capacity failure.
 
-Cache prepare always builds a new immutable parent from the current source Library. Existing
-Workspaces keep their recorded parent and are not switched. An old parent remains protected while
-retained children use it, then becomes eligible for the storage component's TTL/capacity cleanup.
-There is no separate cache refresh command.
+An old parent remains protected while retained children use it, then becomes eligible for the
+storage component's TTL/capacity cleanup.
 
 ## 4. Work and remove
 

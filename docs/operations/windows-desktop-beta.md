@@ -1,10 +1,16 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 4 is a Workspace Workbench candidate for Windows 11 x64. It uses the
+HoneyBee Desktop 0.1.0 Beta 5 is a Workspace Workbench candidate for Windows 11 x64. It uses the
 same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
 work.
 
 ## First start
+
+Extract the complete archive and keep its `resources` directory beside the executable. The archive
+includes `STORAGE-SETUP.md` for the one-time elevated service installation. For Desktop, use
+`resources\win32-x64\honeybee-workspace-storage-host.exe` in place of the CLI guide's
+`dist\honeybee-workspace-storage-host.exe`; the service/root/user and upgrade requirements are the
+same. Diagnostics and ordinary Workspace use run without elevation.
 
 If a project is already registered, Desktop opens the most recently used project. Otherwise choose:
 
@@ -33,6 +39,11 @@ branch.
 Quick actions open CMD, PowerShell (PowerShell 7 preferred), VS Code, or the exact Unity editor in the
 selected ready Workspace. These are detached user tools: HoneyBee does not watch, restart, verify, or
 interpret them.
+
+The diff viewer shows tracked changes relative to HEAD, including staged and unstaged edits. Untracked files
+are listed but their contents must be inspected in an editor. Large diffs are explicitly truncated
+at 1 MiB. Setup shows bilingual corrective guidance, with the original diagnostic and remediation
+available under diagnostic details; use **Check again** after completing the indicated action.
 
 Dirty Workspace removal is disabled. Commit or discard changes first. Removal obtains an exclusive
 lock on the exact Library volume before changing the registry, junction, or Git worktree. If an

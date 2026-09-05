@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.1.0-beta.4 - Unreleased
+## 0.1.0-beta.5 - Unreleased
+
+- Preserve Git status columns and decode quoted paths for accurate file selection, including
+  Unicode, spaces, and renames. Diff requests use literal paths and bound streamed output to 1 MiB.
+- Discard superseded Workspace-list and diff responses after navigation.
+- Show actionable bilingual setup diagnostics and validate the packaged storage version and hashes.
+- Verify Desktop packaging, renderer interactions, and packaged PTY in Windows CI alongside the CLI.
+- Include Desktop installation and storage setup documentation in the archive.
+
+## 0.1.0-beta.4 - 2026-09-04
 
 Windows Workspace lifecycle hardening for externally launched tools and reboot repair.
 
@@ -31,7 +40,16 @@ Windows Workspace lifecycle hardening for externally launched tools and reboot r
   with the retained child identity, authored Git data, and branch preserved and no disposable
   storage residuals after removal.
 
-## 0.1.0-beta.2 - Unreleased
+## 0.1.0-beta.3 - 2026-09-04
+
+Desktop Workspace Workbench release (tag `v0.1.0-beta.3`, commit `9ec2444`).
+
+- Unity Hub discovery, manual selection, Git clone onboarding, and project setup.
+- Workspace list, changed files, bounded Git diff, and interactive PowerShell terminal.
+- User-triggered CMD, PowerShell, VS Code, and exact-version Unity launch.
+- Korean/English interface and compact Desktop layout.
+
+## 0.1.0-beta.2 - Development milestone (included in Beta 3)
 
 Windows CLI lifecycle hardening before real-project dogfood.
 

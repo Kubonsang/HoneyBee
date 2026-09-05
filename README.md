@@ -1,4 +1,4 @@
-# HoneyBee 0.1.0 Beta 4 Candidate
+# HoneyBee Windows Unity Workspaces
 
 HoneyBee is a Windows Unity Workspace provider. It creates independent Git worktrees and gives each
 one a differencing-VHDX-backed Unity `Library`.
@@ -25,7 +25,11 @@ codex
 
 ## Status
 
-This repository is preparing `0.1.0-beta.4`; the currently published prerelease remains Beta 3.
+The published prerelease is [Beta 4](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.4),
+released on 2026-09-04. This working tree prepares `0.1.0-beta.5` with quality fixes; its locally assembled
+archives are not the published Beta 4 assets. The
+[quality follow-up checklist](docs/validation/beta4-release-readiness.md) tracks candidate
+verification separately from earlier physical-reboot evidence.
 The candidate pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
 the native identity-checked stale-mount cleanup and adds an exclusive Library-volume removal
 handshake. It also refuses to publish a cache that leaves no capacity for its first child.

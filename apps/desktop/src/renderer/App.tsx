@@ -19,6 +19,7 @@ import { WorkspaceDialog } from "./components/WorkspaceDialog.js";
 import { WorkspaceWorkbench } from "./components/WorkspaceWorkbench.js";
 import { message, type Locale, type MessageKey } from "./i18n.js";
 import { selectInitialProject } from "./navigation.js";
+import { LatestRequest } from "./latest-request.js";
 
 type Route = "loading" | "home" | "picker" | "clone" | "setup" | "workbench";
 const RECENT_PROJECT_KEY = "honeybee.desktop.recent-project.v1";
@@ -32,6 +33,9 @@ const initialLocale = (): Locale => {
 
 export function App() {
   const initialized = useRef(false);
+  const workspaceRequests = useRef(new LatestRequest());
+  const activeProject = useRef<string | undefined>(undefined);
+  const operationCount = useRef(0);
   const [locale, updateLocale] = useState<Locale>(initialLocale);
   const [route, setRoute] = useState<Route>("loading");
   const [projects, setProjects] = useState<readonly DesktopProjectV2[]>([]);
@@ -62,11 +66,15 @@ export function App() {
       });
   };
   const run = (operation: () => Promise<void>): void => {
+    operationCount.current++;
     setBusy(true);
     setError(undefined);
     void operation()
       .catch(reportError)
-      .finally(() => setBusy(false));
+      .finally(() => {
+        operationCount.current--;
+        setBusy(operationCount.current > 0);
+      });
   };
 
   const refreshProjects = useCallback(async (): Promise<readonly DesktopProjectV2[]> => {
@@ -76,8 +84,16 @@ export function App() {
   }, []);
   const refreshWorkspaces = useCallback(
     async (selectedProject = projectId): Promise<void> => {
-      if (selectedProject === undefined) return;
-      const next = await window.honeybee.workspaces({ projectId: selectedProject });
+      if (selectedProject === undefined || selectedProject !== activeProject.current) return;
+      const isCurrent = workspaceRequests.current.begin();
+      let next: readonly DesktopWorkspaceV2[];
+      try {
+        next = await window.honeybee.workspaces({ projectId: selectedProject });
+      } catch (error) {
+        if (isCurrent() && selectedProject === activeProject.current) throw error;
+        return;
+      }
+      if (!isCurrent() || selectedProject !== activeProject.current) return;
       setWorkspaces(next);
       setWorkspaceId((current) =>
         current !== undefined && next.some((item) => item.workspaceId === current)
@@ -90,6 +106,10 @@ export function App() {
   const openProject = useCallback(
     (selected: DesktopProjectV2): void => {
       localStorage.setItem(RECENT_PROJECT_KEY, selected.projectId);
+      activeProject.current = selected.projectId;
+      workspaceRequests.current.invalidate();
+      setWorkspaces([]);
+      setWorkspaceId(undefined);
       setProjectId(selected.projectId);
       setRoute("workbench");
       void refreshWorkspaces(selected.projectId).catch(reportError);
@@ -110,14 +130,7 @@ export function App() {
         }
         const selected = selectInitialProject(next, localStorage.getItem(RECENT_PROJECT_KEY));
         if (selected !== undefined) {
-          localStorage.setItem(RECENT_PROJECT_KEY, selected.projectId);
-          setProjectId(selected.projectId);
-          const nextWorkspaces = await window.honeybee.workspaces({
-            projectId: selected.projectId,
-          });
-          setWorkspaces(nextWorkspaces);
-          setWorkspaceId(nextWorkspaces[0]?.workspaceId);
-          setRoute("workbench");
+          openProject(selected);
         } else setRoute("picker");
       })
       .catch((reason: unknown) => {
@@ -217,7 +230,7 @@ export function App() {
       const created = await window.honeybee.createWorkspace(request);
       setDialogOpen(false);
       await refreshWorkspaces(request.projectId);
-      setWorkspaceId(created.workspaceId);
+      if (activeProject.current === request.projectId) setWorkspaceId(created.workspaceId);
     });
   };
   const openSettings = (): void => {
@@ -325,6 +338,7 @@ export function App() {
       )}
       {route === "workbench" && project !== undefined && (
         <WorkspaceWorkbench
+          key={`${project.projectId}:${workspaceId ?? ""}`}
           project={project}
           workspaces={workspaces}
           workspaceId={workspaceId}

@@ -17,6 +17,7 @@ const bundledTools = path.join(appRoot, ".tools", "win32-x64");
 const compatibilityManifest = path.join(appRoot, "resources", "component-compatibility-v1.json");
 const brandPng = path.join(appRoot, "resources", "brand", "honeybee.png");
 const windowsIcon = path.join(appRoot, "resources", "brand", "honeybee.ico");
+const repositoryRoot = path.resolve(appRoot, "..", "..");
 const require = createRequire(import.meta.url);
 const nodePtyRoot = path.dirname(require.resolve("node-pty/package.json"));
 const nodeAddonApiRoot = path.join(path.dirname(nodePtyRoot), "node-addon-api");
@@ -134,4 +135,13 @@ const paths = await packager({
 });
 
 if (paths.length !== 1) throw new Error("Expected exactly one packaged Desktop path.");
+await cp(
+  path.join(repositoryRoot, "docs", "operations", "windows-desktop-beta.md"),
+  path.join(paths[0], "README.md"),
+);
+await cp(
+  path.join(repositoryRoot, "docs", "operations", "windows-cli-beta.md"),
+  path.join(paths[0], "STORAGE-SETUP.md"),
+);
+await cp(path.join(repositoryRoot, "LICENSE"), path.join(paths[0], "LICENSE-HoneyBee"));
 process.stdout.write(paths[0] + "\n");

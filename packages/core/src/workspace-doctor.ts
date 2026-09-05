@@ -208,6 +208,20 @@ export const runWorkspaceDoctor = async (
               },
             ),
       );
+      if (options.expectedComponentVersion !== undefined) {
+        checks.push(
+          check(
+            "storage.component-version",
+            diagnostic.componentVersion === options.expectedComponentVersion ? "pass" : "fail",
+            `Installed storage version: ${diagnostic.componentVersion ?? "unknown"}; required: ${options.expectedComponentVersion}.`,
+            {
+              remediation: [
+                "Remove older Workspaces with their original CLI and verify branch preservation before following the documented service replacement procedure.",
+              ],
+            },
+          ),
+        );
+      }
       checks.push(
         diagnostic.workspaceRootAccessible
           ? check(

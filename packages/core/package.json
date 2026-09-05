@@ -1,12 +1,16 @@
 {
   "name": "@honeybee/core",
-  "version": "0.1.0-beta.4",
+  "version": "0.1.0-beta.5",
   "private": true,
   "type": "module",
   "files": [
     "dist"
   ],
   "exports": {
+    "./git-status": {
+      "types": "./dist/git-status.d.ts",
+      "import": "./dist/git-status.js"
+    },
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"

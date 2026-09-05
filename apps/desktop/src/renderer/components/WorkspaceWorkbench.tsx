@@ -9,18 +9,14 @@ import {
   Trash,
   Wrench,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { parseGitStatusLine } from "@honeybee/core/git-status";
 
 import type { DesktopGitDiffV1, DesktopProjectV2, DesktopWorkspaceV2 } from "../../shared/ipc.js";
 import type { MessageKey } from "../i18n.js";
 import { WorkspaceActions } from "./WorkspaceActions.js";
 import { WorkspaceTerminal } from "./WorkspaceTerminal.js";
-
-const changedPath = (line: string): string => {
-  const value = line.length > 3 ? line.slice(3) : line;
-  const rename = value.lastIndexOf(" -> ");
-  return rename < 0 ? value : value.slice(rename + 4);
-};
+import { LatestRequest } from "../latest-request.js";
 
 export function WorkspaceWorkbench({
   project,
@@ -51,26 +47,40 @@ export function WorkspaceWorkbench({
   const [tab, setTab] = useState<"changes" | "diff" | "terminal">("changes");
   const [diff, setDiff] = useState<DesktopGitDiffV1>();
   const [selectedPath, setSelectedPath] = useState<string>();
+  const [untrackedSelected, setUntrackedSelected] = useState(false);
+  const requests = useRef(new LatestRequest());
   const changes = useMemo(() => workspace?.git?.changes ?? [], [workspace]);
+  const parsedChanges = useMemo(() => changes.map(parseGitStatusLine), [changes]);
   useEffect(() => {
+    const current = requests.current;
+    current.invalidate();
     setDiff(undefined);
     setSelectedPath(undefined);
     setTab("changes");
+    return () => current.invalidate();
   }, [workspace?.workspaceId]);
 
   const loadDiff = (requestedPath?: string): void => {
     if (workspace === undefined) return;
+    const isCurrent = requests.current.begin();
+    const untracked = parsedChanges.some((item) => item.path === requestedPath && item.untracked);
+    setUntrackedSelected(untracked);
+    setDiff(undefined);
     setSelectedPath(requestedPath);
     setTab("diff");
-    run(async () =>
-      setDiff(
-        await window.honeybee.gitDiff({
+    if (untracked) return;
+    run(async () => {
+      try {
+        const result = await window.honeybee.gitDiff({
           projectId: project.projectId,
           workspaceId: workspace.workspaceId,
           ...(requestedPath === undefined ? {} : { path: requestedPath }),
-        }),
-      ),
-    );
+        });
+        if (isCurrent()) setDiff(result);
+      } catch (error) {
+        if (isCurrent()) throw error;
+      }
+    });
   };
   const launch = (tool: "cmd" | "powershell" | "vscode" | "unity"): void => {
     if (workspace === undefined) return;
@@ -97,7 +107,7 @@ export function WorkspaceWorkbench({
           <button className="icon-button" title={t("settings")} onClick={onSettings}>
             <GearSix size={19} />
           </button>
-          <button className="secondary" disabled={busy} onClick={() => void onRefresh()}>
+          <button className="secondary" disabled={busy} onClick={() => run(onRefresh)}>
             <ArrowClockwise size={18} />
             {t("refresh")}
           </button>
@@ -283,9 +293,18 @@ export function WorkspaceWorkbench({
                   <WorkspaceTerminal projectId={project.projectId} workspace={workspace} />
                 ) : tab === "diff" ? (
                   <pre className="diff-view">
-                    {diff?.content ||
-                      (changes.length === 0 ? "Working tree is clean." : t("selectFile"))}
-                    {diff?.truncated ? "\n\n[diff truncated at 1 MiB]" : ""}
+                    {untrackedSelected
+                      ? t("untrackedDiff")
+                      : diff?.content ||
+                        (diff !== undefined
+                          ? t("noTrackedDiff")
+                          : changes.length === 0
+                            ? t("clean")
+                            : t("selectFile"))}
+                    {diff?.truncated ? `\n\n${t("diffTruncated")}` : ""}
+                    {selectedPath === undefined && parsedChanges.some((item) => item.untracked)
+                      ? `\n\n${t("untrackedDiff")}`
+                      : ""}
                   </pre>
                 ) : (
                   <div className="changed-files">
@@ -296,11 +315,11 @@ export function WorkspaceWorkbench({
                       <CheckCircle size={17} />
                       {t("allChanges")}
                     </button>
-                    {changes.map((change) => {
-                      const file = changedPath(change);
+                    {parsedChanges.map((change) => {
+                      const file = change.path;
                       return (
-                        <button key={change} onClick={() => loadDiff(file)}>
-                          <code>{change.slice(0, 2)}</code>
+                        <button key={file} onClick={() => loadDiff(file)}>
+                          <code>{change.status}</code>
                           <span>{file}</span>
                         </button>
                       );
