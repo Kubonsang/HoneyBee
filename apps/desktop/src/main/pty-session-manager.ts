@@ -4,6 +4,7 @@ import path from "node:path";
 import { spawn, type IPty } from "node-pty";
 
 import type { DesktopPtySessionV1, DesktopPtySnapshotV1 } from "../shared/ipc.js";
+import { DesktopMainError } from "./desktop-errors.js";
 
 const MAX_CHUNKS = 1_000;
 const MAX_BUFFER_BYTES = 2 * 1024 * 1024;
@@ -17,6 +18,7 @@ const shellEnvironment = (): Record<string, string> =>
 
 interface PtyEntry {
   readonly sessionId: string;
+  readonly projectId: string;
   readonly workspaceId: string;
   readonly cwd: string;
   readonly process: IPty;
@@ -30,6 +32,7 @@ interface PtyEntry {
 
 const view = (entry: PtyEntry): DesktopPtySessionV1 => ({
   sessionId: entry.sessionId,
+  projectId: entry.projectId,
   workspaceId: entry.workspaceId,
   cwd: entry.cwd,
   state: entry.state,
@@ -38,13 +41,75 @@ const view = (entry: PtyEntry): DesktopPtySessionV1 => ({
 
 export class DesktopPtySessionManager {
   readonly #sessions = new Map<string, PtyEntry>();
+  readonly #removing = new Set<string>();
+  #quitting = false;
+
+  public requestQuit(confirm: (sessions: readonly DesktopPtySessionV1[]) => boolean): boolean {
+    const running = this.list().filter((session) => session.state === "running");
+    if (running.length > 0 && !confirm(running)) return false;
+    this.#quitting = true;
+    this.closeAll();
+    return true;
+  }
+
+  public list(): DesktopPtySessionV1[] {
+    return [...this.#sessions.values()].map(view);
+  }
+
+  public async withWorkspaceRemoval<T>(
+    projectId: string,
+    workspaceId: string,
+    remove: () => Promise<T>,
+  ): Promise<T> {
+    const key = JSON.stringify([projectId, workspaceId]);
+    if (this.#removing.has(key))
+      throw new DesktopMainError("workspace.in-use", "Workspace removal is already in progress.");
+    if (
+      this.list().some(
+        (session) =>
+          session.projectId === projectId &&
+          session.workspaceId === workspaceId &&
+          session.state === "running",
+      )
+    ) {
+      throw new DesktopMainError(
+        "desktop.terminal-running",
+        "Close the built-in terminal before removing this Workspace.",
+      );
+    }
+    this.#removing.add(key);
+    try {
+      const result = await remove();
+      for (const session of this.list()) {
+        if (session.projectId === projectId && session.workspaceId === workspaceId)
+          this.close(session.sessionId);
+      }
+      return result;
+    } finally {
+      this.#removing.delete(key);
+    }
+  }
 
   public create(
+    projectId: string,
     workspaceId: string,
     cwd: string,
     columns: number,
     rows: number,
   ): DesktopPtySessionV1 {
+    if (this.#quitting) throw new DesktopMainError("desktop.quitting", "HoneyBee is closing.");
+    if (this.#removing.has(JSON.stringify([projectId, workspaceId]))) {
+      throw new DesktopMainError("workspace.in-use", "Workspace removal is in progress.");
+    }
+    const existing = this.list().find(
+      (session) => session.projectId === projectId && session.workspaceId === workspaceId,
+    );
+    if (existing !== undefined) return existing;
+    if (this.#sessions.size >= 16)
+      throw new DesktopMainError(
+        "desktop.terminal-limit",
+        "The 16-terminal limit has been reached. Close an existing terminal first.",
+      );
     const sessionId = randomUUID();
     const windowsRoot = process.env.SystemRoot;
     if (windowsRoot === undefined || !path.win32.isAbsolute(windowsRoot)) {
@@ -64,6 +129,7 @@ export class DesktopPtySessionManager {
     );
     const entry: PtyEntry = {
       sessionId,
+      projectId,
       workspaceId,
       cwd,
       process: terminal,

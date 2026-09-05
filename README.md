@@ -25,16 +25,16 @@ codex
 
 ## Status
 
-The published prerelease is [Beta 4](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.4),
-released on 2026-09-04. This working tree prepares `0.1.0-beta.5` with quality fixes; its locally assembled
-archives are not the published Beta 4 assets. The
-[quality follow-up checklist](docs/validation/beta4-release-readiness.md) tracks candidate
-verification separately from earlier physical-reboot evidence.
-The candidate pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
+The published prerelease is [Beta 5](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.5),
+released on 2026-09-05 from `246226e`. It supports limited evaluation on an existing matching hb8
+storage installation. Fresh installation and Beta 3 upgrade remain unverified. The
+[quality follow-up checklist](docs/validation/beta4-release-readiness.md) records final package and
+physical-reboot evidence. Beta 6 usability work is in development.
+Beta 5 pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
 the native identity-checked stale-mount cleanup and adds an exclusive Library-volume removal
 handshake. It also refuses to publish a cache that leaves no capacity for its first child.
 The physical Windows reboot gate in
-[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passed on this candidate. Reboot
+[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passed on the final Beta 5 CLI. Reboot
 recovery is explicit: wait for `workspace status` to report `repair-required`, run
 `workspace repair`, and do not open the Workspace until it reports `ready` again.
 

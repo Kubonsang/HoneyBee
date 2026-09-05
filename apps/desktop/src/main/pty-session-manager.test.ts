@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -31,10 +31,10 @@ const waitForOutput = async (
 it.runIf(process.platform === "win32")(
   "opens an interactive PowerShell in the selected Workspace",
   async () => {
-    const cwd = await mkdtemp(path.join(tmpdir(), "honeybee-workbench-pty-"));
+    const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "honeybee-workbench-pty-")));
     const manager = new DesktopPtySessionManager();
     try {
-      const session = manager.create("workspace-test", cwd, 80, 24);
+      const session = manager.create("project-test", "workspace-test", cwd, 80, 24);
       expect(session).toMatchObject({ workspaceId: "workspace-test", cwd, state: "running" });
       const prompt = await waitForOutput(
         manager,
@@ -43,16 +43,29 @@ it.runIf(process.platform === "win32")(
         10_000,
       );
       expect(prompt).toContain("PS ");
-      expect(manager.write(session.sessionId, "Write-Output HONEYBEE_WORKBENCH_PTY_OK\r")).toBe(
-        true,
+      manager.write(
+        session.sessionId,
+        "$hbValue = 6 * 7; Write-Output ('HB' + 'STATE:' + $PID + ':' + $hbValue + ':' + (Get-Location).Path)\r",
       );
       const output = await waitForOutput(
         manager,
         session.sessionId,
-        (value) => value.includes("HONEYBEE_WORKBENCH_PTY_OK"),
+        (value) => /HBSTATE:[0-9]+:42:/u.test(value),
         10_000,
       );
-      expect(output).toContain("HONEYBEE_WORKBENCH_PTY_OK");
+      const marker = /HBSTATE:([0-9]+):42:([^\r\n]+)/u.exec(output);
+      expect(marker).not.toBeNull();
+      expect(marker?.[2]).toContain(cwd);
+      const resumed = manager.create("project-test", "workspace-test", cwd, 100, 30);
+      expect(resumed.sessionId).toBe(session.sessionId);
+      manager.write(resumed.sessionId, "Write-Output ('HB' + 'RESUME:' + $PID + ':' + $hbValue)\r");
+      const resumedOutput = await waitForOutput(
+        manager,
+        resumed.sessionId,
+        (value) => value.includes(`HBRESUME:${marker?.[1]}:42`),
+        10_000,
+      );
+      expect(resumedOutput).toContain(`HBRESUME:${marker?.[1]}:42`);
       expect(manager.write(session.sessionId, "exit\r")).toBe(true);
       let state = manager.snapshot(session.sessionId, 0).session.state;
       for (let attempt = 0; attempt < 200 && state !== "exited"; attempt += 1) {

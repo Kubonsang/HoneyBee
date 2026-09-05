@@ -228,6 +228,7 @@ export const DesktopPtyResizeRequestV1Schema = DesktopPtySessionRequestV1Schema.
 export const DesktopPtySessionV1Schema = z
   .object({
     sessionId: z.string().uuid(),
+    projectId: z.string().min(1),
     workspaceId: z.string().min(1),
     cwd: z.string().min(1),
     state: z.enum(["running", "exited"]),
@@ -263,6 +264,7 @@ export const DesktopIpcChannels = {
   windowAction: "desktop.window.action.v2",
   gitDiff: "desktop.git.diff.v2",
   ptyCreate: "desktop.pty.create.v2",
+  ptyList: "desktop.pty.list.v2",
   ptySnapshot: "desktop.pty.snapshot.v2",
   ptyWrite: "desktop.pty.write.v2",
   ptyResize: "desktop.pty.resize.v2",
@@ -302,6 +304,7 @@ export interface HoneyBeeDesktopApi {
   windowAction(request: z.infer<typeof DesktopWindowActionRequestV1Schema>): Promise<boolean>;
   gitDiff(request: DesktopGitDiffRequestV1): Promise<DesktopGitDiffV1>;
   createPty(request: z.input<typeof DesktopPtyCreateRequestV1Schema>): Promise<DesktopPtySessionV1>;
+  listPtys(): Promise<readonly DesktopPtySessionV1[]>;
   ptySnapshot(
     request: z.input<typeof DesktopPtySnapshotRequestV1Schema>,
   ): Promise<DesktopPtySnapshotV1>;

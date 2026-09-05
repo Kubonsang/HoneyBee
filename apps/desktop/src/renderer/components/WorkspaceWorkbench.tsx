@@ -1,3 +1,4 @@
+import { desktopApi } from "../desktop-api.js";
 import {
   ArrowClockwise,
   CaretRight,
@@ -45,6 +46,7 @@ export function WorkspaceWorkbench({
 }) {
   const workspace = workspaces.find((item) => item.workspaceId === workspaceId) ?? workspaces[0];
   const [tab, setTab] = useState<"changes" | "diff" | "terminal">("changes");
+  const [terminalRunning, setTerminalRunning] = useState(false);
   const [diff, setDiff] = useState<DesktopGitDiffV1>();
   const [selectedPath, setSelectedPath] = useState<string>();
   const [untrackedSelected, setUntrackedSelected] = useState(false);
@@ -60,6 +62,34 @@ export function WorkspaceWorkbench({
     return () => current.invalidate();
   }, [workspace?.workspaceId]);
 
+  useEffect(() => {
+    let active = true;
+    const refresh = (): void => {
+      void desktopApi
+        .listPtys()
+        .then((sessions) => {
+          if (active)
+            setTerminalRunning(
+              sessions.some(
+                (session) =>
+                  session.projectId === project.projectId &&
+                  session.workspaceId === workspace?.workspaceId &&
+                  session.state === "running",
+              ),
+            );
+        })
+        .catch(() => {
+          if (active) setTerminalRunning(true);
+        });
+    };
+    refresh();
+    const timer = setInterval(refresh, 1_000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, [project.projectId, workspace?.workspaceId]);
+
   const loadDiff = (requestedPath?: string): void => {
     if (workspace === undefined) return;
     const isCurrent = requests.current.begin();
@@ -71,7 +101,7 @@ export function WorkspaceWorkbench({
     if (untracked) return;
     run(async () => {
       try {
-        const result = await window.honeybee.gitDiff({
+        const result = await desktopApi.gitDiff({
           projectId: project.projectId,
           workspaceId: workspace.workspaceId,
           ...(requestedPath === undefined ? {} : { path: requestedPath }),
@@ -85,7 +115,7 @@ export function WorkspaceWorkbench({
   const launch = (tool: "cmd" | "powershell" | "vscode" | "unity"): void => {
     if (workspace === undefined) return;
     run(async () => {
-      await window.honeybee.launchExternal({
+      await desktopApi.launchExternal({
         projectId: project.projectId,
         workspaceId: workspace.workspaceId,
         tool,
@@ -223,7 +253,7 @@ export function WorkspaceWorkbench({
                         disabled={busy}
                         onClick={() =>
                           run(async () => {
-                            await window.honeybee.repairWorkspace({
+                            await desktopApi.repairWorkspace({
                               projectId: project.projectId,
                               workspaceId: workspace.workspaceId,
                             });
@@ -239,7 +269,7 @@ export function WorkspaceWorkbench({
                       className={
                         workspace.state === "cleanup-pending" ? "primary" : "danger-button"
                       }
-                      disabled={busy || workspace.git?.dirty === true}
+                      disabled={busy || terminalRunning || workspace.git?.dirty === true}
                       title={workspace.git?.dirty ? t("dirtyRemove") : t("removeConfirm")}
                       onClick={() => {
                         if (
@@ -248,7 +278,7 @@ export function WorkspaceWorkbench({
                           )
                         )
                           run(async () => {
-                            await window.honeybee.removeWorkspace({
+                            await desktopApi.removeWorkspace({
                               projectId: project.projectId,
                               workspaceId: workspace.workspaceId,
                             });
@@ -261,6 +291,12 @@ export function WorkspaceWorkbench({
                         ? `${t("remove")} · retry`
                         : t("remove")}
                     </button>
+                    {terminalRunning && (
+                      <small className="dirty-help">
+                        {t("terminalRemoveHelp")}{" "}
+                        <button onClick={() => setTab("terminal")}>{t("terminalGo")}</button>
+                      </small>
+                    )}
                     {workspace.git?.dirty === true && (
                       <small className="dirty-help">{t("dirtyRemove")}</small>
                     )}
@@ -290,7 +326,7 @@ export function WorkspaceWorkbench({
               </nav>
               <div className="detail-panel">
                 {tab === "terminal" ? (
-                  <WorkspaceTerminal projectId={project.projectId} workspace={workspace} />
+                  <WorkspaceTerminal projectId={project.projectId} workspace={workspace} t={t} />
                 ) : tab === "diff" ? (
                   <pre className="diff-view">
                     {untrackedSelected
