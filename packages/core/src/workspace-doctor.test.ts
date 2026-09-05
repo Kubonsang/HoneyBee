@@ -73,6 +73,26 @@ afterEach(async () => {
 });
 
 describe("Workspace doctor", () => {
+  it("blocks a different installed component version without changing the registry", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-doctor-version-"));
+    roots.push(root);
+    const core = new HoneyBeeWorkspaceCore({
+      dataRoot: path.join(root, "registry"),
+      storage: new DoctorStorage(),
+    });
+    const storageCommand = await tools(root);
+    const mismatch = await core.doctor({ storageCommand, expectedComponentVersion: "next" });
+    expect(mismatch.ready).toBe(false);
+    expect(mismatch.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.component-version", status: "fail" }),
+    );
+    const matching = await core.doctor({ storageCommand, expectedComponentVersion: "test" });
+    expect(matching.ready).toBe(true);
+    expect(matching.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.component-version", status: "pass" }),
+    );
+    await expect(readFile(core.registryPath)).rejects.toMatchObject({ code: "ENOENT" });
+  });
   it("returns a read-only warning report for an unconfigured but healthy machine", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-doctor-"));
     roots.push(root);

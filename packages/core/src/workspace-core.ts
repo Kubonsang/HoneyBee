@@ -1119,7 +1119,12 @@ export class HoneyBeeWorkspaceCore {
     }
   }
 
-  async #command(command: string, args: readonly string[], cwd: string): Promise<string> {
+  async #command(
+    command: string,
+    args: readonly string[],
+    cwd: string,
+    trim = true,
+  ): Promise<string> {
     const result = await runCommand(command, args, cwd);
     if (result.exitCode !== 0) {
       throw new WorkspaceCoreError(
@@ -1127,11 +1132,11 @@ export class HoneyBeeWorkspaceCore {
         result.stderr.trim() || `${command} failed with exit code ${result.exitCode}.`,
       );
     }
-    return result.stdout.trim();
+    return trim ? result.stdout.trim() : result.stdout.replace(/\r?\n$/u, "");
   }
 
   async #git(cwd: string, args: readonly string[]): Promise<string> {
-    return this.#command("git.exe", await this.#gitArguments(cwd, args), cwd);
+    return this.#command("git.exe", await this.#gitArguments(cwd, args), cwd, args[0] !== "status");
   }
 
   async #gitResult(cwd: string, args: readonly string[]): Promise<CommandResult> {

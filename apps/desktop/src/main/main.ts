@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import { access, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 
 import { HoneyBeeWorkspaceCore, type ProjectRecordV2, type WorkspaceViewV1 } from "@honeybee/core";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
@@ -29,6 +27,10 @@ import {
   type DesktopProjectV2,
   type DesktopWorkspaceV2,
 } from "../shared/ipc.js";
+import { readDiff } from "./git-diff.js";
+import { verifyWorkbench } from "./workbench-smoke.js";
+import { setupBlockers } from "../shared/setup-checks.js";
+import compatibility from "../../resources/component-compatibility-v1.json" with { type: "json" };
 import { desktopError, DesktopMainError } from "./desktop-errors.js";
 import { launchExternalTool, resolveExternalTool } from "./external-tools.js";
 import {
@@ -39,7 +41,6 @@ import {
 } from "./project-onboarding.js";
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
 
-const execFileAsync = promisify(execFile);
 const core = new HoneyBeeWorkspaceCore();
 const ptySessions = new DesktopPtySessionManager();
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v2";
@@ -49,7 +50,6 @@ const fixtureMode = smokeMode || captureMode;
 const captureWidth = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_WIDTH ?? 1280);
 const captureHeight = Number(process.env.HONEYBEE_DESKTOP_CAPTURE_HEIGHT ?? 820);
 const smokeResultPath = process.env.HONEYBEE_DESKTOP_SMOKE_RESULT;
-const MAX_DIFF_BYTES = 1024 * 1024;
 let mainWindow: BrowserWindow | undefined;
 
 const smokeProject: DesktopProjectV2 = {
@@ -115,10 +115,27 @@ const writeSmokeStage = async (stage: string): Promise<void> => {
   await writeFile(target, `${JSON.stringify({ stage })}\n`, "utf8");
 };
 
-const storageCommand = async (): Promise<string> => {
-  const target = app.isPackaged
+const packagedStoragePath = (): string =>
+  app.isPackaged
     ? path.join(process.resourcesPath, "win32-x64", "unity-workspace-storage.exe")
     : path.join(app.getAppPath(), ".tools", "win32-x64", "unity-workspace-storage.exe");
+const desktopDoctor = () => {
+  const approved = compatibility.workspaceStorage[0];
+  return core.doctor({
+    storageCommand: packagedStoragePath(),
+    ...(approved === undefined
+      ? {}
+      : {
+          expectedComponentVersion: approved.version,
+          expectedClientSha256:
+            approved.payloads.find((item) => item.role === "client")?.sha256 ?? "",
+          expectedControlSha256:
+            approved.payloads.find((item) => item.role === "host")?.sha256 ?? "",
+        }),
+  });
+};
+const storageCommand = async (): Promise<string> => {
+  const target = packagedStoragePath();
   await access(target).catch((cause: unknown) => {
     throw new DesktopMainError(
       "storage.command-not-found",
@@ -162,60 +179,6 @@ const workspaceFor = async (projectId: string, workspaceId: string): Promise<Wor
       "Workspace project identity mismatch.",
     );
   return workspace;
-};
-
-const normalizedDiffPath = (value: string | undefined): string | undefined => {
-  if (value === undefined) return undefined;
-  const portable = value.replaceAll("\\", "/");
-  const normalized = path.posix.normalize(portable);
-  if (
-    value.includes("\0") ||
-    path.posix.isAbsolute(normalized) ||
-    path.win32.isAbsolute(value) ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.startsWith("../")
-  ) {
-    throw new DesktopMainError(
-      "git.diff-path-invalid",
-      "Diff path must stay inside the Workspace.",
-    );
-  }
-  return normalized;
-};
-
-const readDiff = async (workspace: WorkspaceViewV1, requestedPath?: string) => {
-  const relativePath = normalizedDiffPath(requestedPath);
-  const safeDirectory = workspace.workspacePath.replaceAll("\\", "/");
-  const { stdout } = await execFileAsync(
-    "git.exe",
-    [
-      "-c",
-      `safe.directory=${safeDirectory}`,
-      "diff",
-      "--no-ext-diff",
-      "--unified=3",
-      "HEAD",
-      "--",
-      ...(relativePath === undefined ? [] : [relativePath]),
-    ],
-    {
-      cwd: workspace.workspacePath,
-      encoding: "utf8",
-      timeout: 30_000,
-      maxBuffer: 2 * MAX_DIFF_BYTES,
-      windowsHide: true,
-      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
-    },
-  );
-  const bytes = Buffer.from(stdout, "utf8");
-  const truncated = bytes.byteLength > MAX_DIFF_BYTES;
-  return {
-    workspaceId: workspace.workspaceId,
-    ...(relativePath === undefined ? {} : { path: relativePath }),
-    content: truncated ? bytes.subarray(0, MAX_DIFF_BYTES).toString("utf8") : stdout,
-    truncated,
-  };
 };
 
 const handler =
@@ -377,14 +340,8 @@ const registerIpc = (): void => {
             .flatMap((item) => item.remediation),
         );
       const command = await storageCommand();
-      const report = await core.doctor({ storageCommand: command });
-      const blockers = report.checks.filter(
-        (item) =>
-          item.status === "fail" &&
-          (item.code.startsWith("system.") ||
-            item.code.startsWith("git.") ||
-            item.code.startsWith("storage.")),
-      );
+      const report = await desktopDoctor();
+      const blockers = setupBlockers(report.checks);
       if (blockers.length > 0)
         throw new DesktopMainError(
           "project.setup-blocked",
@@ -434,7 +391,7 @@ const registerIpc = (): void => {
               },
             ],
           }
-        : core.doctor({ storageCommand: await storageCommand() }),
+        : desktopDoctor(),
     ),
   );
   ipcMain.handle(
@@ -570,6 +527,8 @@ const registerIpc = (): void => {
     DesktopIpcChannels.gitDiff,
     handler(async (value) => {
       const request = DesktopGitDiffRequestV1Schema.parse(value);
+      if (smokeMode)
+        await new Promise((resolve) => setTimeout(resolve, request.path === undefined ? 20 : 250));
       if (fixtureMode)
         return {
           workspaceId: request.workspaceId,
@@ -751,6 +710,7 @@ const createWindow = async (): Promise<void> => {
       )) as { ready?: boolean; projects?: boolean };
       if (result.ready !== true || result.projects !== true)
         throw new Error("invalid smoke result");
+      await verifyWorkbench(mainWindow);
       await writeSmokeStage("passed");
       process.stdout.write("HONEYBEE_DESKTOP_SMOKE_OK\n");
       mainWindow.destroy();

@@ -11,7 +11,7 @@ permissions:
 jobs:
   verify:
     runs-on: windows-latest
-    timeout-minutes: 25
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -23,6 +23,44 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version: "1.26.2"
+          cache-dependency-path: tools/workspace-storage-host/go.sum
       - run: pnpm install --frozen-lockfile
-      - run: pnpm verify
-      - run: pnpm --filter honeybee-cli package:smoke
+      - name: Verify source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
+          pnpm verify 2>&1 | Tee-Object -FilePath artifacts/quality/verify.log
+          exit $LASTEXITCODE
+      - name: Verify CLI package
+        shell: pwsh
+        run: |
+          pnpm --filter honeybee-cli package:smoke 2>&1 | Tee-Object -FilePath artifacts/quality/cli-package.log
+          exit $LASTEXITCODE
+      - name: Verify Desktop package and PTY
+        shell: pwsh
+        run: |
+          pnpm --filter honeybee-desktop package:smoke 2>&1 | Tee-Object -FilePath artifacts/quality/desktop-package.log
+          exit $LASTEXITCODE
+      - name: Archive tested packages
+        shell: pwsh
+        env:
+          HONEYBEE_PR_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          Compress-Archive -LiteralPath apps/cli/release/HoneyBee-cli-win32-x64 -DestinationPath artifacts/quality/HoneyBee-cli-win32-x64.zip
+          Compress-Archive -LiteralPath apps/desktop/release/HoneyBee-win32-x64 -DestinationPath artifacts/quality/HoneyBee-win32-x64.zip
+          Get-FileHash artifacts/quality/*.zip -Algorithm SHA256 | ForEach-Object {
+            '{0}  {1}' -f $_.Hash.ToLowerInvariant(), (Split-Path -Leaf $_.Path)
+          } | Set-Content -Encoding utf8 artifacts/quality/SHA256SUMS.txt
+          git rev-parse HEAD | Set-Content -Encoding utf8 artifacts/quality/source-commit.txt
+          $env:HONEYBEE_PR_HEAD | Set-Content -Encoding utf8 artifacts/quality/pr-head.txt
+      - name: Preserve quality evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-quality-${{ github.event.pull_request.head.sha || github.sha }}
+          path: artifacts/quality/
+          if-no-files-found: warn
+          retention-days: 14

@@ -91,6 +91,27 @@ const en = {
   ready: "Ready",
   allChanges: "All changed files",
   selectFile: "Select a file to inspect its diff.",
+  untrackedDiff:
+    "Untracked file contents are not shown. Open them in your editor; All changed files shows tracked diffs only.",
+  noTrackedDiff: "No tracked diff against HEAD for this selection.",
+  diffTruncated: "[Diff limited to 1 MiB]",
+  diagnosticDetails: "Diagnostic details",
+  setupServiceHelp:
+    "The storage service is missing or stopped. Follow the one-time administrator setup in the bundled installation guide, then check again.",
+  setupVersionHelp:
+    "The storage version differs. Remove old Workspaces with the old CLI and verify their branches before following the service replacement guide.",
+  setupReceiptHelp:
+    "The installation record does not match this package or user. Check the installed user and package; replace only a matching HoneyBee installation after removing old Workspaces.",
+  setupAccessHelp:
+    "The storage folder is inaccessible. Check its path and your account permissions, then check again.",
+  setupPackageHelp:
+    "Storage package verification is incomplete. Extract the complete official archive and verify its checksums, then check again.",
+  setupGitHelp:
+    "Install Git for Windows and make git.exe available on PATH, restart HoneyBee, then check again.",
+  setupSystemHelp:
+    "Use Windows 11 x64 and the supported runtime. See the installation guide, then check again.",
+  setupDiagnosticHelp:
+    "Review the diagnostic details below, resolve the reported issue, then check again. Existing Workspace data is preserved.",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -185,6 +206,27 @@ const ko: Record<MessageKey, string> = {
   ready: "준비됨",
   allChanges: "모든 변경 파일",
   selectFile: "파일을 선택하면 diff를 확인할 수 있습니다.",
+  untrackedDiff:
+    "미추적 파일 내용을 표시하지 않습니다. 편집기에서 확인하세요. 모든 변경 파일의 diff에는 추적 중인 파일만 포함됩니다.",
+  noTrackedDiff: "선택한 항목에 HEAD 대비 추적 파일 변경이 없습니다.",
+  diffTruncated: "[Diff를 1 MiB까지만 표시합니다]",
+  diagnosticDetails: "진단 상세",
+  setupServiceHelp:
+    "스토리지 서비스가 없거나 중지되어 있습니다. 동봉된 설치 안내서의 관리자 최초 설정을 완료한 뒤 다시 확인하세요.",
+  setupVersionHelp:
+    "스토리지 버전이 다릅니다. 기존 CLI로 이전 워크스페이스를 정리하고 브랜치 보존을 확인한 뒤 안내서에 따라 서비스를 교체하세요.",
+  setupReceiptHelp:
+    "설치 정보가 현재 패키지 또는 사용자와 맞지 않습니다. 설치 사용자와 패키지를 확인하세요. 같은 HoneyBee 설치만 기존 워크스페이스 정리 후 교체할 수 있습니다.",
+  setupAccessHelp:
+    "스토리지 폴더에 접근할 수 없습니다. 경로와 현재 계정의 접근 권한을 확인한 뒤 다시 확인하세요.",
+  setupPackageHelp:
+    "스토리지 패키지 검증이 완료되지 않았습니다. 공식 압축 파일 전체를 풀고 체크섬을 검증한 뒤 다시 확인하세요.",
+  setupGitHelp:
+    "Git for Windows를 설치하고 PATH에서 git.exe를 찾을 수 있게 설정하세요. HoneyBee를 재시작한 뒤 다시 확인하세요.",
+  setupSystemHelp:
+    "Windows 11 x64와 지원 런타임이 필요합니다. 설치 안내서에 따라 환경을 준비한 뒤 다시 확인하세요.",
+  setupDiagnosticHelp:
+    "아래 진단 상세의 문제를 해결한 뒤 다시 확인하세요. 기존 워크스페이스 데이터는 보존됩니다.",
 };
 
 export const message = (locale: Locale, key: MessageKey): string =>

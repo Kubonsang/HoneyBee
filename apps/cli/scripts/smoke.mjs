@@ -37,6 +37,7 @@ await Promise.all([
     "workspace-command.js",
   ]),
   assertOnlyJavaScript(path.join(bundleRoot, "node_modules", "@honeybee", "core", "dist"), [
+    "git-status.js",
     "index.js",
     "workspace-core.js",
     "workspace-doctor.js",
@@ -53,7 +54,7 @@ try {
     timeout: 30_000,
     windowsHide: true,
   });
-  if (version.stdout.trim() !== "0.1.0-beta.4") {
+  if (version.stdout.trim() !== "0.1.0-beta.5") {
     throw new Error(`Unexpected packaged CLI version: ${version.stdout.trim()}`);
   }
   const listed = await execFileAsync(
