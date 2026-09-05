@@ -1,8 +1,14 @@
 # Beta 4 quality follow-up readiness
 
-Status: `0.1.0-beta.5` is under review in [PR #39](https://github.com/Kubonsang/HoneyBee/pull/39);
-**follow-up not cleared for publication**. The initial local archives below are superseded by the
+Status: `0.1.0-beta.5` changes were merged in [PR #39](https://github.com/Kubonsang/HoneyBee/pull/39)
+as `246226e`; all seven PR checks passed at head `46fca73`.
+**Follow-up not cleared for general publication**. The initial local archives below are superseded by the
 PR's parser hardening. Use archives from the final successful Windows CI run for subsequent testing.
+
+The [current-PC existing-install route](windows-shared-host.md) completed its functional and actual
+reboot gates on 2026-09-05 using the final CLI archive. Final Doctor passed 19 checks with no
+warnings/failures, the test registry is empty, and the original retained child is preserved. This
+supports limited evaluation with the existing matching hb8 service; no release has been published.
 
 Public release inspection on 2026-09-05 found that Beta 4 was already published on 2026-09-04 at
 13:32:07 UTC, from commit `794f8f8f6b5ef7f872be8daeebceae76d975abb9`. Its source tree
@@ -43,6 +49,12 @@ outside this candidate's diff viewer and remain available through the user's edi
 
 ## Physical Windows gates
 
+These are the full installation/upgrade and zero-baseline acceptance gates. When another Windows
+environment is unavailable, the user-approved [current-PC route](windows-shared-host.md) can support
+a limited evaluation for existing matching hb8 installations after its functional and deferred
+reboot phases pass. It does not mark the unchecked installation, upgrade, interactive-agent or
+zero-baseline gates below as passed.
+
 - [ ] Fresh Windows 11 x64 setup from the exact archives, following the included guide; elevated
       service install only, then normal-user Doctor and Desktop onboarding.
 - [ ] Beta 3 upgrade: remove disposable old Workspaces using Beta 3, preserve branches, verify zero
@@ -52,14 +64,17 @@ outside this candidate's diff viewer and remain available through the user's edi
       Capture all four post-Unity allocations before removing any Workspace.
 - [ ] Four linked worktrees, Codex/Claude isolated commits, two concurrent Unity Editors,
       dirty/open-handle refusal, repeatable removal, branch preservation, and no child residuals.
-- [ ] Final candidate create → commit → physical reboot → repair → Unity → remove, retaining
-      boot identities, child identity, authored hashes, branch HEAD, timings, and final status.
+- [x] Final CLI candidate shared-host create → commit → physical reboot → repair → Unity → remove,
+      retaining boot identities, child identity, authored/Library hashes, branch HEAD, Unity run
+      timing, and final status. See the current-PC route for the completed evidence and scope.
 
 The 2026-09-05 read-only inspection found a healthy hb8 service with **one pre-existing retained
 child**, zero active/pending/quarantined children, and no manual-recovery condition. That machine
 does not meet the strict zero-child baseline. Do not delete the unrelated Workspace, downgrade its
 service, or replace its installation to make a release test pass. A dedicated Windows environment
-is needed for the outstanding install/upgrade/full-dogfood gates.
+is needed for the outstanding install/upgrade/full-dogfood gates. Existing-install functional checks
+can instead use the shared-host route, which preserves the original inventory and permits only
+recorded test children rather than deleting the unrelated Workspace to obtain a zero baseline.
 
 The Go host tests passed outside the restricted execution sandbox with an isolated writable build
 cache on 2026-09-05. The previous `Access Denied` result was not reproduced there; no test or
@@ -72,8 +87,10 @@ directory ownership check was disabled.
 - [x] Produce CLI and Desktop ZIPs and `SHA256SUMS.txt`; verify extracted contents and smoke-test the
       executables that will ship. Desktop must include `README.md` and `STORAGE-SETUP.md`.
 - [x] Reconcile README/CHANGELOG/install guides with actual release history and gate results.
-- [ ] Publish only the tested archives after every gate above passes; rebuilding invalidates the
-      archive hashes and requires package verification again.
+- [ ] General publication: pass every gate above. Limited existing-install evaluation: pass the
+      shared-host functional and deferred-reboot route and explicitly disclose its unverified gates.
+      Publish only the tested archives; rebuilding invalidates the archive hashes and requires
+      package verification again.
 
 The **superseded initial local artifacts** are under `artifacts/v0.1.0-beta.5-candidate-20260905/`:
 
