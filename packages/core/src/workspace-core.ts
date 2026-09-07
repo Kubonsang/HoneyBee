@@ -23,7 +23,6 @@ import {
   WORKSPACE_REGISTRY_SCHEMA_VERSION,
   WorkspaceCoreError,
   type ProjectRecordV2,
-  type StorageLease,
   type StorageParentBuild,
   type WorkspaceRecordV2,
   type WorkspaceRemoveResultV1,
@@ -594,33 +593,25 @@ export class HoneyBeeWorkspaceCore {
         "Workspace Library points to a different target and was not changed.",
       );
     }
-    let lease: StorageLease | undefined;
-    const mountAvailable = await stat(record.mountPath)
-      .then(() => true)
-      .catch((error: unknown) => {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
-        throw error;
-      });
-    if (!mountAvailable) {
-      lease = await this.#storage.attachRetained(
+    // A readable stale mount may resolve to another child after reboot.
+    // Only the broker's live lease can establish that this child is attached.
+    const active = await this.#storage.heartbeat?.(project.storageCommand, record.leaseId);
+    const lease =
+      active ??
+      (await this.#storage.attachRetained(
         project.storageCommand,
         record.consumerId,
         record.storageWorkspaceId,
-      );
-    }
-    const mountPath = lease?.mountPath ?? record.mountPath;
+      ));
+    const mountPath = lease.mountPath;
     await this.#ensureLibraryJunction(workspaceLibrary, mountPath);
     await this.#git(project.repositoryRoot, ["worktree", "repair", record.workspacePath]);
     await this.#git(record.workspacePath, ["status", "--porcelain=v1"]);
     record = {
       ...record,
-      ...(lease === undefined
-        ? {}
-        : {
-            leaseId: lease.leaseId,
-            mountPath: lease.mountPath,
-            storageWorkspacePath: lease.workspacePath,
-          }),
+      leaseId: lease.leaseId,
+      mountPath: lease.mountPath,
+      storageWorkspacePath: lease.workspacePath,
       state: "ready",
       updatedAt: now(),
     };
@@ -994,6 +985,16 @@ export class HoneyBeeWorkspaceCore {
         "Library",
       );
       libraryConnected = await this.#libraryJunctionMatches(workspaceLibrary, record.mountPath);
+      if (libraryConnected && this.#storage.heartbeat !== undefined) {
+        try {
+          const active = await this.#storage.heartbeat(project.storageCommand, record.leaseId);
+          libraryConnected =
+            active?.leaseId === record.leaseId &&
+            pathKey(active.mountPath) === pathKey(record.mountPath);
+        } catch {
+          libraryConnected = false;
+        }
+      }
     }
     const available = git !== undefined && libraryConnected;
     const state =

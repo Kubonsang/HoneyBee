@@ -147,6 +147,7 @@ export interface WorkspaceStoragePort {
     }>,
   ): Promise<StorageLease>;
   retain(command: string, leaseId: string): Promise<void>;
+  heartbeat?(command: string, leaseId: string): Promise<StorageLease | undefined>;
   attachRetained(command: string, consumerId: string, workspaceId: string): Promise<StorageLease>;
   prepareRetainedRemoval(
     command: string,

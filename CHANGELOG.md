@@ -7,9 +7,12 @@
 - Show dirty but available Workspaces as ready; preserve Unity settings and metadata
   changes and retain the existing removal protection.
 - Explain retained mount identity failures separately from Git changes.
+- Require a live broker lease before treating a readable Library mount as available,
+  and reattach inactive children during Repair even when the stale path opens.
 - Pin hb9 storage, which persists resolved volume identity before mounting and on
   successful reattachment. Legacy identity mismatches remain blocked without proof.
-- Existing-machine legacy repair and repeated physical reboot validation are pending.
+- Verified preserved fallback recovery and one physical reboot across three Workspaces.
+  Unproven legacy mounts remain preserved; repeated reboot cycles are still unverified.
 
 ## 0.1.0-beta.6 - 2026-09-06
 

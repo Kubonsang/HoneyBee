@@ -257,6 +257,34 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
+  public async heartbeat(command: string, leaseId: string): Promise<StorageLease | undefined> {
+    try {
+      const lease = this.#lease(
+        await this.#control(command, {
+          schemaVersion: 3,
+          operation: "heartbeat",
+          requestId: `hb-heartbeat-${randomUUID()}`,
+          leaseId,
+          clientPid: process.pid,
+        }),
+      );
+      if (lease.leaseId !== leaseId) {
+        throw new WorkspaceCoreError("storage.invalid-response", "Unexpected active lease.");
+      }
+      return lease;
+    } catch (error) {
+      if (
+        error instanceof WorkspaceCoreError &&
+        ["lease-not-active", "lease-not-found", "lease-not-ready"].includes(
+          error.upstreamCode ?? "",
+        )
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
+  }
+
   public async prepareRetainedRemoval(
     command: string,
     consumerId: string,

@@ -6,6 +6,7 @@ import {
   readFile,
   realpath,
   rm,
+  stat,
   symlink,
   unlink,
   writeFile,
@@ -45,6 +46,7 @@ class FakeStorage implements WorkspaceStoragePort {
   >();
   public loseNextRemoveResponse = false;
   public failNextAttach = false;
+  public readonly inactiveLeaseIds = new Set<string>();
   public failNextAcquire = false;
   public failNextCommitParent = false;
   public incompleteNextParent = false;
@@ -141,7 +143,13 @@ class FakeStorage implements WorkspaceStoragePort {
     }
     const lease = this.#leases.get(consumerId);
     if (lease === undefined) throw new Error("missing retained lease");
+    this.inactiveLeaseIds.delete(lease.leaseId);
     return lease;
+  }
+
+  public async heartbeat(_command: string, leaseId: string): Promise<StorageLease | undefined> {
+    if (this.inactiveLeaseIds.has(leaseId)) return undefined;
+    return [...this.#leases.values()].find((lease) => lease.leaseId === leaseId);
   }
 
   public async prepareRetainedRemoval(
@@ -483,6 +491,39 @@ describe("HoneyBeeWorkspaceCore", () => {
       "prepare",
       "commit",
     ]);
+  }, 30_000);
+
+  it("repairs a readable stale mount only after the broker confirms an active child", async () => {
+    const { core, storage } = await fixture();
+    const created = await core.createWorkspace({
+      name: "stale-readable",
+      branch: "feature/stale-readable",
+    });
+    const authored = path.join(created.workspacePath, "Assets", "Dirty.cs");
+    await writeFile(authored, "preserve this change\n", "utf8");
+    storage.inactiveLeaseIds.add(created.leaseId);
+    expect((await stat(created.mountPath)).isDirectory()).toBe(true);
+    expect(await core.workspaceStatus(created.workspaceId)).toMatchObject({
+      available: false,
+      libraryConnected: false,
+      state: "repair-required",
+    });
+    storage.failNextAttach = true;
+    await expect(core.repairWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "storage.attach-failed",
+    });
+    expect(await readFile(authored, "utf8")).toBe("preserve this change\n");
+    expect(await core.repairWorkspace(created.workspaceId)).toMatchObject({
+      available: true,
+      state: "ready",
+    });
+    // An already active child must remain attached, even if a fresh attach would fail.
+    storage.failNextAttach = true;
+    expect(await core.repairWorkspace(created.workspaceId)).toMatchObject({
+      available: true,
+      state: "ready",
+    });
+    expect(await readFile(authored, "utf8")).toBe("preserve this change\n");
   }, 30_000);
 
   it("attaches an existing branch, repairs its Library, and refuses dirty removal", async () => {

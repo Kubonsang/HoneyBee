@@ -19,6 +19,13 @@ specific nested `validate-stale-mount-target` failure to
 `storage.mount-identity-mismatch`, while preserving the upstream diagnostic code.
 The UI explains that committing files or rebooting alone will not fix the issue.
 
+Physical reboot validation exposed a second issue: a stale access point can be
+readable through another child volume, so filesystem existence is not proof of
+an active lease. Repair now checks the broker heartbeat before reusing a lease;
+an inactive child is reattached even when its old path is readable. Availability
+also requires a live broker lease. Heartbeats update storage-client liveness and
+do not edit authored files. Already active leases stay attached.
+
 ## Change review
 
 The file list and unified diff stay visible together. File categories describe
@@ -36,7 +43,7 @@ worktree from empty text. The existing Git deletion protection is unchanged.
 
 ## Validation and outstanding gates
 
-- HoneyBee full verification passed 87 tests in 21 suites, Go host tests,
+- The initial HoneyBee verification passed 87 tests in 21 suites, Go host tests,
   formatting, lint, type/build and dependency checks.
 - Electron smoke verifies simultaneous file list/preview, untracked contents,
   large-patch windowing, file-switch/refresh scroll preservation and stale-response
@@ -49,9 +56,16 @@ worktree from empty text. The existing Git deletion protection is unchanged.
 - The read-only native probe verified the recorded child file identity and parent,
   but Windows assigned a volume GUID different from the stale mount target.
   The current reconciliation gate therefore cannot qualify that legacy mount.
-  A follow-up partition-identity inspection was cancelled at Windows elevation.
-  Actual recovery, service replacement and repeated physical reboot validation
-  remain pending. No live Workspace recovery is claimed.
+  Further partition inspection also did not establish that relationship. The
+  hb9 service was installed after backing up the existing installation. An
+  approved fallback created a new Workspace, preserving 352 files byte-for-byte,
+  index entries, staged/unstaged diffs and the original Workspace and branch.
+- One physical reboot was observed after hb9 installation. The recovered
+  Workspace and two existing Workspaces were reattached and checked against
+  their exact VHDX, current boot journal, actual volume and mount GUID. The test
+  exposed the readable-stale-path defect above; after its fix all three checks
+  passed. All 352 original and recovered files and Git state were preserved.
+  Repeated physical reboot cycles remain unverified.
 - Storage commit `796514b475bece93635df504a32e1bcb54b95493` is published in
   [storage PR #4](https://github.com/Kubonsang/unity-workspace-storage/pull/4).
   All five storage CI jobs passed, including Windows, Linux and macOS tests.
