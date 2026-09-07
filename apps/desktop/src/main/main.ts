@@ -42,7 +42,11 @@ import {
 } from "./project-onboarding.js";
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
 
-const core = new HoneyBeeWorkspaceCore();
+const core = new HoneyBeeWorkspaceCore({
+  usageCommand: app.isPackaged
+    ? path.join(process.resourcesPath, "win32-x64", "honeybee-usage.exe")
+    : path.join(app.getAppPath(), ".tools", "win32-x64", "honeybee-usage.exe"),
+});
 const ptySessions = new DesktopPtySessionManager();
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v2";
 const captureDirectory = process.env.HONEYBEE_DESKTOP_CAPTURE_DIR;
@@ -431,6 +435,57 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.workspaceUsage,
+    handler(async (value) => {
+      const request = DesktopWorkspaceRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          schemaVersion: 1 as const,
+          measuredAt: new Date().toISOString(),
+          knownAllocatedBytes: 1_200_000_000,
+          complete: false,
+          entries: [
+            {
+              id: "files",
+              kind: "files",
+              scope: "workspace",
+              workspaceId: request.workspaceId,
+              logicalBytes: 20_000_000,
+              allocatedBytes: 21_000_000,
+              fileCount: 352,
+              omittedLinks: 0,
+              complete: true,
+              errors: [],
+            },
+            {
+              id: "child",
+              kind: "child-vhdx",
+              scope: "workspace",
+              workspaceId: request.workspaceId,
+              logicalBytes: null,
+              allocatedBytes: null,
+              fileCount: 0,
+              omittedLinks: 0,
+              complete: false,
+              errors: ["Fixture: unavailable storage identity"],
+            },
+            {
+              id: "shared",
+              kind: "testplay-shared",
+              scope: "shared",
+              logicalBytes: 1_170_000_000,
+              allocatedBytes: 1_179_000_000,
+              fileCount: 100,
+              omittedLinks: 0,
+              complete: true,
+              errors: [],
+            },
+          ],
+        };
+      return core.workspaceUsage(request.workspaceId, request.projectId);
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.workspaceCreate,
     handler(async (value) => {
       const request = DesktopWorkspaceCreateRequestV1Schema.parse(value);
@@ -706,6 +761,10 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await click(".workspace-row:nth-child(2)");
   await waitFor(".diff-line.added");
   await capture("07-changes-review");
+  await click("[data-testid='usage-tab']");
+  await click(".usage-toolbar button");
+  await waitFor(".usage-panel tbody tr");
+  await capture("08-storage-usage");
   await click(".workspace-row:first-child");
   await click(".breadcrumb-project");
   await waitFor("[data-testid='project-picker']");

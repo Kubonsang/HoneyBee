@@ -97,6 +97,7 @@ Desktop is a small view over the same Workspace Core. It contains:
 - project preflight, registration, cache preparation, and cache state;
 - Workspaces, branch/HEAD state, and changed files;
 - a bounded Git diff viewer;
+- a Storage tab for on-demand file, TestPlay cache and VHDX allocation measurements;
 - an interactive PowerShell terminal rooted in the selected Workspace;
 - create/attach, repair, and safe remove actions;
 - explicit one-click CMD, PowerShell, VS Code, and exact-version Unity launches.
@@ -107,6 +108,10 @@ process launch, and PTY authority stay in the main process. Git clone is onboard
 uses the system Git credential flow, does not store credentials, and preserves partial output on
 failure. External tools are launched only when the user clicks an action; HoneyBee does not monitor,
 restart, or orchestrate them. See the [Desktop Beta guide](docs/operations/windows-desktop-beta.md).
+
+The same storage report is available with `honeybee workspace usage --json`.
+See the [shared TestPlay cache guide](docs/operations/shared-testplay-cache.md)
+for accounting limits and the optional TestPlay follow-up build.
 
 ## Safety and persistence
 

@@ -1,6 +1,24 @@
 export type Locale = "ko" | "en";
 
 const en = {
+  usageTitle: "Storage",
+  usageMeasure: "Measure / refresh",
+  usageUnknown: "Unknown",
+  usageFiles: "Workspace files",
+  usageLocalCache: "Local TestPlay cache",
+  usageChild: "Workspace Library disk",
+  usageParent: "Shared Library parent",
+  usageSharedCache: "Shared TestPlay store",
+  usageShared: "Shared",
+  usageAllocated: "On disk",
+  usageLogical: "File lengths",
+  usageKnownTotal: "Known total (shared counted once)",
+  usageComplete: "Measurement complete",
+  usagePartial: "Partial measurement",
+  usageHelp:
+    "Measured on request, in decimal MB. Shared stores include other Workspaces; this total is not the space recoverable by removing this Workspace.",
+  usageCleanupHelp:
+    "Shared-cache commands require the updated TestPlay with shared-content support. Preview cleanup in TestPlay; HoneyBee does not delete caches or run tools.",
   contentFiles: "Code & content",
   unitySettingsFiles: "Unity settings",
   metadataFiles: "Metadata",
@@ -163,6 +181,24 @@ export type MessageKey = keyof typeof en;
 export const messageKeys = Object.keys(en) as MessageKey[];
 
 const ko: Record<MessageKey, string> = {
+  usageTitle: "용량",
+  usageMeasure: "측정 / 새로고침",
+  usageUnknown: "확인 불가",
+  usageFiles: "Workspace 일반 파일",
+  usageLocalCache: "로컬 TestPlay 캐시",
+  usageChild: "Workspace Library 디스크",
+  usageParent: "공유 Library parent",
+  usageSharedCache: "TestPlay 공용 저장소",
+  usageShared: "공유",
+  usageAllocated: "실제 할당량",
+  usageLogical: "파일 크기 합계",
+  usageKnownTotal: "확인된 합계 (공유 항목은 한 번만 포함)",
+  usageComplete: "측정 완료",
+  usagePartial: "부분 측정",
+  usageHelp:
+    "버튼을 누를 때 측정하며 MB는 100만 바이트 기준입니다. 공유 저장소에는 다른 Workspace의 비용도 포함되므로, 합계가 이 Workspace 삭제 시 회수할 용량을 뜻하지는 않습니다.",
+  usageCleanupHelp:
+    "공유 캐시 명령은 shared-content를 지원하는 새 TestPlay가 필요합니다. TestPlay에서 정리 대상을 먼저 확인하세요. HoneyBee는 캐시를 삭제하거나 도구를 실행하지 않습니다.",
   contentFiles: "코드·콘텐츠",
   unitySettingsFiles: "Unity 설정",
   metadataFiles: "메타데이터",

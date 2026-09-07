@@ -1,0 +1,2028 @@
+diff --git a/cmd/testplay-cache-benchmark/main.go b/cmd/testplay-cache-benchmark/main.go
+new file mode 100644
+index 0000000..f725e10
+--- /dev/null
++++ b/cmd/testplay-cache-benchmark/main.go
+@@ -0,0 +1,55 @@
++// A read-only source / new-output-only cache correctness and capacity fixture.
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"flag"
++	"fmt"
++	"github.com/Kubonsang/testplay-runner/internal/contentcache"
++	"os"
++	"path/filepath"
++	"strings"
++	"time"
++)
++
++func main() {
++	first := flag.String("first", "", "first existing Library cache")
++	second := flag.String("second", "", "second existing Library cache")
++	output := flag.String("output", "", "new output directory")
++	flag.Parse()
++	if !filepath.IsAbs(*output) || !filepath.IsAbs(*first) || !filepath.IsAbs(*second) {
++		panic("absolute paths required")
++	}
++	if err := os.Mkdir(*output, 0700); err != nil {
++		panic(err)
++	}
++	store := contentcache.New(filepath.Join(*output, "store"))
++	ctx := context.Background()
++	key := strings.Repeat("a", 64)
++	records := []map[string]any{}
++	for i, source := range []string{*first, *second} {
++		project := filepath.Join(*output, fmt.Sprintf("project-%d", i))
++		if err := os.Mkdir(project, 0700); err != nil {
++			panic(err)
++		}
++		started := time.Now()
++		if err := store.Publish(ctx, project, key, source); err != nil {
++			panic(err)
++		}
++		publish := time.Since(started).Milliseconds()
++		started = time.Now()
++		hit, err := store.Restore(ctx, project, key, filepath.Join(project, "Library"))
++		if err != nil || !hit {
++			panic(fmt.Sprintf("restore: %v", err))
++		}
++		records = append(records, map[string]any{"source": source, "publishMs": publish, "restoreMs": time.Since(started).Milliseconds(), "verified": true})
++	}
++	usage, err := store.Inspect(ctx, false)
++	if err != nil {
++		panic(err)
++	}
++	if err := json.NewEncoder(os.Stdout).Encode(map[string]any{"usage": usage, "copies": records}); err != nil {
++		panic(err)
++	}
++}
+diff --git a/cmd/testplay/cache.go b/cmd/testplay/cache.go
+new file mode 100644
+index 0000000..558ad93
+--- /dev/null
++++ b/cmd/testplay/cache.go
+@@ -0,0 +1,78 @@
++package main
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"github.com/Kubonsang/testplay-runner/internal/config"
++	"github.com/Kubonsang/testplay-runner/internal/contentcache"
++	"github.com/spf13/cobra"
++)
++
++func newCacheCommand() *cobra.Command {
++	command := &cobra.Command{Use: "cache", Short: "Inspect and collect unreferenced shared cache contents"}
++	for _, action := range []string{"usage", "prune"} {
++		action := action
++		var root string
++		var execute, dryRun bool
++		leaf := &cobra.Command{Use: action, Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
++			if execute && dryRun {
++				return fmt.Errorf("--execute and --dry-run are mutually exclusive")
++			}
++			if root == "" {
++				var err error
++				root, err = contentcache.DefaultRoot()
++				if err != nil {
++					return err
++				}
++			}
++			result, err := contentcache.New(root).Inspect(context.Background(), action == "prune" && execute)
++			if err != nil {
++				return err
++			}
++			return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
++		}}
++		leaf.Flags().StringVar(&root, "store-root", "", "Absolute shared cache root (default: user cache directory)")
++		leaf.Flags().Bool("json", false, "JSON output (always enabled)")
++		if action == "prune" {
++			leaf.Flags().BoolVar(&execute, "execute", false, "Delete unreferenced blobs under the selected store")
++			leaf.Flags().BoolVar(&dryRun, "dry-run", false, "Report without deleting (default)")
++		}
++		command.AddCommand(leaf)
++	}
++	var execute, dryRun bool
++	retire := &cobra.Command{Use: "retire-local", Args: cobra.NoArgs, Short: "Preview retiring a verified legacy cache after a successful shared-cache run", RunE: func(cmd *cobra.Command, _ []string) error {
++		if execute && dryRun {
++			return fmt.Errorf("--execute and --dry-run are mutually exclusive")
++		}
++		cfg, err := config.Load(configPath)
++		if err != nil {
++			return err
++		}
++		if cfg.Workspace == nil || cfg.Workspace.CacheMode != "shared-content" {
++			return fmt.Errorf("shared-content must be explicitly configured first")
++		}
++		root := cfg.Workspace.CacheRoot
++		if root == "" {
++			root, err = contentcache.DefaultRoot()
++			if err != nil {
++				return err
++			}
++		}
++		key, err := contentcache.Key(cfg.ProjectPath, cfg.UnityPath)
++		if err != nil {
++			return err
++		}
++		result, err := contentcache.New(root).RetireLocal(cmd.Context(), cfg.ProjectPath, key, execute)
++		if err != nil {
++			return err
++		}
++		return json.NewEncoder(cmd.OutOrStdout()).Encode(result)
++	}}
++	retire.Flags().BoolVar(&execute, "execute", false, "Remove only the verified local .testplay/cache directory")
++	retire.Flags().BoolVar(&dryRun, "dry-run", false, "Preview without deletion (default)")
++	retire.Flags().Bool("json", false, "JSON output (always enabled)")
++	command.AddCommand(retire)
++	return command
++}
++func init() { rootCmd.AddCommand(newCacheCommand()) }
+diff --git a/docs/shared-content-cache.md b/docs/shared-content-cache.md
+new file mode 100644
+index 0000000..d1cbb57
+--- /dev/null
++++ b/docs/shared-content-cache.md
+@@ -0,0 +1,60 @@
++# Shared-content Library cache (opt-in)
++
++Add `workspace.cache_mode: "shared-content"` to an existing TestPlay config.
++Missing or `local` preserves historical behavior. Optional `workspace.cache_root`
++is an absolute directory outside the project; otherwise the user cache directory
++contains `TestPlay/Cache/v1` (`%LOCALAPPDATA%` on Windows).
++
++This changes persistence for the legacy shadow provider, not backend selection.
++Bridge/process runs stay Bridge/process runs. Explicit image/VHDX/auto providers
++cannot be combined with shared-content. The v0.11.0 release has neither these
++settings nor the following commands.
++
++Each project path has an independent manifest and compatibility key covering
++Unity executable contents, Unity version, packages manifest/lock and project
++settings. Immutable SHA-256 blobs deduplicate equal bytes across manifests.
++Restore verifies bytes and writes independent regular files. Unity never opens
++the shared blobs directly. Publication and restore use eight IO workers. New
++blobs are flushed before the complete manifest replaces its predecessor.
++
++OS shared/exclusive locks protect the whole restore, publication, invalidation
++and GC transaction. Process termination releases locks. A corrupt manifest or
++blob fails explicitly; an absent/incompatible manifest is a cache miss. Failed
++updates retain the prior manifest; unreferenced blobs may remain for later GC.
++After a successful publication, the runner records allocated store size before
++collecting blobs unreferenced by every project manifest. Maintenance failure is
++reported as a warning; the committed manifest remains usable. Explicit prune is
++also available after interrupted runs. Windows run metrics use actual filesystem
++allocation, including sparse/compressed files, rather than logical file lengths.
++Directory batches return allocation without opening every ordinary file. This
++keeps measurement overhead low for both local and shared mode; unusual files use
++individual queries and unsupported directory APIs fall back to a file walk.
++Successful legacy exit codes 0 and 3 retain their existing write-back semantics;
++scenario runs still skip write-back. No automatic conversion or deletion of old
++local caches takes place.
++
++```text
++testplay cache usage --json
++testplay cache prune --dry-run
++testplay cache prune --execute
++testplay cache retire-local --config ./testplay.json --dry-run
++testplay cache retire-local --config ./testplay.json --execute
++```
++
++Usage/prune accept `--store-root` and report logical byte counts, not allocated
++clusters. They do not infer the root from the current project's config. Prune
++without `--execute` only previews. It retains all referenced blobs and rejects
++unsafe entries or invalid manifests. Directory metadata and manifest files are
++outside its blob-size totals; include the entire store when measuring savings.
++
++Retire-local verifies the new shared cache and the old local key before touching
++`.testplay/cache`. It refuses tracked files, links, special files, unexpected
++top-level cache entries, a Unity lock or outstanding shadow directories. Its
++default is a preview. Keep recovery copies separately; do not retire a cache
++needed as recovery evidence. `--clear-cache` only invalidates the selected
++project manifest, never the whole shared store.
++
++Changing `cache_mode` back to `local` restores the old behavior. If its old cache
++was explicitly retired, the next shadow run rebuilds it. Shared data remains
++available until explicitly invalidated/pruned. This feature stays opt-in until
++native repeated-run timing and disk-usage gates are met.
+diff --git a/internal/config/config.go b/internal/config/config.go
+index b84cf9d..5e280f5 100644
+--- a/internal/config/config.go
++++ b/internal/config/config.go
+@@ -41,6 +41,8 @@ const (
+ // additive to schema 1 so existing configuration files retain their meaning.
+ // An empty Backend preserves the historical selection rules.
+ type WorkspaceConfig struct {
++	CacheMode              string            `json:"cache_mode,omitempty"`
++	CacheRoot              string            `json:"cache_root,omitempty"`
+ 	Backend                string            `json:"backend,omitempty"`
+ 	StoreRoot              string            `json:"store_root,omitempty"`
+ 	StoreMaxAllocatedBytes int64             `json:"store_max_allocated_bytes,omitempty"`
+@@ -159,6 +161,15 @@ func (c *Config) Validate(requireUnity bool) error {
+ 	}
+ 
+ 	if c.Workspace != nil {
++		if c.Workspace.CacheMode != "" && c.Workspace.CacheMode != "local" && c.Workspace.CacheMode != "shared-content" {
++			return fmt.Errorf("%w: workspace.cache_mode must be local or shared-content", ErrConfigInvalid)
++		}
++		if c.Workspace.CacheRoot != "" && (!filepath.IsAbs(c.Workspace.CacheRoot) || c.Workspace.CacheMode != "shared-content") {
++			return fmt.Errorf("%w: workspace.cache_root requires shared-content and an absolute path", ErrConfigInvalid)
++		}
++		if c.Workspace.CacheMode == "shared-content" && c.Workspace.Backend != "" && c.Workspace.Backend != "legacy" {
++			return fmt.Errorf("%w: shared-content cache requires the legacy shadow provider", ErrConfigInvalid)
++		}
+ 		switch c.Workspace.Backend {
+ 		case "", "legacy", "image", "vhdx-diff", "auto":
+ 		default:
+diff --git a/internal/contentcache/lock_unix.go b/internal/contentcache/lock_unix.go
+new file mode 100644
+index 0000000..cfd16b5
+--- /dev/null
++++ b/internal/contentcache/lock_unix.go
+@@ -0,0 +1,24 @@
++//go:build !windows
++
++package contentcache
++
++import (
++	"errors"
++	"golang.org/x/sys/unix"
++	"io/fs"
++	"os"
++)
++
++func lockFile(f *os.File, write bool) error {
++	mode := unix.LOCK_SH
++	if write {
++		mode = unix.LOCK_EX
++	}
++	return unix.Flock(int(f.Fd()), mode|unix.LOCK_NB)
++}
++func unlockFile(f *os.File) error   { return unix.Flock(int(f.Fd()), unix.LOCK_UN) }
++func lockBusy(err error) bool       { return errors.Is(err, unix.EWOULDBLOCK) }
++func canonicalPath(p string) string { return p }
++func isLink(info fs.FileInfo) bool  { return info.Mode()&os.ModeSymlink != 0 }
++
++func restoreMode(path string, mode fs.FileMode) error { return os.Chmod(path, mode) }
+diff --git a/internal/contentcache/lock_windows.go b/internal/contentcache/lock_windows.go
+new file mode 100644
+index 0000000..3e97052
+--- /dev/null
++++ b/internal/contentcache/lock_windows.go
+@@ -0,0 +1,36 @@
++//go:build windows
++
++package contentcache
++
++import (
++	"errors"
++	"golang.org/x/sys/windows"
++	"io/fs"
++	"os"
++	"strings"
++	"syscall"
++)
++
++func lockFile(f *os.File, write bool) error {
++	flags := uint32(windows.LOCKFILE_FAIL_IMMEDIATELY)
++	if write {
++		flags |= windows.LOCKFILE_EXCLUSIVE_LOCK
++	}
++	return windows.LockFileEx(windows.Handle(f.Fd()), flags, 0, 1, 0, &windows.Overlapped{})
++}
++func unlockFile(f *os.File) error {
++	return windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &windows.Overlapped{})
++}
++func lockBusy(err error) bool       { return errors.Is(err, windows.ERROR_LOCK_VIOLATION) }
++func canonicalPath(p string) string { return strings.ToLower(p) }
++func isLink(info fs.FileInfo) bool {
++	data, ok := info.Sys().(*syscall.Win32FileAttributeData)
++	return info.Mode()&os.ModeSymlink != 0 || (ok && data.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0)
++}
++
++func restoreMode(path string, mode fs.FileMode) error {
++	if mode&0200 == 0 {
++		return os.Chmod(path, mode)
++	}
++	return nil
++}
+diff --git a/internal/contentcache/retire.go b/internal/contentcache/retire.go
+new file mode 100644
+index 0000000..9302713
+--- /dev/null
++++ b/internal/contentcache/retire.go
+@@ -0,0 +1,159 @@
++package contentcache
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"io"
++	"io/fs"
++	"os"
++	"os/exec"
++	"path/filepath"
++)
++
++type Retirement struct {
++	Path         string `json:"path"`
++	LogicalBytes int64  `json:"logicalBytes"`
++	FileCount    int    `json:"fileCount"`
++	Executed     bool   `json:"executed"`
++}
++
++// RetireLocal only removes the old generated cache after verifying a matching
++// shared manifest, every referenced blob, and the complete removal boundary.
++func (s Store) RetireLocal(ctx context.Context, project, key string, execute bool) (Retirement, error) {
++	p, err := filepath.Abs(project)
++	if err != nil {
++		return Retirement{}, err
++	}
++	target := filepath.Join(p, ".testplay", "cache")
++	result := Retirement{Path: target}
++	if err = s.ValidateLocation(p); err != nil {
++		return result, err
++	}
++	if err = safePath(target); err != nil {
++		return result, err
++	}
++	if _, err = os.Lstat(filepath.Join(p, "Temp", "UnityLockfile")); err == nil {
++		return result, errors.New("close Unity before retiring the local cache")
++	} else if !os.IsNotExist(err) {
++		return result, err
++	}
++	shadows, err := filepath.Glob(filepath.Join(p, ".testplay-shadow-*"))
++	if err != nil {
++		return result, err
++	}
++	if len(shadows) > 0 {
++		return result, errors.New("shadow workspaces are present; finish or resolve those runs first")
++	}
++	tracked, err := exec.CommandContext(ctx, "git", "-C", p, "ls-files", "-z", "--", ".testplay/cache").Output()
++	if err != nil {
++		return result, fmt.Errorf("cannot verify Git ownership: %w", err)
++	}
++	if len(tracked) > 0 {
++		return result, errors.New("local cache contains tracked files")
++	}
++	// v0.11 local-cache ownership marker: exact original two-file compatibility key.
++	h := sha256.New()
++	for _, rel := range []string{filepath.Join("ProjectSettings", "ProjectVersion.txt"), filepath.Join("Packages", "manifest.json")} {
++		data, err := os.ReadFile(filepath.Join(p, rel))
++		if err != nil {
++			return result, err
++		}
++		h.Write([]byte(rel))
++		h.Write(data)
++	}
++	marker, err := os.ReadFile(filepath.Join(target, "cache.key"))
++	if err != nil {
++		return result, err
++	}
++	if string(marker) != hex.EncodeToString(h.Sum(nil)) {
++		return result, errors.New("legacy cache ownership/key cannot be verified")
++	}
++	children, err := os.ReadDir(target)
++	if err != nil {
++		return result, err
++	}
++	for _, child := range children {
++		if child.Name() != "Library" && child.Name() != "cache.key" {
++			return result, errors.New("unexpected files in local cache; preserved")
++		}
++	}
++	id, err := Identity(p)
++	if err != nil {
++		return result, err
++	}
++	unlock, err := s.lock(ctx, true, false)
++	if err != nil {
++		return result, err
++	}
++	defer unlock()
++	manifest, err := s.readManifest(id)
++	if err != nil {
++		return result, err
++	}
++	if manifest.Key != key {
++		return result, errors.New("no compatible shared cache; run the updated TestPlay successfully first")
++	}
++	for _, e := range manifest.Entries {
++		if e.Directory {
++			continue
++		}
++		blob := filepath.Join(s.Root, "blobs", e.Hash)
++		if err = safePath(blob); err != nil {
++			return result, err
++		}
++		file, err := os.Open(blob)
++		if err != nil {
++			return result, err
++		}
++		h := sha256.New()
++		n, copyErr := io.Copy(h, &contextReader{ctx, file})
++		file.Close()
++		if copyErr != nil {
++			return result, copyErr
++		}
++		if n != e.Size || hex.EncodeToString(h.Sum(nil)) != e.Hash {
++			return result, errors.New("shared cache verification failed; local cache preserved")
++		}
++	}
++	err = filepath.WalkDir(target, func(path string, d fs.DirEntry, walkErr error) error {
++		if walkErr != nil {
++			return walkErr
++		}
++		if err := ctx.Err(); err != nil {
++			return err
++		}
++		info, err := d.Info()
++		if err != nil {
++			return err
++		}
++		if isLink(info) || (!info.IsDir() && !info.Mode().IsRegular()) {
++			return errors.New("linked or special cache entries are preserved")
++		}
++		if !info.IsDir() {
++			result.FileCount++
++			result.LogicalBytes += info.Size()
++		}
++		return nil
++	})
++	if err != nil {
++		return result, err
++	}
++	if execute {
++		// The fixed child boundary and every descendant were checked above. Never
++		// compose a shell deletion or use a manifest-supplied path for removal.
++		if err = safePath(target); err != nil {
++			return result, err
++		}
++		if filepath.Dir(filepath.Dir(target)) != p {
++			return result, errors.New("retirement path escaped project")
++		}
++		if err = os.RemoveAll(target); err != nil {
++			return result, err
++		}
++		result.Executed = true
++	}
++	return result, nil
++}
+diff --git a/internal/contentcache/retire_test.go b/internal/contentcache/retire_test.go
+new file mode 100644
+index 0000000..8b02d36
+--- /dev/null
++++ b/internal/contentcache/retire_test.go
+@@ -0,0 +1,68 @@
++package contentcache
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"testing"
++)
++
++func TestRetirementPreviewProtectsTrackedDataAndKeepsSharedCache(t *testing.T) {
++	store, p, lib, key := fixture(t)
++	ctx := context.Background()
++	if out, err := exec.Command("git", "-C", p, "init").CombinedOutput(); err != nil {
++		t.Fatalf("git init: %s %v", out, err)
++	}
++	h := sha256.New()
++	for _, rel := range []string{filepath.Join("ProjectSettings", "ProjectVersion.txt"), filepath.Join("Packages", "manifest.json")} {
++		if err := os.MkdirAll(filepath.Dir(filepath.Join(p, rel)), 0700); err != nil {
++			t.Fatal(err)
++		}
++		if err := os.WriteFile(filepath.Join(p, rel), []byte("fixture"), 0600); err != nil {
++			t.Fatal(err)
++		}
++		h.Write([]byte(rel))
++		h.Write([]byte("fixture"))
++	}
++	cache := filepath.Join(p, ".testplay", "cache")
++	if err := os.MkdirAll(filepath.Join(cache, "Library"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	marker := filepath.Join(cache, "cache.key")
++	if err := os.WriteFile(marker, []byte(hex.EncodeToString(h.Sum(nil))), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := store.Publish(ctx, p, key, lib); err != nil {
++		t.Fatal(err)
++	}
++	preview, err := store.RetireLocal(ctx, p, key, false)
++	if err != nil || preview.Executed {
++		t.Fatalf("preview failed: %+v %v", preview, err)
++	}
++	if _, err := os.Stat(marker); err != nil {
++		t.Fatal("preview deleted cache")
++	}
++	if out, err := exec.Command("git", "-C", p, "add", "-f", ".testplay/cache/cache.key").CombinedOutput(); err != nil {
++		t.Fatalf("stage marker: %s %v", out, err)
++	}
++	if _, err := store.RetireLocal(ctx, p, key, true); err == nil {
++		t.Fatal("tracked cache was deleted")
++	}
++	if out, err := exec.Command("git", "-C", p, "rm", "--cached", "-f", ".testplay/cache/cache.key").CombinedOutput(); err != nil {
++		t.Fatalf("unstage marker: %s %v", out, err)
++	}
++	result, err := store.RetireLocal(ctx, p, key, true)
++	if err != nil || !result.Executed {
++		t.Fatalf("retirement: %+v %v", result, err)
++	}
++	if _, err := os.Stat(lib); err != nil {
++		t.Fatal("source Library deleted")
++	}
++	usage, err := store.Inspect(ctx, false)
++	if err != nil || usage.ManifestCount != 1 {
++		t.Fatal("shared cache changed")
++	}
++}
+diff --git a/internal/contentcache/store.go b/internal/contentcache/store.go
+new file mode 100644
+index 0000000..2852902
+--- /dev/null
++++ b/internal/contentcache/store.go
+@@ -0,0 +1,667 @@
++// Package contentcache stores immutable file contents with project-local manifests.
++// Unity only sees independent copies. OS locks pin all referenced blobs while
++// restoring; a crashed process releases its lock without stale reader journals.
++package contentcache
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"time"
++
++	"github.com/Kubonsang/testplay-runner/internal/atomicfile"
++	"github.com/Kubonsang/testplay-runner/internal/libraryimage"
++)
++
++type Entry struct {
++	Path      string    `json:"path"`
++	Hash      string    `json:"hash,omitempty"`
++	Size      int64     `json:"size"`
++	Mode      uint32    `json:"mode"`
++	Modified  time.Time `json:"modified"`
++	Directory bool      `json:"directory,omitempty"`
++}
++type Manifest struct {
++	SchemaVersion int     `json:"schemaVersion"`
++	ProjectID     string  `json:"projectId"`
++	Key           string  `json:"key"`
++	Entries       []Entry `json:"entries"`
++}
++type Usage struct {
++	SchemaVersion    int       `json:"schemaVersion"`
++	Root             string    `json:"root"`
++	ManifestCount    int       `json:"manifestCount"`
++	ReferencedBytes  int64     `json:"referencedBytes"`
++	UniqueBytes      int64     `json:"uniqueBytes"`
++	ReclaimableBytes int64     `json:"reclaimableBytes"`
++	PrunedBytes      int64     `json:"prunedBytes"`
++	MeasuredAt       time.Time `json:"measuredAt"`
++}
++type Store struct{ Root string }
++
++func DefaultRoot() (string, error) {
++	root, err := os.UserCacheDir()
++	if err != nil {
++		return "", err
++	}
++	return filepath.Join(root, "TestPlay", "Cache", "v1"), nil
++}
++func New(root string) Store { return Store{Root: root} }
++func (s Store) ValidateLocation(project string) error {
++	if !filepath.IsAbs(s.Root) {
++		return errors.New("cache root must be absolute")
++	}
++	if err := safePath(s.Root); err != nil {
++		return err
++	}
++	p, err := filepath.Abs(project)
++	if err != nil {
++		return err
++	}
++	p, err = filepath.EvalSymlinks(p)
++	if err != nil {
++		return err
++	}
++	p = canonicalPath(filepath.Clean(p))
++	root := canonicalPath(filepath.Clean(s.Root))
++	sep := string(os.PathSeparator)
++	if p == root || strings.HasPrefix(p, root+sep) || strings.HasPrefix(root, p+sep) {
++		return errors.New("shared cache root must be outside the project")
++	}
++	return nil
++}
++func Identity(project string) (string, error) {
++	absolute, err := filepath.Abs(project)
++	if err != nil {
++		return "", err
++	}
++	absolute, err = filepath.EvalSymlinks(absolute)
++	if err != nil {
++		return "", err
++	}
++	return digest([]byte(canonicalPath(absolute))), nil
++}
++func Key(project, unity string) (string, error) {
++	key, err := libraryimage.ComputeKey(project, unity)
++	if err != nil {
++		return "", err
++	}
++	// The older image key hashes the executable path, not its contents.
++	executable, err := os.Open(unity)
++	if err != nil {
++		return "", err
++	}
++	defer executable.Close()
++	h := sha256.New()
++	if _, err = io.Copy(h, executable); err != nil {
++		return "", err
++	}
++	return digest([]byte(key.Digest + hex.EncodeToString(h.Sum(nil)))), nil
++}
++func digest(data []byte) string { sum := sha256.Sum256(data); return hex.EncodeToString(sum[:]) }
++func validHash(s string) bool {
++	data, err := hex.DecodeString(s)
++	return err == nil && len(data) == 32 && strings.ToLower(s) == s
++}
++
++// Check every ancestor, including the root itself, before traversing or deleting.
++func safePath(target string) error {
++	absolute, err := filepath.Abs(target)
++	if err != nil {
++		return err
++	}
++	for current := absolute; ; current = filepath.Dir(current) {
++		info, err := os.Lstat(current)
++		if err != nil && !os.IsNotExist(err) {
++			return err
++		}
++		if err == nil && isLink(info) {
++			return fmt.Errorf("cache path is a link: %s", current)
++		}
++		parent := filepath.Dir(current)
++		if parent == current {
++			break
++		}
++	}
++	return nil
++}
++func (s Store) initialize() error {
++	if !filepath.IsAbs(s.Root) {
++		return errors.New("cache root must be absolute")
++	}
++	if err := safePath(s.Root); err != nil {
++		return err
++	}
++	for _, child := range []string{"blobs", "manifests"} {
++		p := filepath.Join(s.Root, child)
++		if err := safePath(p); err != nil {
++			return err
++		}
++		if err := os.MkdirAll(p, 0700); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++func (s Store) lock(ctx context.Context, write bool, create bool) (func(), error) {
++	if !filepath.IsAbs(s.Root) {
++		return nil, errors.New("cache root must be absolute")
++	}
++	if create {
++		if err := s.initialize(); err != nil {
++			return nil, err
++		}
++	}
++	if err := safePath(s.Root); err != nil {
++		return nil, err
++	}
++	p := filepath.Join(s.Root, "store.lock")
++	if err := safePath(p); err != nil {
++		return nil, err
++	}
++	flags := os.O_RDWR
++	if create {
++		flags |= os.O_CREATE
++	}
++	f, err := os.OpenFile(p, flags, 0600)
++	if err != nil {
++		return nil, err
++	}
++	for {
++		err = lockFile(f, write)
++		if err == nil {
++			return func() { _ = unlockFile(f); _ = f.Close() }, nil
++		}
++		if !lockBusy(err) {
++			_ = f.Close()
++			return nil, err
++		}
++		select {
++		case <-ctx.Done():
++			_ = f.Close()
++			return nil, ctx.Err()
++		case <-time.After(20 * time.Millisecond):
++		}
++	}
++}
++func (s Store) manifestPath(id string) (string, error) {
++	if !validHash(id) {
++		return "", errors.New("invalid cache project ID")
++	}
++	p := filepath.Join(s.Root, "manifests", id+".json")
++	return p, safePath(p)
++}
++func (s Store) readManifest(id string) (Manifest, error) {
++	var m Manifest
++	p, err := s.manifestPath(id)
++	if err != nil {
++		return m, err
++	}
++	data, err := os.ReadFile(p)
++	if err != nil {
++		return m, err
++	}
++	if err = json.Unmarshal(data, &m); err != nil {
++		return m, err
++	}
++	if m.SchemaVersion != 1 || m.ProjectID != id || !validHash(m.Key) {
++		return m, errors.New("invalid cache manifest")
++	}
++	seen := map[string]bool{}
++	for _, e := range m.Entries {
++		rel := filepath.FromSlash(e.Path)
++		clean := canonicalPath(rel)
++		if !filepath.IsLocal(rel) || rel == "." || strings.ContainsAny(e.Path, "\\:") || filepath.ToSlash(filepath.Clean(rel)) != e.Path || seen[clean] || e.Size < 0 || (!e.Directory && !validHash(e.Hash)) {
++			return m, errors.New("invalid cache entry")
++		}
++		seen[clean] = true
++	}
++	return m, nil
++}
++
++// Publish keeps the previous manifest reachable until every blob is durable.
++func (s Store) Publish(ctx context.Context, project, key, library string) error {
++	if err := s.ValidateLocation(project); err != nil {
++		return err
++	}
++	if err := s.ValidateLocation(library); err != nil {
++		return err
++	}
++	if !validHash(key) {
++		return errors.New("invalid cache key")
++	}
++	if err := safePath(library); err != nil {
++		return err
++	}
++	id, err := Identity(project)
++	if err != nil {
++		return err
++	}
++	unlock, err := s.lock(ctx, true, true)
++	if err != nil {
++		return err
++	}
++	defer unlock()
++	m := Manifest{SchemaVersion: 1, ProjectID: id, Key: key, Entries: []Entry{}}
++	type sourceFile struct {
++		path  string
++		info  fs.FileInfo
++		index int
++	}
++	var files []sourceFile
++	err = filepath.WalkDir(library, func(p string, d fs.DirEntry, walkErr error) error {
++		if walkErr != nil {
++			return walkErr
++		}
++		if err := ctx.Err(); err != nil {
++			return err
++		}
++		info, err := d.Info()
++		if err != nil {
++			return err
++		}
++		if isLink(info) || (!info.IsDir() && !info.Mode().IsRegular()) {
++			return fmt.Errorf("unsupported cache entry: %s", p)
++		}
++		if p == library {
++			return nil
++		}
++		rel, err := filepath.Rel(library, p)
++		if err != nil {
++			return err
++		}
++		e := Entry{Path: filepath.ToSlash(rel), Mode: uint32(info.Mode().Perm()), Modified: info.ModTime(), Directory: info.IsDir()}
++		if !e.Directory {
++			e.Size = info.Size()
++			files = append(files, sourceFile{p, info, len(m.Entries)})
++		}
++		m.Entries = append(m.Entries, e)
++		return nil
++	})
++	if err != nil {
++		return err
++	}
++	var stripes [64]sync.Mutex
++	if err = parallel(ctx, len(files), func(ctx context.Context, i int) error {
++		file := files[i]
++		hash, err := s.putBlob(ctx, file.path, file.info, &stripes)
++		if err == nil {
++			m.Entries[file.index].Hash = hash
++		}
++		return err
++	}); err != nil {
++		return err
++	}
++	target, err := s.manifestPath(id)
++	if err != nil {
++		return err
++	}
++	data, err := json.Marshal(m)
++	if err != nil {
++		return err
++	}
++	return durableWrite(target, data)
++}
++func (s Store) putBlob(ctx context.Context, source string, before fs.FileInfo, stripes *[64]sync.Mutex) (string, error) {
++	f, err := os.Open(source)
++	if err != nil {
++		return "", err
++	}
++	defer f.Close()
++	h := sha256.New()
++	if _, err = io.Copy(h, &contextReader{ctx, f}); err != nil {
++		return "", err
++	}
++	hash := hex.EncodeToString(h.Sum(nil))
++	stripe := &stripes[h.Sum(nil)[0]%64]
++	stripe.Lock()
++	defer stripe.Unlock()
++	target := filepath.Join(s.Root, "blobs", hash)
++	// initialize checked the store ancestors; the exclusive store lock keeps
++	// other cache operations from changing the blob tree. Check the leaf here.
++	existing, statErr := os.Lstat(target)
++	if statErr == nil {
++		if isLink(existing) || !existing.Mode().IsRegular() || existing.Size() != before.Size() {
++			return "", errors.New("corrupt existing cache blob")
++		}
++		// Verify existing bytes; equal length alone must never poison new manifests.
++		check, err := os.Open(target)
++		if err != nil {
++			return "", err
++		}
++		verifier := sha256.New()
++		_, err = io.Copy(verifier, &contextReader{ctx, check})
++		_ = check.Close()
++		if err != nil {
++			return "", err
++		}
++		if hex.EncodeToString(verifier.Sum(nil)) != hash {
++			return "", errors.New("corrupt existing cache blob")
++		}
++	} else if !os.IsNotExist(statErr) {
++		return "", statErr
++	} else {
++		if _, err = f.Seek(0, 0); err != nil {
++			return "", err
++		}
++		tmp, err := os.CreateTemp(filepath.Join(s.Root, "blobs"), ".pending-")
++		if err != nil {
++			return "", err
++		}
++		tempPath := tmp.Name()
++		defer os.Remove(tempPath)
++		verifier := sha256.New()
++		n, copyErr := io.Copy(io.MultiWriter(tmp, verifier), &contextReader{ctx, f})
++		if copyErr == nil {
++			copyErr = tmp.Sync()
++		}
++		closeErr := tmp.Close()
++		if err = errors.Join(copyErr, closeErr); err != nil {
++			return "", err
++		}
++		if n != before.Size() || hex.EncodeToString(verifier.Sum(nil)) != hash {
++			return "", errors.New("cache source changed while copying")
++		}
++		if err = atomicfile.Rename(tempPath, target); err != nil {
++			return "", err
++		}
++	}
++	after, err := os.Stat(source)
++	if err != nil {
++		return "", err
++	}
++	if !os.SameFile(before, after) || before.Size() != after.Size() || !before.ModTime().Equal(after.ModTime()) {
++		return "", errors.New("cache source changed while hashing")
++	}
++	return hash, nil
++}
++func durableWrite(target string, data []byte) error {
++	tmp, err := os.CreateTemp(filepath.Dir(target), ".pending-")
++	if err != nil {
++		return err
++	}
++	defer os.Remove(tmp.Name())
++	_, err = tmp.Write(data)
++	if err == nil {
++		err = tmp.Sync()
++	}
++	closeErr := tmp.Close()
++	if err = errors.Join(err, closeErr); err != nil {
++		return err
++	}
++	return atomicfile.Rename(tmp.Name(), target)
++}
++
++type contextReader struct {
++	ctx context.Context
++	r   io.Reader
++}
++
++func (r *contextReader) Read(p []byte) (int, error) {
++	if err := r.ctx.Err(); err != nil {
++		return 0, err
++	}
++	return r.r.Read(p)
++}
++
++// Restore requires a new destination and pins the manifest for the entire copy.
++// A corrupt cache returns an error; callers must discard only their own shadow.
++func (s Store) Restore(ctx context.Context, project, key, destination string) (bool, error) {
++	id, err := Identity(project)
++	if err != nil {
++		return false, err
++	}
++	unlock, err := s.lock(ctx, false, false)
++	if os.IsNotExist(err) {
++		return false, nil
++	}
++	if err != nil {
++		return false, err
++	}
++	defer unlock()
++	m, err := s.readManifest(id)
++	if os.IsNotExist(err) {
++		return false, nil
++	}
++	if err != nil {
++		return false, err
++	}
++	if m.Key != key {
++		return false, nil
++	}
++	if err = safePath(destination); err != nil {
++		return false, err
++	}
++	if err = safePath(filepath.Join(s.Root, "blobs")); err != nil {
++		return false, err
++	}
++	if err = os.Mkdir(destination, 0700); err != nil {
++		return false, err
++	}
++	var files []Entry
++	for _, e := range m.Entries {
++		if err = ctx.Err(); err != nil {
++			return false, err
++		}
++		target := filepath.Join(destination, filepath.FromSlash(e.Path))
++		if e.Directory {
++			// Every directory is created exclusively under the new destination.
++			// Never accept an existing directory or follow a pre-existing junction.
++			if err = os.Mkdir(target, 0700); err != nil {
++				return false, err
++			}
++			continue
++		}
++		files = append(files, e)
++	}
++	if err = parallel(ctx, len(files), func(ctx context.Context, i int) error {
++		e := files[i]
++		blob := filepath.Join(s.Root, "blobs", e.Hash)
++		info, err := os.Lstat(blob)
++		if err != nil {
++			return err
++		}
++		if isLink(info) || !info.Mode().IsRegular() {
++			return errors.New("unsafe cache blob")
++		}
++		target := filepath.Join(destination, filepath.FromSlash(e.Path))
++		// Manifest paths are normalized/local, all parents were just created,
++		// and restoreFile uses exclusive creation for each regular file.
++		return restoreFile(ctx, blob, target, e)
++	}); err != nil {
++		return false, err
++	}
++	for i := len(m.Entries) - 1; i >= 0; i-- {
++		e := m.Entries[i]
++		if !e.Directory {
++			continue
++		}
++		target := filepath.Join(destination, filepath.FromSlash(e.Path))
++		if err = restoreMode(target, fs.FileMode(e.Mode)&0777); err != nil {
++			return false, err
++		}
++		if err = os.Chtimes(target, e.Modified, e.Modified); err != nil {
++			return false, err
++		}
++	}
++	return true, nil
++}
++
++// Bounded parallel IO matches the legacy copier without unbounded file handles.
++func parallel(parent context.Context, count int, operation func(context.Context, int) error) error {
++	ctx, cancel := context.WithCancelCause(parent)
++	defer cancel(nil)
++	jobs := make(chan int)
++	var wg sync.WaitGroup
++	for i := 0; i < 8; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			for job := range jobs {
++				if ctx.Err() != nil {
++					return
++				}
++				if err := operation(ctx, job); err != nil {
++					cancel(err)
++					return
++				}
++			}
++		}()
++	}
++send:
++	for i := 0; i < count; i++ {
++		select {
++		case jobs <- i:
++		case <-ctx.Done():
++			break send
++		}
++	}
++	close(jobs)
++	wg.Wait()
++	return context.Cause(ctx)
++}
++func restoreFile(ctx context.Context, blob, target string, e Entry) error {
++	src, err := os.Open(blob)
++	if err != nil {
++		return err
++	}
++	defer src.Close()
++	dst, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
++	if err != nil {
++		return err
++	}
++	h := sha256.New()
++	n, copyErr := io.Copy(io.MultiWriter(dst, h), &contextReader{ctx, src})
++	closeErr := dst.Close()
++	if err = errors.Join(copyErr, closeErr); err != nil {
++		return err
++	}
++	if n != e.Size || hex.EncodeToString(h.Sum(nil)) != e.Hash {
++		return errors.New("cache blob checksum mismatch")
++	}
++	if err = restoreMode(target, fs.FileMode(e.Mode)&0777); err != nil {
++		return err
++	}
++	return os.Chtimes(target, e.Modified, e.Modified)
++}
++func (s Store) Clear(ctx context.Context, project string) error {
++	id, err := Identity(project)
++	if err != nil {
++		return err
++	}
++	unlock, err := s.lock(ctx, true, false)
++	if os.IsNotExist(err) {
++		return nil
++	}
++	if err != nil {
++		return err
++	}
++	defer unlock()
++	p, err := s.manifestPath(id)
++	if err != nil {
++		return err
++	}
++	err = os.Remove(p)
++	if os.IsNotExist(err) {
++		return nil
++	}
++	return err
++}
++
++// Inspect never creates the store. Prune only deletes validated, unreferenced
++// regular blobs under this exact store; manifests and project files are retained.
++func (s Store) Inspect(ctx context.Context, prune bool) (Usage, error) {
++	result := Usage{SchemaVersion: 1, Root: s.Root, MeasuredAt: time.Now().UTC()}
++	unlock, err := s.lock(ctx, prune, false)
++	if os.IsNotExist(err) {
++		return result, nil
++	}
++	if err != nil {
++		return result, err
++	}
++	defer unlock()
++	refs := map[string]bool{}
++	if err = safePath(filepath.Join(s.Root, "manifests")); err != nil {
++		return result, err
++	}
++	manifests, err := os.ReadDir(filepath.Join(s.Root, "manifests"))
++	if err != nil {
++		return result, err
++	}
++	for _, d := range manifests {
++		if strings.HasPrefix(d.Name(), ".pending-") {
++			continue
++		}
++		if !strings.HasSuffix(d.Name(), ".json") {
++			return result, errors.New("unexpected manifest file")
++		}
++		m, err := s.readManifest(strings.TrimSuffix(d.Name(), ".json"))
++		if err != nil {
++			return result, err
++		}
++		result.ManifestCount++
++		for _, e := range m.Entries {
++			if !e.Directory {
++				refs[e.Hash] = true
++				result.ReferencedBytes += e.Size
++			}
++		}
++	}
++	if err = safePath(filepath.Join(s.Root, "blobs")); err != nil {
++		return result, err
++	}
++	blobs, err := os.ReadDir(filepath.Join(s.Root, "blobs"))
++	if err != nil {
++		return result, err
++	}
++	var candidates []string
++	for _, d := range blobs {
++		if err = ctx.Err(); err != nil {
++			return result, err
++		}
++		info, err := d.Info()
++		if err != nil {
++			return result, err
++		}
++		if isLink(info) || !info.Mode().IsRegular() {
++			return result, errors.New("unsafe blob entry")
++		}
++		if !validHash(d.Name()) && !strings.HasPrefix(d.Name(), ".pending-") {
++			return result, errors.New("unexpected blob file")
++		}
++		result.UniqueBytes += info.Size()
++		if !refs[d.Name()] {
++			result.ReclaimableBytes += info.Size()
++			candidates = append(candidates, d.Name())
++		}
++	}
++	if prune {
++		for _, name := range candidates {
++			if err = ctx.Err(); err != nil {
++				return result, err
++			}
++			p := filepath.Join(s.Root, "blobs", name)
++			if err = safePath(p); err != nil {
++				return result, err
++			}
++			info, err := os.Lstat(p)
++			if err != nil {
++				return result, err
++			}
++			if err = os.Remove(p); err != nil {
++				return result, err
++			}
++			result.PrunedBytes += info.Size()
++		}
++	}
++	return result, nil
++}
+diff --git a/internal/contentcache/store_test.go b/internal/contentcache/store_test.go
+new file mode 100644
+index 0000000..7932256
+--- /dev/null
++++ b/internal/contentcache/store_test.go
+@@ -0,0 +1,196 @@
++package contentcache
++
++import (
++	"context"
++	"encoding/json"
++	"os"
++	"path/filepath"
++	"strings"
++	"sync"
++	"testing"
++	"time"
++)
++
++func fixture(t *testing.T) (Store, string, string, string) {
++	t.Helper()
++	root := t.TempDir()
++	project := filepath.Join(root, "project")
++	library := filepath.Join(project, "Library")
++	if err := os.MkdirAll(filepath.Join(library, "PackageCache", "empty"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(library, "PackageCache", "file"), []byte("shared package bytes"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	return New(filepath.Join(root, "store")), project, library, strings.Repeat("a", 64)
++}
++func TestDedupRestoreAndClearIsolation(t *testing.T) {
++	ctx := context.Background()
++	store, p, lib, key := fixture(t)
++	p2 := filepath.Join(filepath.Dir(p), "second")
++	if err := os.Mkdir(p2, 0700); err != nil {
++		t.Fatal(err)
++	}
++	for _, project := range []string{p, p2} {
++		if err := store.Publish(ctx, project, key, lib); err != nil {
++			t.Fatal(err)
++		}
++	}
++	usage, err := store.Inspect(ctx, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if usage.ManifestCount != 2 || usage.ReferencedBytes != 2*usage.UniqueBytes {
++		t.Fatalf("not deduplicated: %+v", usage)
++	}
++	target := filepath.Join(p2, "Library")
++	if hit, err := store.Restore(ctx, p2, key, target); err != nil || !hit {
++		t.Fatalf("restore: %v %v", hit, err)
++	}
++	file := filepath.Join(target, "PackageCache", "file")
++	if err := os.WriteFile(file, []byte("independent edit"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	id, _ := Identity(p)
++	m, err := store.readManifest(id)
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, e := range m.Entries {
++		if e.Directory {
++			continue
++		}
++		data, err := os.ReadFile(filepath.Join(store.Root, "blobs", e.Hash))
++		if err != nil || string(data) != "shared package bytes" {
++			t.Fatalf("blob changed: %s %v", data, err)
++		}
++	}
++	if err := store.Clear(ctx, p); err != nil {
++		t.Fatal(err)
++	}
++	usage, err = store.Inspect(ctx, true)
++	if err != nil || usage.PrunedBytes != 0 {
++		t.Fatalf("deleted another project: %+v %v", usage, err)
++	}
++	if err := store.Clear(ctx, p2); err != nil {
++		t.Fatal(err)
++	}
++	usage, err = store.Inspect(ctx, true)
++	if err != nil || usage.PrunedBytes == 0 {
++		t.Fatalf("did not reclaim: %+v %v", usage, err)
++	}
++}
++func TestFailurePreservesPublishedManifest(t *testing.T) {
++	store, p, lib, key := fixture(t)
++	ctx := context.Background()
++	if err := store.Publish(ctx, p, key, lib); err != nil {
++		t.Fatal(err)
++	}
++	id, _ := Identity(p)
++	path, _ := store.manifestPath(id)
++	before, _ := os.ReadFile(path)
++	cancelled, cancel := context.WithCancel(ctx)
++	cancel()
++	if err := store.Publish(cancelled, p, key, lib); err == nil {
++		t.Fatal("cancelled publish succeeded")
++	}
++	after, _ := os.ReadFile(path)
++	if string(before) != string(after) {
++		t.Fatal("previous manifest lost")
++	}
++	hit, err := store.Restore(ctx, p, strings.Repeat("b", 64), filepath.Join(p, "miss"))
++	if err != nil || hit {
++		t.Fatalf("key mismatch reused: %v", err)
++	}
++	if _, err := os.Stat(filepath.Join(p, "miss")); !os.IsNotExist(err) {
++		t.Fatal("cache miss created destination")
++	}
++}
++func TestCorruptBlobAndTraversalFailClosed(t *testing.T) {
++	store, p, lib, key := fixture(t)
++	ctx := context.Background()
++	if err := store.Publish(ctx, p, key, lib); err != nil {
++		t.Fatal(err)
++	}
++	id, _ := Identity(p)
++	m, _ := store.readManifest(id)
++	for _, e := range m.Entries {
++		if e.Directory {
++			continue
++		}
++		if err := os.WriteFile(filepath.Join(store.Root, "blobs", e.Hash), []byte("broken package bytes"), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if _, err := store.Restore(ctx, p, key, filepath.Join(p, "broken")); err == nil {
++		t.Fatal("corruption ignored")
++	}
++	if err := store.Publish(ctx, p, key, lib); err == nil {
++		t.Fatal("corrupt blob reused on publish")
++	}
++	m.Entries[0].Path = "../escape"
++	data, _ := json.Marshal(m)
++	path, _ := store.manifestPath(id)
++	if err := os.WriteFile(path, data, 0600); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := store.Inspect(ctx, true); err == nil {
++		t.Fatal("unsafe manifest allowed GC")
++	}
++}
++func TestReaderPinsBlobsAndWriterCancellation(t *testing.T) {
++	store, p, lib, key := fixture(t)
++	ctx := context.Background()
++	if err := store.Publish(ctx, p, key, lib); err != nil {
++		t.Fatal(err)
++	}
++	unlock, err := store.lock(ctx, false, false)
++	if err != nil {
++		t.Fatal(err)
++	}
++	timeout, cancel := context.WithTimeout(ctx, 60*time.Millisecond)
++	defer cancel()
++	if err := store.Clear(timeout, p); err == nil {
++		t.Fatal("writer ignored active reader")
++	}
++	unlock()
++	if err := store.Clear(ctx, p); err != nil {
++		t.Fatal(err)
++	}
++}
++func TestConcurrentPublishRestoreAndGC(t *testing.T) {
++	store, p, lib, key := fixture(t)
++	ctx := context.Background()
++	if err := store.Publish(ctx, p, key, lib); err != nil {
++		t.Fatal(err)
++	}
++	var wg sync.WaitGroup
++	for i := 0; i < 4; i++ {
++		wg.Add(1)
++		go func() {
++			defer wg.Done()
++			if err := store.Publish(ctx, p, key, lib); err != nil {
++				t.Error(err)
++			}
++			if _, err := store.Inspect(ctx, true); err != nil {
++				t.Error(err)
++			}
++		}()
++	}
++	wg.Wait()
++	if hit, err := store.Restore(ctx, p, key, filepath.Join(p, "restored")); err != nil || !hit {
++		t.Fatalf("lost committed data: %v", err)
++	}
++}
++func TestMissingUsageDoesNotCreateStoreAndRejectsContainment(t *testing.T) {
++	store, p, _, _ := fixture(t)
++	if _, err := store.Inspect(context.Background(), false); err != nil {
++		t.Fatal(err)
++	}
++	if _, err := os.Stat(store.Root); !os.IsNotExist(err) {
++		t.Fatal("read-only usage created store")
++	}
++	if err := New(filepath.Join(p, "cache")).ValidateLocation(p); err == nil {
++		t.Fatal("nested store accepted")
++	}
++}
+diff --git a/internal/runsvc/service.go b/internal/runsvc/service.go
+index 76b1a83..f584886 100644
+--- a/internal/runsvc/service.go
++++ b/internal/runsvc/service.go
+@@ -133,6 +133,9 @@ type Response struct {
+ // encoded as ExitCode); it returns an error only for unrecoverable
+ // infrastructure failures (e.g. cannot create artifact directory).
+ func (s *Service) Run(ctx context.Context, req Request) (Response, error) {
++	if sharedCacheEnabled(req) && req.WorkspaceBackend != "" && req.WorkspaceBackend != WorkspaceBackendLegacy {
++		return Response{}, fmt.Errorf("shared-content cache requires the legacy shadow provider")
++	}
+ 	if !ValidWorkspaceBackend(req.WorkspaceBackend) {
+ 		return Response{}, fmt.Errorf("runsvc: invalid workspace backend %q", req.WorkspaceBackend)
+ 	}
+@@ -209,7 +212,15 @@ func (s *Service) Run(ctx context.Context, req Request) (Response, error) {
+ 	}
+ 
+ 	// Clear cache if requested.
+-	if req.ClearCache && req.WorkspaceBackend != WorkspaceBackendImage {
++	if req.ClearCache && sharedCacheEnabled(req) {
++		store, err := sharedCacheStore(req)
++		if err != nil {
++			return Response{}, err
++		}
++		if err := store.Clear(ctx, req.Config.ProjectPath); err != nil {
++			return Response{}, err
++		}
++	} else if req.ClearCache && req.WorkspaceBackend != WorkspaceBackendImage {
+ 		_ = shadow.ClearCacheAt(legacyCacheRoot(req))
+ 	}
+ 
+@@ -439,7 +450,7 @@ func (s *Service) Run(ctx context.Context, req Request) (Response, error) {
+ 		workspaceMetrics.WorkspaceBackend == WorkspaceBackendLegacy &&
+ 		!req.SkipCacheWriteBack && (exitCode == 0 || exitCode == 3) {
+ 		if cacheErr := ws.UpdateLibraryCache(ctx); cacheErr != nil {
+-			warnings = append(warnings, fmt.Sprintf("library cache not updated: %v", cacheErr))
++			warnings = append(warnings, fmt.Sprintf("library cache update/maintenance failed: %v", cacheErr))
+ 		}
+ 		workspaceMetrics.CacheWriteBackMs = ws.Metrics.LegacyCacheWriteBack.Milliseconds()
+ 	}
+@@ -465,11 +476,23 @@ func (s *Service) Run(ctx context.Context, req Request) (Response, error) {
+ 			persistentPhysicalBytes = workspaceMetrics.ParentAllocatedBytes
+ 			updateObservedPeak(workspaceMetrics, persistentPhysicalBytes+workspaceMetrics.ChildPeakAllocatedBytes+workspaceMetrics.WorkspacePhysicalBytes)
+ 		} else {
++			if sharedCacheEnabled(req) {
++				store, storeErr := sharedCacheStore(req)
++				if storeErr == nil {
++					usage, measureErr := shadow.MeasureDirectoryUsage(store.Root)
++					if measureErr == nil {
++						persistentPhysicalBytes += usage.AllocatedBytes
++					}
++				}
++			}
+ 			cacheUsage, cacheErr := shadow.MeasureDirectoryUsage(
+ 				legacyCacheRoot(req),
+ 			)
+ 			if cacheErr == nil {
+-				persistentPhysicalBytes = cacheUsage.AllocatedBytes
++				persistentPhysicalBytes += cacheUsage.AllocatedBytes
++				if sharedCacheEnabled(req) {
++					ws.Metrics.LegacyCacheWritePeakPhysicalBytes += cacheUsage.AllocatedBytes
++				}
+ 			}
+ 			updateObservedPeak(
+ 				workspaceMetrics,
+diff --git a/internal/runsvc/shared_cache.go b/internal/runsvc/shared_cache.go
+new file mode 100644
+index 0000000..2fd0fa4
+--- /dev/null
++++ b/internal/runsvc/shared_cache.go
+@@ -0,0 +1,96 @@
++package runsvc
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"path/filepath"
++	"time"
++
++	"github.com/Kubonsang/testplay-runner/internal/contentcache"
++	"github.com/Kubonsang/testplay-runner/internal/history"
++	"github.com/Kubonsang/testplay-runner/internal/shadow"
++)
++
++func sharedCacheEnabled(req Request) bool {
++	return req.Config.Workspace != nil && req.Config.Workspace.CacheMode == "shared-content"
++}
++func sharedCacheStore(req Request) (contentcache.Store, error) {
++	root := req.Config.Workspace.CacheRoot
++	if root == "" {
++		var err error
++		root, err = contentcache.DefaultRoot()
++		if err != nil {
++			return contentcache.Store{}, err
++		}
++	}
++	store := contentcache.New(root)
++	if err := store.ValidateLocation(req.Config.ProjectPath); err != nil {
++		return contentcache.Store{}, err
++	}
++	return store, nil
++}
++func (s *Service) prepareSharedCacheWorkspace(ctx context.Context, req Request, runID string, metrics *history.WorkspaceMetrics) (*shadow.Workspace, *history.WorkspaceMetrics, error) {
++	started := time.Now()
++	store, err := sharedCacheStore(req)
++	if err != nil {
++		return nil, metrics, err
++	}
++	key, err := contentcache.Key(req.Config.ProjectPath, req.Config.UnityPath)
++	if err != nil {
++		return nil, metrics, err
++	}
++	ws, err := shadow.Prepare(ctx, req.Config.ProjectPath, runID, shadow.PrepareOptions{SkipLibrary: true})
++	if err != nil {
++		return nil, metrics, err
++	}
++	fail := func(err error) (*shadow.Workspace, *history.WorkspaceMetrics, error) {
++		return nil, metrics, fmt.Errorf("shared cache: %w", errorsWithCleanup(err, ws.Cleanup()))
++	}
++	library := filepath.Join(ws.ShadowPath, "Library")
++	copiedAt := time.Now()
++	hit := false
++	if !req.ClearCache {
++		hit, err = store.Restore(ctx, req.Config.ProjectPath, key, library)
++		if err != nil {
++			return fail(err)
++		}
++	}
++	if !hit {
++		if err = os.Mkdir(library, 0700); err != nil {
++			return fail(err)
++		}
++	}
++	ws.Metrics.LibraryMaterialize = time.Since(copiedAt)
++	ws.CacheWriteBack = func(ctx context.Context) error {
++		current, err := contentcache.Key(req.Config.ProjectPath, req.Config.UnityPath)
++		if err != nil {
++			return err
++		}
++		if current != key {
++			return fmt.Errorf("project compatibility changed during run; cache preserved")
++		}
++		if err := store.Publish(ctx, req.Config.ProjectPath, key, library); err != nil {
++			return err
++		}
++		usage, err := shadow.MeasureDirectoryUsage(store.Root)
++		if err != nil {
++			return fmt.Errorf("cache published; peak measurement failed: %w", err)
++		}
++		ws.Metrics.LegacyCacheWritePeakPhysicalBytes = usage.AllocatedBytes
++		if _, err := store.Inspect(ctx, true); err != nil {
++			return fmt.Errorf("cache published; unreferenced content cleanup deferred: %w", err)
++		}
++		return nil
++	}
++	metrics.WorkspacePreparationMs = time.Since(started).Milliseconds()
++	metrics.FileCopyMs = (ws.Metrics.AssetsCopy + ws.Metrics.ProjectSettingsCopy + ws.Metrics.PackagesCopy).Milliseconds()
++	metrics.LibraryMaterializationMs = ws.Metrics.LibraryMaterialize.Milliseconds()
++	return ws, metrics, nil
++}
++func errorsWithCleanup(primary, cleanup error) error {
++	if cleanup != nil {
++		return fmt.Errorf("%w; cleanup: %v", primary, cleanup)
++	}
++	return primary
++}
+diff --git a/internal/runsvc/shared_cache_test.go b/internal/runsvc/shared_cache_test.go
+new file mode 100644
+index 0000000..90cf5b4
+--- /dev/null
++++ b/internal/runsvc/shared_cache_test.go
+@@ -0,0 +1,50 @@
++package runsvc_test
++
++import (
++	"context"
++	"github.com/Kubonsang/testplay-runner/internal/config"
++	"github.com/Kubonsang/testplay-runner/internal/contentcache"
++	"github.com/Kubonsang/testplay-runner/internal/runsvc"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestServiceSharedCacheWritesRestoresAndPreservesLocalCache(t *testing.T) {
++	cfg, project := imageConfig(t)
++	cfg.UnityPath = filepath.Join(t.TempDir(), "unity.exe")
++	if err := os.WriteFile(cfg.UnityPath, []byte("test executable"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	root := filepath.Join(t.TempDir(), "store")
++	cfg.Workspace = &config.WorkspaceConfig{CacheMode: "shared-content", CacheRoot: root}
++	old := filepath.Join(project, ".testplay", "cache", "Library")
++	if err := os.MkdirAll(old, 0700); err != nil {
++		t.Fatal(err)
++	}
++	sentinel := filepath.Join(old, "preserved")
++	if err := os.WriteFile(sentinel, []byte("legacy cache"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	runner := &imageTestRunner{resultsXML: mustReadFixture(t, "../../internal/parser/testdata/passing.xml")}
++	svc := imageService(cfg, project, runner)
++	for i := 0; i < 2; i++ {
++		if i == 1 {
++			if err := os.WriteFile(filepath.Join(root, "blobs", strings.Repeat("f", 64)), []byte("unreferenced fixture"), 0600); err != nil {
++				t.Fatal(err)
++			}
++		}
++		response, err := svc.Run(context.Background(), runsvc.Request{Config: cfg, ForceShadow: true})
++		if err != nil || response.ExitCode != 0 || len(response.Warnings) > 0 {
++			t.Fatalf("run %d: %+v %v", i, response, err)
++		}
++	}
++	usage, err := contentcache.New(root).Inspect(context.Background(), false)
++	if err != nil || usage.ManifestCount != 1 || usage.UniqueBytes == 0 || usage.ReclaimableBytes != 0 {
++		t.Fatalf("shared cache not populated: %+v %v", usage, err)
++	}
++	if data, err := os.ReadFile(sentinel); err != nil || string(data) != "legacy cache" {
++		t.Fatal("legacy cache deleted")
++	}
++}
+diff --git a/internal/runsvc/workspace_backend.go b/internal/runsvc/workspace_backend.go
+index 98b2b02..3e5ce78 100644
+--- a/internal/runsvc/workspace_backend.go
++++ b/internal/runsvc/workspace_backend.go
+@@ -136,6 +136,9 @@ func (s *Service) prepareLegacyWorkspace(
+ 	runID string,
+ ) (*shadow.Workspace, *history.WorkspaceMetrics, error) {
+ 	metrics := prepareMetrics(WorkspaceBackendLegacy)
++	if sharedCacheEnabled(req) {
++		return s.prepareSharedCacheWorkspace(ctx, req, runID, metrics)
++	}
+ 	cacheRoot := legacyCacheRoot(req)
+ 	opts := shadow.PrepareOptions{LibraryCacheRoot: cacheRoot}
+ 	if !req.ClearCache && shadow.ValidateCacheAt(req.Config.ProjectPath, cacheRoot) {
+diff --git a/internal/shadow/size.go b/internal/shadow/size.go
+index c5c5a71..5f98b6d 100644
+--- a/internal/shadow/size.go
++++ b/internal/shadow/size.go
+@@ -16,14 +16,22 @@ type DirectoryUsage struct {
+ // MeasureDirectoryUsage walks regular files under root once and reports both
+ // their logical size and their filesystem allocation.
+ func MeasureDirectoryUsage(root string) (DirectoryUsage, error) {
++	return measureDirectoryUsage(root)
++}
++
++func measureDirectoryUsageByWalk(root string) (DirectoryUsage, error) {
+ 	var usage DirectoryUsage
+-	err := filepath.Walk(root, func(_ string, info fs.FileInfo, err error) error {
++	err := filepath.Walk(root, func(path string, info fs.FileInfo, err error) error {
+ 		if err != nil {
+ 			return err
+ 		}
+ 		if info.Mode().IsRegular() {
+ 			usage.LogicalBytes += info.Size()
+-			usage.AllocatedBytes += allocatedFileBytes(info)
++			allocated, err := allocatedFileBytes(path, info)
++			if err != nil {
++				return err
++			}
++			usage.AllocatedBytes += allocated
+ 		}
+ 		return nil
+ 	})
+diff --git a/internal/shadow/size_test.go b/internal/shadow/size_test.go
+index 81e1da4..d00e2ba 100644
+--- a/internal/shadow/size_test.go
++++ b/internal/shadow/size_test.go
+@@ -8,7 +8,7 @@ import (
+ 
+ func TestMeasureDirectoryUsageSeparatesLogicalAndAllocatedBytes(t *testing.T) {
+ 	root := t.TempDir()
+-	data := []byte("library-image-usage")
++	data := make([]byte, 8193)
+ 	if err := os.WriteFile(filepath.Join(root, "artifact.bin"), data, 0644); err != nil {
+ 		t.Fatal(err)
+ 	}
+diff --git a/internal/shadow/size_unix.go b/internal/shadow/size_unix.go
+index 8d045d0..e2fd3ce 100644
+--- a/internal/shadow/size_unix.go
++++ b/internal/shadow/size_unix.go
+@@ -7,9 +7,13 @@ import (
+ 	"syscall"
+ )
+ 
+-func allocatedFileBytes(info fs.FileInfo) int64 {
++func measureDirectoryUsage(root string) (DirectoryUsage, error) {
++	return measureDirectoryUsageByWalk(root)
++}
++
++func allocatedFileBytes(_ string, info fs.FileInfo) (int64, error) {
+ 	if stat, ok := info.Sys().(*syscall.Stat_t); ok {
+-		return stat.Blocks * 512
++		return stat.Blocks * 512, nil
+ 	}
+-	return info.Size()
++	return info.Size(), nil
+ }
+diff --git a/internal/shadow/size_windows.go b/internal/shadow/size_windows.go
+index 189665d..94fd03d 100644
+--- a/internal/shadow/size_windows.go
++++ b/internal/shadow/size_windows.go
+@@ -2,8 +2,182 @@
+ 
+ package shadow
+ 
+-import "io/fs"
++import (
++	"encoding/binary"
++	"errors"
++	"fmt"
++	"golang.org/x/sys/windows"
++	"io/fs"
++	"os"
++	"path/filepath"
++	"runtime"
++	"strings"
++	"syscall"
++	"unicode/utf16"
++	"unsafe"
++)
+ 
+-func allocatedFileBytes(info fs.FileInfo) int64 {
+-	return info.Size()
++var allocatedProc = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetCompressedFileSizeW")
++var standardInfoProc = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetFileInformationByHandleEx")
++
++func windowsUsagePath(path string) (string, error) {
++	p, err := filepath.Abs(path)
++	if err != nil {
++		return "", err
++	}
++	if strings.HasPrefix(p, `\\?\`) {
++		return p, nil
++	}
++	if strings.HasPrefix(p, `\\`) {
++		return `\\?\UNC\` + p[2:], nil
++	}
++	return `\\?\` + p, nil
++}
++
++// Directory enumeration returns allocation for an entire batch. Opening every
++// ordinary file just for metrics otherwise dominates warm cache write-back.
++func measureDirectoryUsage(root string) (DirectoryUsage, error) {
++	var usage DirectoryUsage
++	info, err := os.Lstat(root)
++	if err != nil {
++		return usage, err
++	}
++	if !info.IsDir() {
++		return measureDirectoryUsageByWalk(root)
++	}
++	queue := []string{root}
++	for len(queue) > 0 {
++		directory := queue[len(queue)-1]
++		queue = queue[:len(queue)-1]
++		err := enumerateUsage(directory, &usage, &queue)
++		if errors.Is(err, windows.ERROR_INVALID_PARAMETER) || errors.Is(err, windows.ERROR_NOT_SUPPORTED) {
++			return measureDirectoryUsageByWalk(root)
++		}
++		if err != nil {
++			return usage, err
++		}
++	}
++	return usage, nil
++}
++
++func enumerateUsage(directory string, usage *DirectoryUsage, queue *[]string) error {
++	p, err := windowsUsagePath(directory)
++	if err != nil {
++		return err
++	}
++	pointer, err := windows.UTF16PtrFromString(p)
++	if err != nil {
++		return err
++	}
++	handle, err := windows.CreateFile(pointer, windows.FILE_LIST_DIRECTORY, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
++	if err != nil {
++		return err
++	}
++	defer windows.CloseHandle(handle)
++	var info windows.ByHandleFileInformation
++	if err = windows.GetFileInformationByHandle(handle, &info); err != nil {
++		return err
++	}
++	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
++		return fmt.Errorf("directory changed to a link: %s", directory)
++	}
++	buffer := make([]byte, 64*1024)
++	for {
++		// FILE_ID_BOTH_DIR_INFO: fixed fields through FileId occupy 104 bytes.
++		ok, _, callErr := standardInfoProc.Call(uintptr(handle), 10, uintptr(unsafe.Pointer(&buffer[0])), uintptr(len(buffer)))
++		if ok == 0 {
++			if errors.Is(callErr, windows.ERROR_NO_MORE_FILES) {
++				return nil
++			}
++			return callErr
++		}
++		for offset := 0; ; {
++			if offset < 0 || offset+104 > len(buffer) {
++				return errors.New("invalid directory allocation record")
++			}
++			record := buffer[offset:]
++			next := int(binary.LittleEndian.Uint32(record[0:4]))
++			nameBytes := int(binary.LittleEndian.Uint32(record[60:64]))
++			if nameBytes%2 != 0 || nameBytes > len(record)-104 {
++				return errors.New("invalid directory allocation filename")
++			}
++			nameUnits := make([]uint16, nameBytes/2)
++			for i := range nameUnits {
++				nameUnits[i] = binary.LittleEndian.Uint16(record[104+i*2 : 106+i*2])
++			}
++			name := string(utf16.Decode(nameUnits))
++			attributes := binary.LittleEndian.Uint32(record[56:60])
++			if name != "." && name != ".." && attributes&windows.FILE_ATTRIBUTE_REPARSE_POINT == 0 {
++				if attributes&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
++					*queue = append(*queue, filepath.Join(directory, name))
++				} else {
++					logical := int64(binary.LittleEndian.Uint64(record[40:48]))
++					allocated := int64(binary.LittleEndian.Uint64(record[48:56]))
++					if attributes&(windows.FILE_ATTRIBUTE_COMPRESSED|windows.FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
++						allocated, err = allocatedFileBytes(filepath.Join(directory, name), nil)
++						if err != nil {
++							return err
++						}
++					}
++					if logical < 0 || allocated < 0 {
++						return errors.New("negative directory allocation")
++					}
++					usage.LogicalBytes += logical
++					usage.AllocatedBytes += allocated
++				}
++			}
++			if next == 0 {
++				break
++			}
++			if next < 104+nameBytes || next%8 != 0 {
++				return errors.New("invalid next directory allocation record")
++			}
++			offset += next
++		}
++	}
++}
++
++func allocatedFileBytes(path string, _ fs.FileInfo) (int64, error) {
++	p, err := windowsUsagePath(path)
++	if err != nil {
++		return 0, err
++	}
++	pointer, err := windows.UTF16PtrFromString(p)
++	if err != nil {
++		return 0, err
++	}
++	handle, err := windows.CreateFile(pointer, windows.FILE_READ_ATTRIBUTES, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
++	if err != nil {
++		return 0, err
++	}
++	defer windows.CloseHandle(handle)
++	var info windows.ByHandleFileInformation
++	if err = windows.GetFileInformationByHandle(handle, &info); err != nil {
++		return 0, err
++	}
++	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
++		return 0, fmt.Errorf("file changed to a link: %s", path)
++	}
++	if info.FileAttributes&(windows.FILE_ATTRIBUTE_COMPRESSED|windows.FILE_ATTRIBUTE_SPARSE_FILE) == 0 {
++		var standard struct {
++			AllocationSize int64
++			EndOfFile      int64
++			NumberOfLinks  uint32
++			DeletePending  uint8
++			Directory      uint8
++			Padding        [2]byte
++		}
++		ok, _, callErr := standardInfoProc.Call(uintptr(handle), 1, uintptr(unsafe.Pointer(&standard)), unsafe.Sizeof(standard))
++		if ok == 0 {
++			return 0, callErr
++		}
++		return standard.AllocationSize, nil
++	}
++	var high uint32
++	low, _, callErr := allocatedProc.Call(uintptr(unsafe.Pointer(pointer)), uintptr(unsafe.Pointer(&high)))
++	runtime.KeepAlive(pointer)
++	if uint32(low) == 0xffffffff && callErr != syscall.Errno(0) {
++		return 0, callErr
++	}
++	return int64(uint64(high)<<32 | uint64(uint32(low))), nil
+ }
+diff --git a/internal/shadow/size_windows_test.go b/internal/shadow/size_windows_test.go
+new file mode 100644
+index 0000000..b9bb447
+--- /dev/null
++++ b/internal/shadow/size_windows_test.go
+@@ -0,0 +1,84 @@
++//go:build windows
++
++package shadow
++
++import (
++	"fmt"
++	"golang.org/x/sys/windows"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestBatchedAllocationMatchesFileHandles(t *testing.T) {
++	root := t.TempDir()
++	nested := filepath.Join(root, "한글 자료")
++	if err := os.Mkdir(nested, 0700); err != nil {
++		t.Fatal(err)
++	}
++	for i := 0; i < 700; i++ {
++		name := fmt.Sprintf("%04d-%s.bin", i, strings.Repeat("a", 80))
++		if err := os.WriteFile(filepath.Join(nested, name), make([]byte, i%17*100), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	longDir := filepath.Join(root, strings.Repeat("long-", 35), strings.Repeat("nested-", 20))
++	if err := os.MkdirAll(longDir, 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.WriteFile(filepath.Join(longDir, "allocated.bin"), make([]byte, 8193), 0600); err != nil {
++		t.Fatal(err)
++	}
++	sparse, err := os.Create(filepath.Join(nested, "sparse.bin"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	var returned uint32
++	if err := windows.DeviceIoControl(windows.Handle(sparse.Fd()), windows.FSCTL_SET_SPARSE, nil, 0, nil, 0, &returned, nil); err != nil {
++		sparse.Close()
++		t.Fatal(err)
++	}
++	if err := sparse.Truncate(1 << 20); err != nil {
++		sparse.Close()
++		t.Fatal(err)
++	}
++	if err := sparse.Close(); err != nil {
++		t.Fatal(err)
++	}
++	want, err := measureDirectoryUsageByWalk(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	got, err := MeasureDirectoryUsage(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if got != want || got.AllocatedBytes <= 0 {
++		t.Fatalf("batch=%+v individual=%+v", got, want)
++	}
++}
++
++// Optional read-only check against an existing large cache; never modifies it.
++func TestNativeAllocationMeasurementProbe(t *testing.T) {
++	root := os.Getenv("TESTPLAY_USAGE_PROBE_ROOT")
++	if root == "" {
++		t.Skip("set TESTPLAY_USAGE_PROBE_ROOT for a read-only native comparison")
++	}
++	started := time.Now()
++	got, err := MeasureDirectoryUsage(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	batchMs := time.Since(started).Milliseconds()
++	started = time.Now()
++	want, err := measureDirectoryUsageByWalk(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Logf("batchMs=%d individualMs=%d logicalBytes=%d allocatedBytes=%d", batchMs, time.Since(started).Milliseconds(), got.LogicalBytes, got.AllocatedBytes)
++	if got != want {
++		t.Fatalf("batch=%+v individual=%+v", got, want)
++	}
++}
+diff --git a/internal/shadow/workspace.go b/internal/shadow/workspace.go
+index 363932e..e7a5f53 100644
+--- a/internal/shadow/workspace.go
++++ b/internal/shadow/workspace.go
+@@ -18,6 +18,7 @@ import (
+ 
+ // Workspace represents an active shadow workspace for a Unity project.
+ type Workspace struct {
++	CacheWriteBack   func(context.Context) error
+ 	SourcePath       string // original project root (absolute)
+ 	ShadowPath       string // .testplay-shadow/ root (absolute)
+ 	LibraryCacheRoot string // optional external persistent cache root
+@@ -187,6 +188,9 @@ func (w *Workspace) UpdateLibraryCache(ctx context.Context) error {
+ 	defer func() {
+ 		w.Metrics.LegacyCacheWriteBack = time.Since(started)
+ 	}()
++	if w.CacheWriteBack != nil {
++		return w.CacheWriteBack(ctx)
++	}
+ 	srcLib := filepath.Join(w.ShadowPath, "Library")
+ 	if _, err := os.Stat(srcLib); err != nil {
+ 		return nil

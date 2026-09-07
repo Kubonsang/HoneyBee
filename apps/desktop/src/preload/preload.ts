@@ -13,6 +13,7 @@ import {
   DesktopPtySnapshotV1Schema,
   DesktopResultSchema,
   DesktopWorkspaceV2Schema,
+  DesktopWorkspaceUsageV1Schema,
   type HoneyBeeDesktopApi,
 } from "../shared/ipc.js";
 
@@ -23,6 +24,8 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  workspaceUsage: (request) =>
+    invoke(DesktopIpcChannels.workspaceUsage, DesktopWorkspaceUsageV1Schema, request),
   projects: () => invoke(DesktopIpcChannels.projects, DesktopProjectV2Schema.array()),
   projectCandidates: () =>
     invoke(DesktopIpcChannels.projectCandidates, DesktopProjectCandidateV1Schema.array()),

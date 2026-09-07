@@ -1,5 +1,31 @@
 import { z } from "zod";
 
+export const DesktopWorkspaceUsageV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    measuredAt: z.string(),
+    knownAllocatedBytes: z.number().int().nonnegative(),
+    complete: z.boolean(),
+    entries: z.array(
+      z
+        .object({
+          id: z.string(),
+          kind: z.enum(["files", "testplay-local", "child-vhdx", "parent-vhdx", "testplay-shared"]),
+          scope: z.enum(["workspace", "shared"]),
+          workspaceId: z.string().optional(),
+          logicalBytes: z.number().int().nonnegative().nullable(),
+          allocatedBytes: z.number().int().nonnegative().nullable(),
+          fileCount: z.number().int().nonnegative(),
+          omittedLinks: z.number().int().nonnegative(),
+          complete: z.boolean(),
+          errors: z.array(z.string()),
+        })
+        .strict(),
+    ),
+  })
+  .strict();
+export type DesktopWorkspaceUsageV1 = z.infer<typeof DesktopWorkspaceUsageV1Schema>;
+
 export const DesktopErrorV1Schema = z
   .object({
     code: z.string().min(1),
@@ -249,6 +275,7 @@ export const DesktopPtySnapshotV1Schema = z
 export type DesktopPtySnapshotV1 = z.infer<typeof DesktopPtySnapshotV1Schema>;
 
 export const DesktopIpcChannels = {
+  workspaceUsage: "desktop.workspace.usage.v1",
   projects: "desktop.projects.v2",
   projectCandidates: "desktop.project-candidates.v2",
   projectInspect: "desktop.project.inspect.v2",
@@ -287,6 +314,7 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  workspaceUsage(request: DesktopWorkspaceRequestV1): Promise<DesktopWorkspaceUsageV1>;
   projects(): Promise<readonly DesktopProjectV2[]>;
   projectCandidates(): Promise<readonly DesktopProjectCandidateV1[]>;
   inspectProject(

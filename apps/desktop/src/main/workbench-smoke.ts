@@ -20,6 +20,15 @@ export const verifyWorkbench = async (browser: BrowserWindow): Promise<void> => 
       return result;
     };
     await waitFor(() => document.querySelectorAll(".workspace-row").length === 3);
+    document.querySelector<HTMLButtonElement>("[data-testid='usage-tab']")?.click();
+    await waitFor(() => document.querySelector(".usage-panel") !== null);
+    if (document.querySelector(".usage-panel table") !== null)
+      throw new Error("Usage scanned without an explicit request.");
+    document.querySelector<HTMLButtonElement>(".usage-toolbar button")?.click();
+    await waitFor(() => document.querySelectorAll(".usage-panel tbody tr").length === 3);
+    if (!document.querySelector(".usage-panel")?.textContent?.match(/확인 불가|Unknown/u))
+      throw new Error("Unknown allocation rendered as zero.");
+    document.querySelector<HTMLButtonElement>(".detail-tabs button:first-child")?.click();
     button(".workspace-row", "ui").click();
     await waitFor(() => document.querySelector(".workspace-name h1")?.textContent === "ui");
     button(".changed-files button", "Hud.prefab.meta").click();

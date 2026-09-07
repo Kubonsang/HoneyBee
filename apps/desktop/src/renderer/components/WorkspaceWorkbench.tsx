@@ -22,6 +22,7 @@ import {
 } from "../workspace-feedback.js";
 import { useTerminalStore } from "../terminal-store.js";
 import { ChangesReview } from "./ChangesReview.js";
+import { WorkspaceUsage } from "./WorkspaceUsage.js";
 
 export function WorkspaceWorkbench({
   project,
@@ -52,7 +53,7 @@ export function WorkspaceWorkbench({
 }) {
   const terminalStore = useTerminalStore();
   const workspace = workspaces.find((item) => item.workspaceId === workspaceId) ?? workspaces[0];
-  const [tab, setTab] = useState<"changes" | "terminal">("changes");
+  const [tab, setTab] = useState<"changes" | "terminal" | "usage">("changes");
   const [terminalRunning, setTerminalRunning] = useState(false);
   const changes = workspace?.git?.changes ?? [];
   useEffect(() => {
@@ -331,6 +332,13 @@ export function WorkspaceWorkbench({
                   {t("changes")} <span>{workspace.git === null ? "?" : changes.length}</span>
                 </button>
                 <button
+                  data-testid="usage-tab"
+                  className={tab === "usage" ? "active" : ""}
+                  onClick={() => setTab("usage")}
+                >
+                  {t("usageTitle")}
+                </button>
+                <button
                   className={tab === "terminal" ? "active" : ""}
                   onClick={() => setTab("terminal")}
                 >
@@ -338,6 +346,14 @@ export function WorkspaceWorkbench({
                 </button>
               </nav>
               <div className="detail-panel">
+                <div className="review-container" hidden={tab !== "usage"}>
+                  <WorkspaceUsage
+                    key={`${project.projectId}/${workspace.workspaceId}`}
+                    projectId={project.projectId}
+                    workspaceId={workspace.workspaceId}
+                    t={t}
+                  />
+                </div>
                 <div className="review-container" hidden={tab !== "changes"}>
                   <ChangesReview
                     key={`${project.projectId}/${workspace.workspaceId}`}

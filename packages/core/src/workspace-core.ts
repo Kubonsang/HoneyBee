@@ -17,6 +17,7 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
+import { measureWorkspaceUsage, type WorkspaceUsageReportV1 } from "./workspace-usage.js";
 import { WindowsWorkspaceStorage } from "./workspace-storage.js";
 import { runWorkspaceDoctor, type WorkspaceDoctorOptions } from "./workspace-doctor.js";
 import {
@@ -102,6 +103,7 @@ const libraryBusyError = (error: unknown): boolean =>
   ["EACCES", "EBUSY", "EPERM"].includes(errorCode(error) ?? "");
 
 export interface HoneyBeeWorkspaceCoreOptions {
+  readonly usageCommand?: string;
   readonly dataRoot?: string;
   readonly storage?: WorkspaceStoragePort;
 }
@@ -122,10 +124,12 @@ export interface WorkspaceCreateInput {
 }
 
 export class HoneyBeeWorkspaceCore {
+  readonly #usageCommand: string | undefined;
   readonly #registry: WorkspaceRegistryStore;
   readonly #storage: WorkspaceStoragePort;
 
   public constructor(options: HoneyBeeWorkspaceCoreOptions = {}) {
+    this.#usageCommand = options.usageCommand;
     const dataRoot = path.resolve(options.dataRoot ?? defaultDataRoot());
     this.#registry = new WorkspaceRegistryStore(dataRoot);
     this.#storage = options.storage ?? new WindowsWorkspaceStorage();
@@ -133,6 +137,22 @@ export class HoneyBeeWorkspaceCore {
 
   public get registryPath(): string {
     return this.#registry.path;
+  }
+
+  public async workspaceUsage(
+    reference?: string,
+    projectReference?: string,
+  ): Promise<WorkspaceUsageReportV1> {
+    const registry = await this.#registry.read();
+    const project =
+      projectReference === undefined ? undefined : await this.#project(projectReference);
+    const workspaces =
+      reference === undefined
+        ? registry.workspaces.filter(
+            (item) => project === undefined || item.projectId === project.projectId,
+          )
+        : [await this.#workspace(reference, projectReference)];
+    return measureWorkspaceUsage(workspaces, registry.projects, this.#usageCommand);
   }
 
   public async initProject(input: ProjectInitInput): Promise<ProjectRecordV2> {

@@ -1225,3 +1225,40 @@ pre,
     min-height: 450px;
   }
 }
+/* Manual storage measurement keeps shared costs distinct from Workspace costs. */
+.usage-panel {
+  padding: 20px;
+  overflow: auto;
+  height: 100%;
+  box-sizing: border-box;
+}
+.usage-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.usage-panel p {
+  line-height: 1.6;
+  font-size: 13px;
+}
+.usage-panel table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.usage-panel th,
+.usage-panel td {
+  text-align: left;
+  padding: 12px 8px;
+  border-bottom: 1px solid #303744;
+}
+.usage-panel td:not(:first-child) {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.usage-panel pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}

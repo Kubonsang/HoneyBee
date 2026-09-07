@@ -33,6 +33,7 @@ assertOwned(staging, appRoot);
 assertOwned(output, appRoot);
 await access(path.join(bundledTools, "unity-workspace-storage.exe"));
 await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
+await access(path.join(bundledTools, "honeybee-usage.exe"));
 await access(compatibilityManifest);
 await access(brandPng);
 await access(windowsIcon);

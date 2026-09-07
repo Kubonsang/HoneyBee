@@ -17,6 +17,7 @@ const hostRoot = path.join(repositoryRoot, "tools", "workspace-storage-host");
 const outputRoot = path.join(appRoot, ".tools", "win32-x64");
 const clientOutput = path.join(outputRoot, "unity-workspace-storage.exe");
 const hostOutput = path.join(outputRoot, "honeybee-workspace-storage-host.exe");
+const usageOutput = path.join(outputRoot, "honeybee-usage.exe");
 
 const run = async (command, args, options = {}) =>
   execFileAsync(command, args, {
@@ -100,6 +101,24 @@ try {
   }
 
   await writeFile(
+    path.join(outputRoot, "usage-build.txt"),
+    "Read-only measurement companion; no service installation.\n",
+    "utf8",
+  );
+  await run(
+    "go",
+    [
+      "build",
+      "-buildvcs=false",
+      "-trimpath",
+      "-ldflags=-buildid=",
+      "-o",
+      usageOutput,
+      "./cmd/honeybee-usage",
+    ],
+    { cwd: hostRoot, env: buildEnvironment },
+  );
+  await writeFile(
     path.join(outputRoot, "manifest.json"),
     JSON.stringify(
       {
@@ -107,6 +126,10 @@ try {
         workspaceStorageVersion,
         workspaceStorageCommit,
         files: {
+          "honeybee-usage.exe": {
+            byteLength: (await stat(usageOutput)).size,
+            sha256: await sha256(usageOutput),
+          },
           "unity-workspace-storage.exe": {
             byteLength: (await stat(clientOutput)).size,
             sha256: await sha256(clientOutput),

@@ -36,6 +36,7 @@ Usage:
   honeybee workspace attach <name> --branch <existing-branch> [--project <id>] [--json]
   honeybee workspace list [--project <id>] [--json]
   honeybee workspace status <name-or-id> [--project <id>] [--json]
+  honeybee workspace usage [name-or-id] [--project <id>] [--json]
   honeybee workspace path <name-or-id> [--project <id>] [--json]
   honeybee workspace repair <name-or-id> [--project <id>] [--json]
   honeybee workspace remove <name-or-id> [--project <id>] [--json]
@@ -319,6 +320,24 @@ const executeWorkspace = async (args: readonly string[]): Promise<void> => {
   const json = jsonEnabled(args);
   const command = args[1];
   const project = option(args, "--project");
+  if (command === "usage") {
+    const reference = args[2]?.startsWith("--") === false ? args[2] : undefined;
+    const usage = await core.workspaceUsage(reference, project);
+    write(
+      json
+        ? { schemaVersion: CLI_JSON_SCHEMA_VERSION, ok: true, usage }
+        : [
+            `Measured ${usage.measuredAt} (${usage.complete ? "complete" : "partial; see errors"})`,
+            ...usage.entries.map(
+              (e) =>
+                `${e.workspaceId ?? "shared"} ${e.kind}: ${e.allocatedBytes === null ? "unknown" : `${e.allocatedBytes} allocated bytes`}${e.complete ? "" : " (partial)"}${e.errors.length === 0 ? "" : ` — ${e.errors.join("; ")}`}`,
+            ),
+            `Known total: ${usage.knownAllocatedBytes} allocated bytes (shared files counted once; not reclaimable space).`,
+          ].join("\n"),
+      json,
+    );
+    return;
+  }
   if (command === "create" || command === "attach") {
     const input = {
       ...(project === undefined ? {} : { project }),

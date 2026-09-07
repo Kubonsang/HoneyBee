@@ -16,6 +16,7 @@
 *.yml text eol=lf
 *.yaml text eol=lf
 *.sh text eol=lf
+integrations/testplay/*.patch text eol=lf
 /.githooks/* text eol=lf
 
 *.png binary
