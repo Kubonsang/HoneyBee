@@ -1,6 +1,17 @@
 # Changelog
 
-## 0.1.0-beta.6 - Unreleased
+## 0.1.0-beta.7 - Unreleased
+
+- Keep the changed-file list beside the unified diff, with file-type groups, search,
+  line numbers, colors, new-file previews and per-file scroll restoration.
+- Show dirty but available Workspaces as ready; preserve Unity settings and metadata
+  changes and retain the existing removal protection.
+- Explain retained mount identity failures separately from Git changes.
+- Pin hb9 storage, which persists resolved volume identity before mounting and on
+  successful reattachment. Legacy identity mismatches remain blocked without proof.
+- Existing-machine legacy repair and repeated physical reboot validation are pending.
+
+## 0.1.0-beta.6 - 2026-09-06
 
 - Preserve built-in PowerShell sessions, input, and scroll position across tabs, Workspaces, and projects.
 - Confirm terminal/app closure and require built-in terminals to close before Workspace removal.

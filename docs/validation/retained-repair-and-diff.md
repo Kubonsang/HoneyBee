@@ -46,9 +46,16 @@ worktree from empty text. The existing Git deletion protection is unchanged.
   idempotent retain and identity error reporting; all Go tests, vet and race checks
   passed. Frozen-source verification retains the original manifest and records
   subsequent changes in its explicit overlay.
-- Actual legacy-volume reconciliation, service replacement and repeated physical
-  reboot validation are still pending. The read-only elevation request was
-  cancelled before execution. No live Workspace recovery is claimed.
-- The storage change is locally committed; upstream publication and the atomic
-  HoneyBee dependency/compatibility pin update remain pending. No new public
-  release is qualified by this record.
+- The read-only native probe verified the recorded child file identity and parent,
+  but Windows assigned a volume GUID different from the stale mount target.
+  The current reconciliation gate therefore cannot qualify that legacy mount.
+  A follow-up partition-identity inspection was cancelled at Windows elevation.
+  Actual recovery, service replacement and repeated physical reboot validation
+  remain pending. No live Workspace recovery is claimed.
+- Storage commit `796514b475bece93635df504a32e1bcb54b95493` is published in
+  [storage PR #4](https://github.com/Kubonsang/unity-workspace-storage/pull/4).
+  All five storage CI jobs passed, including Windows, Linux and macOS tests.
+- Beta 7 pins the public Go module, bundled client/host and compatibility hashes
+  together as `0.0.0+796514b475be.hb9`. Integrated verification again passed all
+  87 tests, and both candidate package smoke checks and packaged PTY passed.
+  These are review candidates; no new public release is qualified by this record.
