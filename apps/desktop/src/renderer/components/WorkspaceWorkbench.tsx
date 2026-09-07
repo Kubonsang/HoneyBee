@@ -2,7 +2,6 @@ import { desktopApi } from "../desktop-api.js";
 import {
   ArrowClockwise,
   CaretRight,
-  CheckCircle,
   FolderSimple,
   GearSix,
   GitBranch,
@@ -10,10 +9,9 @@ import {
   Trash,
   Wrench,
 } from "@phosphor-icons/react";
-import { useEffect, useMemo, useRef, useState } from "react";
-import { parseGitStatusLine } from "@honeybee/core/git-status";
+import { useEffect, useState } from "react";
 
-import type { DesktopGitDiffV1, DesktopProjectV2, DesktopWorkspaceV2 } from "../../shared/ipc.js";
+import type { DesktopProjectV2, DesktopWorkspaceV2 } from "../../shared/ipc.js";
 import type { MessageKey } from "../i18n.js";
 import { WorkspaceActions } from "./WorkspaceActions.js";
 import { WorkspaceTerminal } from "./WorkspaceTerminal.js";
@@ -22,9 +20,8 @@ import {
   workspaceStateKey,
   type RefreshStatus,
 } from "../workspace-feedback.js";
-import { operationError, errorGuidance, type OperationError } from "../operation-errors.js";
 import { useTerminalStore } from "../terminal-store.js";
-import { LatestRequest } from "../latest-request.js";
+import { ChangesReview } from "./ChangesReview.js";
 
 export function WorkspaceWorkbench({
   project,
@@ -55,23 +52,11 @@ export function WorkspaceWorkbench({
 }) {
   const terminalStore = useTerminalStore();
   const workspace = workspaces.find((item) => item.workspaceId === workspaceId) ?? workspaces[0];
-  const [tab, setTab] = useState<"changes" | "diff" | "terminal">("changes");
+  const [tab, setTab] = useState<"changes" | "terminal">("changes");
   const [terminalRunning, setTerminalRunning] = useState(false);
-  const [diffLoading, setDiffLoading] = useState(false);
-  const [diffError, setDiffError] = useState<OperationError>();
-  const [diff, setDiff] = useState<DesktopGitDiffV1>();
-  const [selectedPath, setSelectedPath] = useState<string>();
-  const [untrackedSelected, setUntrackedSelected] = useState(false);
-  const requests = useRef(new LatestRequest());
-  const changes = useMemo(() => workspace?.git?.changes ?? [], [workspace]);
-  const parsedChanges = useMemo(() => changes.map(parseGitStatusLine), [changes]);
+  const changes = workspace?.git?.changes ?? [];
   useEffect(() => {
-    const current = requests.current;
-    current.invalidate();
-    setDiff(undefined);
-    setSelectedPath(undefined);
     setTab("changes");
-    return () => current.invalidate();
   }, [workspace?.workspaceId]);
 
   useEffect(() => {
@@ -102,32 +87,6 @@ export function WorkspaceWorkbench({
     };
   }, [project.projectId, workspace?.workspaceId]);
 
-  const loadDiff = (requestedPath?: string): void => {
-    if (workspace === undefined || workspace.git === null) return;
-    const isCurrent = requests.current.begin();
-    const untracked = parsedChanges.some((item) => item.path === requestedPath && item.untracked);
-    setUntrackedSelected(untracked);
-    setDiff(undefined);
-    setSelectedPath(requestedPath);
-    setTab("diff");
-    setDiffError(undefined);
-    setDiffLoading(!untracked);
-    if (untracked) return;
-    void (async () => {
-      try {
-        const result = await desktopApi.gitDiff({
-          projectId: project.projectId,
-          workspaceId: workspace.workspaceId,
-          ...(requestedPath === undefined ? {} : { path: requestedPath }),
-        });
-        if (isCurrent()) setDiff(result);
-      } catch (error) {
-        if (isCurrent()) setDiffError(operationError(error));
-      } finally {
-        if (isCurrent()) setDiffLoading(false);
-      }
-    })();
-  };
   const launch = (tool: "cmd" | "powershell" | "vscode" | "unity"): void => {
     if (workspace === undefined) return;
     run(
@@ -215,8 +174,8 @@ export function WorkspaceWorkbench({
                 </span>
                 <span className="workspace-status">
                   <i className={`state-dot ${item.state}`} />
-                  {item.state === "ready" && item.git?.dirty
-                    ? `${item.git.changes.length} ${t("files")}`
+                  {item.state === "ready" && item.available && item.git?.dirty
+                    ? `${t("ready")} · ${item.git.changes.length} ${t("files")}`
                     : t(workspaceStateKey(item))}
                 </span>
               </button>
@@ -253,7 +212,9 @@ export function WorkspaceWorkbench({
                       <p>{workspace.workspacePath}</p>
                     </div>
                     <span className={`large-state ${workspace.state}`}>
-                      {workspace.state === "ready" ? t("ready") : t(workspaceStateKey(workspace))}
+                      {workspace.state === "ready" && workspace.available
+                        ? t("ready")
+                        : t(workspaceStateKey(workspace))}
                     </span>
                   </div>
                   <dl>
@@ -269,11 +230,7 @@ export function WorkspaceWorkbench({
                     </div>
                     <div>
                       <dt>{t("git")}</dt>
-                      <dd
-                        className={
-                          workspace.git === null ? "" : workspace.git.dirty ? "bad" : "good"
-                        }
-                      >
+                      <dd className={workspace.git === null || workspace.git.dirty ? "" : "good"}>
                         {workspace.git === null
                           ? t("gitUnknown")
                           : workspace.git.dirty
@@ -374,13 +331,6 @@ export function WorkspaceWorkbench({
                   {t("changes")} <span>{workspace.git === null ? "?" : changes.length}</span>
                 </button>
                 <button
-                  className={tab === "diff" ? "active" : ""}
-                  disabled={workspace.git === null}
-                  onClick={() => loadDiff(selectedPath)}
-                >
-                  {t("diff")}
-                </button>
-                <button
                   className={tab === "terminal" ? "active" : ""}
                   onClick={() => setTab("terminal")}
                 >
@@ -388,65 +338,17 @@ export function WorkspaceWorkbench({
                 </button>
               </nav>
               <div className="detail-panel">
-                {tab === "terminal" ? (
+                <div className="review-container" hidden={tab !== "changes"}>
+                  <ChangesReview
+                    key={`${project.projectId}/${workspace.workspaceId}`}
+                    projectId={project.projectId}
+                    workspace={workspace}
+                    refreshedAt={refreshStatus.updatedAt}
+                    t={t}
+                  />
+                </div>
+                {tab === "terminal" && (
                   <WorkspaceTerminal projectId={project.projectId} workspace={workspace} t={t} />
-                ) : tab === "diff" ? (
-                  <section className="diff-panel">
-                    {diffError !== undefined && (
-                      <div className="diff-error" role="alert">
-                        <p>{t(errorGuidance(diffError.code, diffError.upstreamCode))}</p>
-                        <details>
-                          <summary>{t("diagnosticDetails")}</summary>
-                          <code>{diffError.code}</code>
-                          <p>{diffError.message}</p>
-                        </details>
-                        <button onClick={() => loadDiff(selectedPath)}>{t("retry")}</button>
-                      </div>
-                    )}
-                    <pre className="diff-view">
-                      {diffLoading
-                        ? t("diffLoading")
-                        : diffError !== undefined
-                          ? ""
-                          : workspace.git === null
-                            ? t("gitUnknown")
-                            : untrackedSelected
-                              ? t("untrackedDiff")
-                              : diff?.content ||
-                                (diff !== undefined
-                                  ? t("noTrackedDiff")
-                                  : changes.length === 0
-                                    ? t("clean")
-                                    : t("selectFile"))}
-                      {diff?.truncated ? `\n\n${t("diffTruncated")}` : ""}
-                      {selectedPath === undefined && parsedChanges.some((item) => item.untracked)
-                        ? `\n\n${t("untrackedDiff")}`
-                        : ""}
-                    </pre>
-                  </section>
-                ) : (
-                  <div className="changed-files">
-                    <button
-                      className={selectedPath === undefined ? "selected" : ""}
-                      disabled={workspace.git === null}
-                      onClick={() => loadDiff()}
-                    >
-                      <CheckCircle size={17} />
-                      {t("allChanges")}
-                    </button>
-                    {parsedChanges.map((change) => {
-                      const file = change.path;
-                      return (
-                        <button key={file} onClick={() => loadDiff(file)}>
-                          <code>{change.status}</code>
-                          <span>{file}</span>
-                        </button>
-                      );
-                    })}
-                    {changes.length === 0 && (
-                      <p>{workspace.git === null ? t("gitUnknown") : t("clean")}</p>
-                    )}
-                  </div>
                 )}
               </div>
             </>

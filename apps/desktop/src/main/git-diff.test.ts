@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, writeFile, rm, symlink, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -37,6 +37,54 @@ afterEach(async () => {
 });
 
 describe("bounded Git diff", () => {
+  it("previews new text, empty and binary files without treating an empty HEAD diff as clean", async () => {
+    const { workspace, git } = await fixture();
+    await writeFile(path.join(workspace.workspacePath, "new 한글.txt"), "새 파일\n");
+    expect(await readDiff(workspace, "new 한글.txt")).toMatchObject({
+      kind: "untracked",
+      content: "새 파일\n",
+    });
+    await writeFile(path.join(workspace.workspacePath, "empty.txt"), "");
+    expect(await readDiff(workspace, "empty.txt")).toMatchObject({
+      kind: "untracked",
+      content: "",
+    });
+    await writeFile(path.join(workspace.workspacePath, "binary.bin"), Buffer.from([0, 1, 2]));
+    expect(await readDiff(workspace, "binary.bin")).toMatchObject({ kind: "binary", content: "" });
+    await writeFile(path.join(workspace.workspacePath, "large.txt"), "staged\n");
+    await git("add", "large.txt");
+    await writeFile(path.join(workspace.workspacePath, "large.txt"), "before\n");
+    expect(await readDiff(workspace, "large.txt")).toMatchObject({ kind: "empty", content: "" });
+    expect((await git("status", "--porcelain")).stdout).toContain("MM large.txt");
+  });
+  it("does not preview files through a directory junction outside the Workspace", async () => {
+    const { workspace } = await fixture();
+    const outside = await mkdtemp(path.join(tmpdir(), "honeybee-preview-outside-"));
+    roots.push(outside);
+    await writeFile(path.join(outside, "secret.txt"), "must not be returned");
+    const linked = path.join(workspace.workspacePath, "linked");
+    await symlink(outside, linked, "junction");
+    // Git may enumerate the junction as a directory on Windows. Either way,
+    // it must never become a general-purpose file reader outside the worktree.
+    try {
+      expect((await readDiff(workspace, "linked/secret.txt")).content).not.toContain(
+        "must not be returned",
+      );
+    } catch (error) {
+      expect(error).toMatchObject({ code: "git.diff-path-invalid" });
+    }
+    await rm(linked);
+  });
+  it("bounds untracked previews and retains UTF-8 characters at the limit", async () => {
+    const { workspace } = await fixture();
+    await mkdir(path.join(workspace.workspacePath, "new"));
+    await writeFile(path.join(workspace.workspacePath, "new/large.txt"), "한글\n".repeat(180_000));
+    const preview = await readDiff(workspace, "new/large.txt");
+    expect(preview.kind).toBe("untracked");
+    expect(preview.truncated).toBe(true);
+    expect(Buffer.byteLength(preview.content)).toBeLessThanOrEqual(MAX_DIFF_BYTES);
+    expect(preview.content).not.toContain("\ufffd");
+  });
   it("reads literal Unicode paths, staged/unstaged changes, and renames from a real repository", async () => {
     const { workspace, git } = await fixture();
     await writeFile(path.join(workspace.workspacePath, "한글 [a] file.txt"), "staged\n");

@@ -92,7 +92,11 @@ let smokeWorkspaces: DesktopWorkspaceV2[] = [
       branch: "develop",
       head: "b2c3d4e5",
       dirty: true,
-      changes: [" M Assets/UI/Hud.prefab", "?? Assets/UI/Hud.prefab.meta"],
+      changes: [
+        " M Assets/UI/Hud.prefab",
+        "?? Assets/UI/Hud.prefab.meta",
+        " M ProjectSettings/ShaderGraphSettings.asset",
+      ],
     },
   },
   {
@@ -560,10 +564,15 @@ const registerIpc = (): void => {
         return {
           workspaceId: request.workspaceId,
           ...(request.path === undefined ? {} : { path: request.path }),
-          content:
-            request.path === undefined
-              ? "diff --git a/Assets/UI/Hud.prefab b/Assets/UI/Hud.prefab\n+smoke change"
-              : "+smoke change",
+          content: request.path?.endsWith(".meta")
+            ? "fileFormatVersion: 2\nguid: smoke-preview\n"
+            : smokeMode && request.path?.startsWith("ProjectSettings/")
+              ? "diff --git a/ProjectSettings/ShaderGraphSettings.asset b/ProjectSettings/ShaderGraphSettings.asset\n@@ -0,0 +1,800 @@\n" +
+                Array.from({ length: 800 }, (_, index) => `+setting_${index}: true\n`).join("")
+              : request.workspaceId === "smoke-combat"
+                ? ""
+                : "diff --git a/Assets/UI/Hud.prefab b/Assets/UI/Hud.prefab\n--- a/Assets/UI/Hud.prefab\n+++ b/Assets/UI/Hud.prefab\n@@ -1,2 +1,3 @@\n Hud:\n-  scale: 1\n+  scale: 2\n+  visible: true\n",
+          kind: request.path?.endsWith(".meta") ? "untracked" : "patch",
           truncated: false,
         };
       return readDiff(await workspaceFor(request.projectId, request.workspaceId), request.path);
@@ -694,6 +703,10 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await click("[data-testid='workspace-dialog'] header .icon-button");
   await waitFor("[data-testid='workspace-workbench']");
   await capture("01-workbench");
+  await click(".workspace-row:nth-child(2)");
+  await waitFor(".diff-line.added");
+  await capture("07-changes-review");
+  await click(".workspace-row:first-child");
   await click(".breadcrumb-project");
   await waitFor("[data-testid='project-picker']");
   await capture("03-project-picker");

@@ -51,12 +51,19 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
         : {};
     const upstreamCode = typeof body.code === "string" ? body.code : undefined;
     const capacityUnavailable = upstreamCode === "storage-capacity-unavailable";
+    const mountIdentityMismatch =
+      upstreamCode === "retained-mount-identity-mismatch" ||
+      (upstreamCode === "retained-attach-failed" &&
+        typeof body.message === "string" &&
+        body.message.includes("validate-stale-mount-target:"));
     throw new WorkspaceCoreError(
       upstreamCode === "retained-not-found"
         ? "storage.retained-not-found"
-        : upstreamCode === "retained-in-use"
-          ? "workspace.in-use"
-          : "storage.operation-failed",
+        : mountIdentityMismatch
+          ? "storage.mount-identity-mismatch"
+          : upstreamCode === "retained-in-use"
+            ? "workspace.in-use"
+            : "storage.operation-failed",
       capacityUnavailable
         ? "Workspace storage cannot reserve enough disk space for this operation."
         : typeof body.message === "string"
@@ -248,6 +255,34 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
         workspaceId,
       }),
     );
+  }
+
+  public async heartbeat(command: string, leaseId: string): Promise<StorageLease | undefined> {
+    try {
+      const lease = this.#lease(
+        await this.#control(command, {
+          schemaVersion: 3,
+          operation: "heartbeat",
+          requestId: `hb-heartbeat-${randomUUID()}`,
+          leaseId,
+          clientPid: process.pid,
+        }),
+      );
+      if (lease.leaseId !== leaseId) {
+        throw new WorkspaceCoreError("storage.invalid-response", "Unexpected active lease.");
+      }
+      return lease;
+    } catch (error) {
+      if (
+        error instanceof WorkspaceCoreError &&
+        ["lease-not-active", "lease-not-found", "lease-not-ready"].includes(
+          error.upstreamCode ?? "",
+        )
+      ) {
+        return undefined;
+      }
+      throw error;
+    }
   }
 
   public async prepareRetainedRemoval(

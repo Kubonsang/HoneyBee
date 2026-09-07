@@ -21,6 +21,11 @@ export const operationError = (reason: unknown): OperationError =>
         remediation: [],
       };
 export const errorGuidance = (code: string, upstreamCode?: string): MessageKey => {
+  if (
+    code === "storage.mount-identity-mismatch" ||
+    upstreamCode === "retained-mount-identity-mismatch"
+  )
+    return "mountIdentityHelp";
   if (upstreamCode === "storage-capacity-unavailable") return "capacityHelp";
   if (code === "desktop.terminal-running") return "terminalRemoveHelp";
   if (code === "desktop.terminal-limit") return "terminalLimitHelp";

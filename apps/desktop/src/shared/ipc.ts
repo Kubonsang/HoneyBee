@@ -207,6 +207,7 @@ export const DesktopGitDiffV1Schema = z
     path: z.string().optional(),
     content: z.string(),
     truncated: z.boolean(),
+    kind: z.enum(["patch", "untracked", "binary", "empty"]).optional(),
   })
   .strict();
 export type DesktopGitDiffV1 = z.infer<typeof DesktopGitDiffV1Schema>;
