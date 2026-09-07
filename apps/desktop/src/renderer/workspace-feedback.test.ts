@@ -40,4 +40,10 @@ it("preserves storage capacity provenance and only offers safe manual in-use ret
   expect(canRetryManually("workspace.in-use")).toBe(true);
   expect(canRetryManually("workspace.dirty")).toBe(false);
   expect(errorGuidance("workspace.dirty")).toBe("dirtyRemove");
+  expect(errorGuidance("storage.mount-identity-mismatch", "retained-attach-failed")).toBe(
+    "mountIdentityHelp",
+  );
+  expect(errorGuidance("storage.operation-failed", "retained-mount-identity-mismatch")).toBe(
+    "mountIdentityHelp",
+  );
 });

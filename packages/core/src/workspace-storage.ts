@@ -51,12 +51,19 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
         : {};
     const upstreamCode = typeof body.code === "string" ? body.code : undefined;
     const capacityUnavailable = upstreamCode === "storage-capacity-unavailable";
+    const mountIdentityMismatch =
+      upstreamCode === "retained-mount-identity-mismatch" ||
+      (upstreamCode === "retained-attach-failed" &&
+        typeof body.message === "string" &&
+        body.message.includes("validate-stale-mount-target:"));
     throw new WorkspaceCoreError(
       upstreamCode === "retained-not-found"
         ? "storage.retained-not-found"
-        : upstreamCode === "retained-in-use"
-          ? "workspace.in-use"
-          : "storage.operation-failed",
+        : mountIdentityMismatch
+          ? "storage.mount-identity-mismatch"
+          : upstreamCode === "retained-in-use"
+            ? "workspace.in-use"
+            : "storage.operation-failed",
       capacityUnavailable
         ? "Workspace storage cannot reserve enough disk space for this operation."
         : typeof body.message === "string"

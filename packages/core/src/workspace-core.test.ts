@@ -523,6 +523,33 @@ describe("HoneyBeeWorkspaceCore", () => {
     expect(await realpath(workspaceLibrary)).toBe(await realpath(repaired.mountPath));
 
     await writeFile(path.join(created.workspacePath, "Assets", "Dirty.cs"), "dirty\n", "utf8");
+    await writeFile(
+      path.join(created.workspacePath, "ProjectSettings", "EditorBuildSettings.asset"),
+      "staged settings\n",
+      "utf8",
+    );
+    await git(created.workspacePath, "add", "ProjectSettings/EditorBuildSettings.asset");
+    await writeFile(
+      path.join(created.workspacePath, "ProjectSettings", "EditorBuildSettings.asset"),
+      "unstaged settings\n",
+      "utf8",
+    );
+    const stagedBeforeRepair = await git(created.workspacePath, "diff", "--cached", "--binary");
+    await unlink(workspaceLibrary);
+    const dirtyRepaired = await core.repairWorkspace(created.workspaceId);
+    expect(dirtyRepaired.state).toBe("ready");
+    expect(await git(created.workspacePath, "diff", "--cached", "--binary")).toBe(
+      stagedBeforeRepair,
+    );
+    expect(await readFile(path.join(created.workspacePath, "Assets", "Dirty.cs"), "utf8")).toBe(
+      "dirty\n",
+    );
+    expect(
+      await readFile(
+        path.join(created.workspacePath, "ProjectSettings", "EditorBuildSettings.asset"),
+        "utf8",
+      ),
+    ).toBe("unstaged settings\n");
     await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
       code: "workspace.dirty",
     });

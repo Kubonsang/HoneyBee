@@ -23,9 +23,38 @@ export const verifyWorkbench = async (browser: BrowserWindow): Promise<void> => 
     button(".workspace-row", "ui").click();
     await waitFor(() => document.querySelector(".workspace-name h1")?.textContent === "ui");
     button(".changed-files button", "Hud.prefab.meta").click();
-    await waitFor(() =>
-      /Untracked|미추적/u.test(document.querySelector(".diff-view")?.textContent ?? ""),
+    await waitFor(
+      () =>
+        document.querySelector(".diff-view")?.textContent?.includes("guid: smoke-preview") === true,
     );
+    if (!document.querySelector(".changed-files") || !document.querySelector(".diff-line.added"))
+      throw new Error("File list and colored preview must stay visible together.");
+
+    button(".changed-files button", "ShaderGraphSettings.asset").click();
+    await waitFor(
+      () => document.querySelector(".diff-view")?.textContent?.includes("setting_0") === true,
+    );
+    const review = document.querySelector<HTMLDivElement>(".diff-view");
+    if (!review) throw new Error("Missing diff scroll view.");
+    review.scrollTop = 8000;
+    await waitFor(() => review.textContent?.includes("setting_360") === true);
+    if (document.querySelectorAll(".diff-line").length > 180)
+      throw new Error("Large diff rendered an unbounded number of rows.");
+    button(".changed-files button", "Hud.prefab.meta").click();
+    await waitFor(() => review.textContent?.includes("guid: smoke-preview") === true);
+    button(".changed-files button", "ShaderGraphSettings.asset").click();
+    await waitFor(
+      () => review.scrollTop >= 7990 && review.textContent?.includes("setting_360") === true,
+    );
+    document.querySelector<HTMLButtonElement>(".workbench-header button.secondary")?.click();
+    await new Promise((resolve) => setTimeout(resolve, 650));
+    if (
+      !document
+        .querySelector(".diff-toolbar strong")
+        ?.textContent?.includes("ShaderGraphSettings.asset") ||
+      review.scrollTop < 7990
+    )
+      throw new Error("Refresh lost the selected file or its scroll position.");
 
     // Start a slow file diff, then a faster all-files diff. The older reply must not replace it.
     document.querySelector<HTMLButtonElement>(".detail-tabs button:first-child")?.click();
@@ -48,7 +77,7 @@ export const verifyWorkbench = async (browser: BrowserWindow): Promise<void> => 
     await waitFor(() => document.querySelector(".workspace-name h1")?.textContent === "combat");
     await new Promise((resolve) => setTimeout(resolve, 400));
     if (
-      document.querySelector(".diff-view") !== null ||
+      document.querySelector(".diff-toolbar strong")?.textContent?.includes("Hud.prefab") ||
       document.querySelector(".error-banner") !== null
     )
       throw new Error("Old Workspace response leaked into the current Workspace.");

@@ -1,6 +1,23 @@
 export type Locale = "ko" | "en";
 
 const en = {
+  contentFiles: "Code & content",
+  unitySettingsFiles: "Unity settings",
+  metadataFiles: "Metadata",
+  otherFiles: "Other files",
+  searchChanges: "Find a changed file",
+  noMatchingFiles: "No matching files.",
+  classificationHelp:
+    "Grouped by file type. Settings and metadata may include your edits as well as Unity changes.",
+  diffBaseline: "Working files compared with HEAD · staged and unstaged combined",
+  untrackedPreview: "Untracked file · current contents",
+  selectUntrackedPreview: "Select a new file from the list to preview its contents.",
+  binaryDiff: "Binary file. A text comparison is not available.",
+  emptyFile: "This file is empty.",
+  emptyCombinedDiff:
+    "No combined text difference from HEAD. Staged and unstaged changes can cancel out; this does not mean the worktree is clean.",
+  mountIdentityHelp:
+    "Library connection information does not match this Workspace's storage. Your uncommitted files are unrelated to this error. Keep the Workspace and use the storage recovery procedure; committing or rebooting alone will not resolve it.",
   gitUnknown: "Status unavailable",
   gitUnknownHelp: "Refresh Git status before removing this Workspace.",
   refreshFailed: "Could not verify the latest status. Showing the previous result.",
@@ -146,6 +163,23 @@ export type MessageKey = keyof typeof en;
 export const messageKeys = Object.keys(en) as MessageKey[];
 
 const ko: Record<MessageKey, string> = {
+  contentFiles: "코드·콘텐츠",
+  unitySettingsFiles: "Unity 설정",
+  metadataFiles: "메타데이터",
+  otherFiles: "기타 파일",
+  searchChanges: "변경 파일 검색",
+  noMatchingFiles: "일치하는 파일이 없습니다.",
+  classificationHelp:
+    "파일 종류로 구분합니다. 설정·메타데이터에는 직접 수정한 내용과 Unity가 변경한 내용이 함께 있을 수 있습니다.",
+  diffBaseline: "HEAD와 현재 파일 비교 · 스테이징·미스테이징 변경 합산",
+  untrackedPreview: "미추적 파일 · 현재 내용",
+  selectUntrackedPreview: "새 파일은 목록에서 선택하면 내용을 볼 수 있습니다.",
+  binaryDiff: "바이너리 파일은 텍스트로 비교할 수 없습니다.",
+  emptyFile: "빈 파일입니다.",
+  emptyCombinedDiff:
+    "HEAD와의 합산 텍스트 차이가 없습니다. 스테이징과 미스테이징 변경이 상쇄될 수 있으며, 작업 트리가 clean하다는 의미는 아닙니다.",
+  mountIdentityHelp:
+    "Library 연결 정보가 이 Workspace의 저장소와 일치하지 않습니다. 미커밋 파일과는 무관한 오류입니다. Workspace를 보존하고 저장소 복구 절차를 진행하세요. 커밋이나 재부팅만으로 해결되지 않습니다.",
   gitUnknown: "상태 확인 불가",
   gitUnknownHelp: "Git 상태를 새로 확인한 뒤 워크스페이스를 삭제하세요.",
   refreshFailed: "최신 상태 확인 실패. 이전 결과를 표시하고 있습니다.",
