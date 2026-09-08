@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "honeybeeVersion": "0.1.0-beta.7",
+  "honeybeeVersion": "0.1.0-beta.8",
   "workspaceStorage": [
     {
       "componentId": "workspace-storage",
-      "version": "0.0.0+796514b475be.hb9",
-      "honeybeeVersion": "0.1.0-beta.7",
+      "version": "0.0.0+c238f283ded2.hb10",
+      "honeybeeVersion": "0.1.0-beta.8",
       "platform": "win32",
       "architecture": "x64",
       "payloads": [
@@ -22,7 +22,7 @@
           "source": "bundled",
           "fileName": "honeybee-workspace-storage-host.exe",
           "byteLength": 5614592,
-          "sha256": "c9a9d6ce268ce9e7ea277e06cc53bef9fcdbf56ba5f5f4d4bac0524ab3263963",
+          "sha256": "63a66d74ce24f40f99e5da76d94daf1ad51fda50a562c316239405b90ad8f915",
           "archive": "none"
         }
       ]

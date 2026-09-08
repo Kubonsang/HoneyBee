@@ -1,0 +1,462 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-08",
+  "protocol": "readonly-verification-v2",
+  "environment": {
+    "windowsBuild": 26200,
+    "unity": "6000.6.0f1",
+    "project": "GNF frozen seed",
+    "parentBlockBytes": 2097152,
+    "sectorBytes": 4096,
+    "virtualBytes": 68719476736
+  },
+  "summary": {
+    "schemaVersion": 1,
+    "modes": {
+      "2mib": {
+        "samples": 3,
+        "firstOpenMedianMs": 27564,
+        "reopenMedianMs": 5741,
+        "afterUnityMedianBytes": 843055104,
+        "afterDetachMedianBytes": 940572672,
+        "afterReopenMedianBytes": 943718400,
+        "compactionSamples": [
+          {
+            "beforeBytes": 930086912,
+            "afterBytes": 930086912,
+            "durationMs": 3098
+          }
+        ]
+      },
+      "1mib": {
+        "samples": 3,
+        "firstOpenMedianMs": 26885,
+        "reopenMedianMs": 5684,
+        "afterUnityMedianBytes": 708837376,
+        "afterDetachMedianBytes": 763363328,
+        "afterReopenMedianBytes": 775946240,
+        "compactionSamples": [
+          {
+            "beforeBytes": 773849088,
+            "afterBytes": 773849088,
+            "durationMs": 3007
+          }
+        ]
+      }
+    },
+    "savedFraction": 0.18840579710144922,
+    "firstOpenChangeFraction": -0.024633580031925728,
+    "reopenChangeFraction": -0.00992858387040585,
+    "benchmarkGatePassed": true,
+    "releaseCaveat": "Benchmark gate only; installed broker/reboot and packaged payload validation remain separate."
+  },
+  "samples": [
+    {
+      "mode": "2mib",
+      "iteration": 0,
+      "unityMs": 27896,
+      "reopenMs": 5695,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 843055104,
+        "allocatedBytes": 843055104
+      },
+      "afterReopen": {
+        "logicalBytes": 943718400,
+        "allocatedBytes": 943718400
+      },
+      "afterDetach": {
+        "logicalBytes": 930086912,
+        "allocatedBytes": 930086912
+      },
+      "afterVerification": {
+        "logicalBytes": 930086912,
+        "allocatedBytes": 930086912
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 2097152,
+        "SectorSize": 4096
+      },
+      "compactVerified": true
+    },
+    {
+      "mode": "1mib",
+      "iteration": 0,
+      "unityMs": 27603,
+      "reopenMs": 6194,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 708837376,
+        "allocatedBytes": 708837376
+      },
+      "afterReopen": {
+        "logicalBytes": 775946240,
+        "allocatedBytes": 775946240
+      },
+      "afterDetach": {
+        "logicalBytes": 773849088,
+        "allocatedBytes": 773849088
+      },
+      "afterVerification": {
+        "logicalBytes": 773849088,
+        "allocatedBytes": 773849088
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 1048576,
+        "SectorSize": 4096
+      },
+      "compactVerified": true
+    },
+    {
+      "mode": "1mib",
+      "iteration": 1,
+      "unityMs": 26885,
+      "reopenMs": 5684,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 675282944,
+        "allocatedBytes": 675282944
+      },
+      "afterReopen": {
+        "logicalBytes": 775946240,
+        "allocatedBytes": 775946240
+      },
+      "afterDetach": {
+        "logicalBytes": 754974720,
+        "allocatedBytes": 754974720
+      },
+      "afterVerification": {
+        "logicalBytes": 754974720,
+        "allocatedBytes": 754974720
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 1048576,
+        "SectorSize": 4096
+      },
+      "compactVerified": false
+    },
+    {
+      "mode": "2mib",
+      "iteration": 1,
+      "unityMs": 27286,
+      "reopenMs": 5741,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 843055104,
+        "allocatedBytes": 843055104
+      },
+      "afterReopen": {
+        "logicalBytes": 943718400,
+        "allocatedBytes": 943718400
+      },
+      "afterDetach": {
+        "logicalBytes": 940572672,
+        "allocatedBytes": 940572672
+      },
+      "afterVerification": {
+        "logicalBytes": 940572672,
+        "allocatedBytes": 940572672
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 2097152,
+        "SectorSize": 4096
+      },
+      "compactVerified": false
+    },
+    {
+      "mode": "2mib",
+      "iteration": 2,
+      "unityMs": 27564,
+      "reopenMs": 5848,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 876609536,
+        "allocatedBytes": 876609536
+      },
+      "afterReopen": {
+        "logicalBytes": 977272832,
+        "allocatedBytes": 977272832
+      },
+      "afterDetach": {
+        "logicalBytes": 953155584,
+        "allocatedBytes": 953155584
+      },
+      "afterVerification": {
+        "logicalBytes": 953155584,
+        "allocatedBytes": 953155584
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 2097152,
+        "SectorSize": 4096
+      },
+      "compactVerified": false
+    },
+    {
+      "mode": "1mib",
+      "iteration": 2,
+      "unityMs": 26856,
+      "reopenMs": 5649,
+      "ready": {
+        "logicalBytes": 37748736,
+        "allocatedBytes": 37748736
+      },
+      "afterUnity": {
+        "logicalBytes": 708837376,
+        "allocatedBytes": 708837376
+      },
+      "afterReopen": {
+        "logicalBytes": 775946240,
+        "allocatedBytes": 775946240
+      },
+      "afterDetach": {
+        "logicalBytes": 763363328,
+        "allocatedBytes": 763363328
+      },
+      "afterVerification": {
+        "logicalBytes": 763363328,
+        "allocatedBytes": 763363328
+      },
+      "geometry": {
+        "VirtualSize": 68719476736,
+        "PhysicalSize": 37748736,
+        "BlockSize": 1048576,
+        "SectorSize": 4096
+      },
+      "compactVerified": false
+    }
+  ],
+  "fileIoTraces": [
+    {
+      "writeEvents": 35643,
+      "requestedWriteBytes": 360261462,
+      "requestedReadBytes": 1717162949,
+      "writeBytesByDirectory": {
+        "Bee": 345964595,
+        "DataStore": 5334656,
+        "(filesystem metadata)": 3989504,
+        "(root)": 3309406,
+        "BurstCache": 1287358,
+        "PackageManager": 375488,
+        "Pipeline": 455
+      },
+      "unresolvedGlobalWriteEvents": 0,
+      "rowsWithUndecodableBytes": 9,
+      "matchedRowsWithUndecodableBytes": 0,
+      "mode": "2mib",
+      "phase": "first",
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "topWrittenFiles": [
+        {
+          "path": "Bee/1900b0aE.dag",
+          "requestedBytes": 72766272
+        },
+        {
+          "path": "Bee/1900b0aE.dag.json",
+          "requestedBytes": 40638066
+        },
+        {
+          "path": "Bee/1900b0aE.dag.payloads",
+          "requestedBytes": 36342055
+        },
+        {
+          "path": "Bee/tundra.log.json",
+          "requestedBytes": 29728021
+        },
+        {
+          "path": "Bee/1900b0aE-inputdata.json",
+          "requestedBytes": 8120846
+        },
+        {
+          "path": "Bee/tundra.digestcache.tmp",
+          "requestedBytes": 4838208
+        }
+      ]
+    },
+    {
+      "writeEvents": 16364,
+      "requestedWriteBytes": 11819727,
+      "requestedReadBytes": 682175440,
+      "writeBytesByDirectory": {
+        "Bee": 6877228,
+        "BurstCache": 2544830,
+        "(filesystem metadata)": 1552384,
+        "(root)": 840734,
+        "Pipeline": 4551
+      },
+      "unresolvedGlobalWriteEvents": 0,
+      "rowsWithUndecodableBytes": 9,
+      "matchedRowsWithUndecodableBytes": 0,
+      "mode": "2mib",
+      "phase": "reopen",
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "topWrittenFiles": [
+        {
+          "path": "BurstCache/JIT/BurstCacheManifest.cm",
+          "requestedBytes": 2544830
+        },
+        {
+          "path": "Bee/tundra.digestcache.tmp",
+          "requestedBytes": 2419184
+        },
+        {
+          "path": "Bee/tundra.digestcache",
+          "requestedBytes": 1216512
+        },
+        {
+          "path": "Bee/fullprofile.json",
+          "requestedBytes": 1192524
+        },
+        {
+          "path": "$LogFile",
+          "requestedBytes": 978944
+        },
+        {
+          "path": "Bee/backend1.traceevents",
+          "requestedBytes": 845101
+        }
+      ]
+    },
+    {
+      "writeEvents": 35631,
+      "requestedWriteBytes": 356784566,
+      "requestedReadBytes": 1721137465,
+      "writeBytesByDirectory": {
+        "Bee": 342319763,
+        "DataStore": 5334656,
+        "(filesystem metadata)": 4153344,
+        "(root)": 3313502,
+        "BurstCache": 1287358,
+        "PackageManager": 375488,
+        "Pipeline": 455
+      },
+      "unresolvedGlobalWriteEvents": 0,
+      "rowsWithUndecodableBytes": 9,
+      "matchedRowsWithUndecodableBytes": 0,
+      "mode": "1mib",
+      "phase": "first",
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "topWrittenFiles": [
+        {
+          "path": "Bee/1900b0aE.dag",
+          "requestedBytes": 72766272
+        },
+        {
+          "path": "Bee/1900b0aE.dag.json",
+          "requestedBytes": 40638066
+        },
+        {
+          "path": "Bee/1900b0aE.dag.payloads",
+          "requestedBytes": 36410037
+        },
+        {
+          "path": "Bee/tundra.log.json",
+          "requestedBytes": 27794531
+        },
+        {
+          "path": "Bee/1900b0aE-inputdata.json",
+          "requestedBytes": 8120846
+        },
+        {
+          "path": "Bee/tundra.digestcache.tmp",
+          "requestedBytes": 4838208
+        }
+      ]
+    },
+    {
+      "writeEvents": 16385,
+      "requestedWriteBytes": 11876770,
+      "requestedReadBytes": 695675442,
+      "writeBytesByDirectory": {
+        "Bee": 6901503,
+        "BurstCache": 2544830,
+        "(filesystem metadata)": 1556480,
+        "(root)": 865310,
+        "Pipeline": 4551,
+        "DataStore": 4096
+      },
+      "unresolvedGlobalWriteEvents": 0,
+      "rowsWithUndecodableBytes": 9,
+      "matchedRowsWithUndecodableBytes": 0,
+      "mode": "1mib",
+      "phase": "reopen",
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "topWrittenFiles": [
+        {
+          "path": "BurstCache/JIT/BurstCacheManifest.cm",
+          "requestedBytes": 2544830
+        },
+        {
+          "path": "Bee/tundra.digestcache.tmp",
+          "requestedBytes": 2419184
+        },
+        {
+          "path": "Bee/tundra.digestcache",
+          "requestedBytes": 1216512
+        },
+        {
+          "path": "Bee/fullprofile.json",
+          "requestedBytes": 1193274
+        },
+        {
+          "path": "$LogFile",
+          "requestedBytes": 978944
+        },
+        {
+          "path": "Bee/backend1.traceevents",
+          "requestedBytes": 868630
+        }
+      ]
+    }
+  ],
+  "traceCaveat": "Requested bytes include repeated writes and System writeback; not unique changes or backing allocation. Traced timings excluded. Unrelated .NET decoder warnings were present.",
+  "preliminaryCampaignExcluded": "Writable hash verification could mutate NTFS last-access metadata.",
+  "cleanup": [
+    {
+      "experiment": "child-vhdx-bench-20260908-a",
+      "removed": true
+    },
+    {
+      "experiment": "child-vhdx-bench-20260908-b",
+      "removed": true
+    },
+    {
+      "experiment": "child-vhdx-trace-20260908-b",
+      "removed": true
+    }
+  ],
+  "artifactSha256": {
+    "child-block-1mib.patch": "5e118982321cfbcd310d5fbdc96b2e24890f2afab69c9ee3b58b1bac849f6c75",
+    "honeybee-vhdx-bench.exe": "f2f92a3a060dcd80a4bea183d9141652be637947ce57ceb6ce133abe11dc6fc4",
+    "unity-workspace-storage-child-1mib.exe": "7e9644bce425a65ae59bf64ec70b229736903dd883fce15d0e784bdac8a99ed0"
+  },
+  "shippingStatus": "Candidate only. Installed service and package pins remain hb9; installed broker, retained/repair/reboot and packaging gates remain."
+}

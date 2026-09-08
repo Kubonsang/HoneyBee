@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-08",
+  "sourceCommit": "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa",
+  "componentVersion": "0.0.0+c238f283ded2.hb10",
+  "hostSha256": "63a66d74ce24f40f99e5da76d94daf1ad51fda50a562c316239405b90ad8f915",
+  "physicalBoot": {
+    "previousUtc": "2026-09-08T06:12:39.5000000Z",
+    "currentUtc": "2026-09-08T09:50:44.5000000Z",
+    "newerWindowsBootVerified": true,
+    "newBrokerBootIdentityVerified": true
+  },
+  "children": [
+    {
+      "blockBytes": 2097152,
+      "retainedFrom": "hb9",
+      "preRebootAttachCycles": 3,
+      "postRebootAttachPassed": true,
+      "contentAndMountGuidVerified": true,
+      "fileIdentityPreserved": true,
+      "allocatedBytesBeforeRemoval": 30408704,
+      "removed": true
+    },
+    {
+      "blockBytes": 1048576,
+      "retainedFrom": "hb10",
+      "preRebootAttachCycles": 3,
+      "postRebootAttachPassed": true,
+      "contentAndMountGuidVerified": true,
+      "fileIdentityPreserved": true,
+      "allocatedBytesBeforeRemoval": 18874368,
+      "removed": true
+    }
+  ],
+  "existingUserChildrenSha256Preserved": 4,
+  "userRegistryAndOriginalInventoryPreserved": true,
+  "finalStatus": {
+    "serviceRunning": true,
+    "activeChildren": 0,
+    "retainedChildren": 4,
+    "pending": 0,
+    "quarantined": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false
+  },
+  "cleanupPassed": true,
+  "scope": "One physical reboot, two disposable retained children. Existing user children verified unchanged, not reattached through HoneyBee Repair UI. No HoneyBee public release published."
+}

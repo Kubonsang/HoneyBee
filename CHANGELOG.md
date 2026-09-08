@@ -1,6 +1,23 @@
 # Changelog
 
-## 0.1.0-beta.7 - Unreleased
+## 0.1.0-beta.8 - 2026-09-08
+
+- Create new Windows child VHDX with 1 MiB payload blocks, reusing existing
+  2 MiB parents and preserving retained children at their original geometry.
+- Measure 18.84% lower median persisted child allocation in the GNF Unity
+  benchmark, with no qualifying first-open or reopen timing regression.
+- Show measured logical/allocated Workspace storage and shared-parent usage,
+  keeping unknown or partial measurements explicit.
+- Include optional TestPlay shared-cache integration guidance; TestPlay's
+  separate implementation is not installed or enabled by HoneyBee.
+- Pin hb10 storage and verify old/new retained children across three reattach
+  cycles and one physical reboot. Preserve all four original user child hashes
+  and remove both disposable validation children.
+- Update the bundled hb9-to-hb10 service-upgrade instructions. Existing child
+  files do not shrink automatically; fresh install and older migrations remain
+  outside this release's native qualification.
+
+## 0.1.0-beta.7 - 2026-09-07
 
 - Keep the changed-file list beside the unified diff, with file-type groups, search,
   line numbers, colors, new-file previews and per-file scroll restoration.

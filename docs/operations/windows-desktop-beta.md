@@ -1,13 +1,15 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 5 is a Workspace Workbench candidate for Windows 11 x64. It uses the
+HoneyBee Desktop 0.1.0 Beta 8 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
 same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
 work.
 
 ## First start
 
 Extract the complete archive and keep its `resources` directory beside the executable. The archive
-includes `STORAGE-SETUP.md` for the one-time elevated service installation. For Desktop, use
+includes `STORAGE-SETUP.md` for the qualified hb9-to-hb10 service upgrade. It requires
+storage version `0.0.0+c238f283ded2.hb10`; extracting the ZIP does not update that service.
+Fresh installation and older migrations are not qualified by this release. For Desktop, use
 `resources\win32-x64\honeybee-workspace-storage-host.exe` in place of the CLI guide's
 `dist\honeybee-workspace-storage-host.exe`; the service/root/user and upgrade requirements are the
 same. Diagnostics and ordinary Workspace use run without elevation.
@@ -40,8 +42,9 @@ Quick actions open CMD, PowerShell (PowerShell 7 preferred), VS Code, or the exa
 selected ready Workspace. These are detached user tools: HoneyBee does not watch, restart, verify, or
 interpret them.
 
-The diff viewer shows tracked changes relative to HEAD, including staged and unstaged edits. Untracked files
-are listed but their contents must be inspected in an editor. Large diffs are explicitly truncated
+The diff viewer keeps the changed-file list beside a unified preview of changes relative to HEAD,
+including staged and unstaged edits. It includes bounded previews of untracked text, file search,
+line numbers and per-file scroll restoration. Large diffs are explicitly truncated
 at 1 MiB. Setup shows bilingual corrective guidance, with the original diagnostic and remediation
 available under diagnostic details; use **Check again** after completing the indicated action.
 
@@ -53,6 +56,12 @@ branch. `cleanup-pending` removal can be retried with the same action. A differe
 junction is never replaced or deleted automatically.
 
 ## Reboot recovery
+
+Beta 8 uses 1 MiB blocks for new child VHDX. Existing 2 MiB parents are reused and
+existing children keep their geometry. The Storage view measures Workspace usage
+on request, distinguishes shared parents from per-Workspace files and shows
+unknown/partial results explicitly. The change does not automatically shrink
+existing children or install the separate optional TestPlay shared-cache feature.
 
 The retained-attach ordering fix and physical Windows reboot gate are complete for Beta 4. After a
 reboot, a retained Workspace appears as `repair-required` until the user chooses **Repair**. Do not

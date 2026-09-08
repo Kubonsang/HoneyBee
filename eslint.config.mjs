@@ -11,11 +11,18 @@ export default tseslint.config(
       "**/.honeybee/**",
       "dogfood/evidence/**",
       "dogfood/state/**",
+      "tmp/**",
+      "output/**",
+      "apps/desktop/release*/**",
+      "apps/cli/release*/**",
       "**/*.d.ts",
     ],
   },
   eslint.configs.recommended,
   ...tseslint.configs.strict,
+  {
+    languageOptions: { parserOptions: { tsconfigRootDir: import.meta.dirname } },
+  },
   {
     files: ["**/*.cjs"],
     languageOptions: {

@@ -1,0 +1,43 @@
+diff --git a/PROVENANCE.md b/PROVENANCE.md
+index 5bde23a..781fc14 100644
+--- a/PROVENANCE.md
++++ b/PROVENANCE.md
+@@ -1,5 +1,25 @@
+ # Extraction provenance
+ 
++## HoneyBee child geometry follow-up (2026-09-08)
++
++Runtime change `c238f283ded29f716f72e7d556cfeef3efd98639` explicitly selects
++1 MiB blocks for newly created Windows differencing children. Existing 2 MiB
++parents and retained children keep their geometry. The normalized hashes for
++`storage/lifecycle.go` and `storage/lifecycle_windows.go` are updated only in
++the destination overlay; the frozen extraction manifests remain unchanged.
++The additive native geometry test is not a checkpoint-derived file.
++
++HoneyBee's GNF experiment (three fresh children per geometry, two Unity sessions
++each) measured median final allocation of 940,572,672 versus 763,363,328 bytes
++(18.84% less), without a timing regression against its pre-registered gate.
++Verification used read-only mounts after measurement. Offline compaction
++reclaimed zero bytes on both disposable copies. These results cover one project
++and host; they do not establish universal savings or long-term growth.
++
++The hb10 runtime identifier remains `0.0.0+c238f283ded2.hb10`. A subsequent
++provenance-only source pin records these overlay hashes without changing runtime
++Go source or the compiled broker payload.
++
+ ## Source identity
+ 
+ - source repository: `github.com/Kubonsang/testplay-runner`
+diff --git a/provenance/post-rc-destination-sha256.tsv b/provenance/post-rc-destination-sha256.tsv
+index a3fecef..9c7aad8 100644
+--- a/provenance/post-rc-destination-sha256.tsv
++++ b/provenance/post-rc-destination-sha256.tsv
+@@ -1,6 +1,6 @@
+ # sha256(normalized LF UTF-8) extracted_path
+-43421e6aae1e603d533d510a0b05238e2e253b5507b6c26d85d51ffaadf2eed4	storage/lifecycle.go
+-f86cd2adec20ab830aa80560a4dd2887863fef38fcb3afe3e4acfe5007948efa	storage/lifecycle_windows.go
++708131b62ee581e87673c75b63a826ffcdd1753f4647ed5f56c18270317e364d	storage/lifecycle.go
++ef19bd732c4dcfd0d33199e2452a104f97bf59a84b5fcb916283d5cc974ceb2d	storage/lifecycle_windows.go
+ bc7025a74c334dbfbe5c599af7f260a6b20e4c9d24d992740677798e0199217f	storage/lifecycle_windows_test.go
+ d9b2efea2272fb81f058ebdc4176c07d25e934db004920e4873b5341771e6010	storage/retained_recovery_windows.go
+ fc5fdfe3cb0753a319690301cb8220d0a61cf7b9d7c4f1d5688518c8d1dbeb02	storage/retained_recovery_windows_test.go

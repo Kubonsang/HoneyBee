@@ -1,8 +1,10 @@
 # HoneyBee Windows CLI Beta
 
-HoneyBee 0.1.0 Beta 5 is an unsigned Windows 11 x64 evaluation candidate. It requires Node.js 24 or
-newer, Git for Windows, and a one-time elevated installation of the bundled
-UnityWorkspaceStorage service. HoneyBee does not install or repair the service automatically.
+HoneyBee 0.1.0 Beta 8 is an unsigned Windows 11 x64 prerelease. It requires Node.js 24 or
+newer, Git for Windows, and storage component `0.0.0+c238f283ded2.hb10`.
+HoneyBee does not install or upgrade the Windows service automatically. This
+release qualifies an existing hb9-to-hb10 upgrade; fresh installation and older
+service/protocol migrations remain unqualified.
 
 ## 1. Extract and verify
 
@@ -14,22 +16,40 @@ Verify the ZIP against the published SHA256SUMS.txt, then run:
 
 Doctor is read-only. A missing service or receipt is expected before the one-time setup below.
 
-## 2. Install the storage service
+## 2. Upgrade an existing hb9 storage service
 
-Open PowerShell as Administrator, change to the extracted CLI directory, and run:
+Extracting this ZIP does not upgrade the service. Close Unity, HoneyBee and tools
+using its Workspaces. Back up the existing install receipt, broker executable,
+broker config and Workspace registry before replacement. Preserve the recorded
+storage root and user SID. A same-user hb9 installation can retain its existing
+2 MiB children during this upgrade; do not remove authored Workspaces just to
+enable the new block size.
 
-    $StorageRoot = Join-Path $env:ProgramData "HoneyBeeStorageWorkspaces"
-    $UserSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-    & ".\dist\honeybee-workspace-storage-host.exe" install --workspace-root $StorageRoot --user-sid $UserSid --component-version "0.0.0+68e05e0bf0e4.hb8"
+From an elevated PowerShell opened as the same installed user, change to the
+extracted CLI directory. Inspect the existing receipt and use its identity:
 
-The storage mount root is machine-global and is separate from the Git Workspace root passed to
-project init. Do not point either root inside the source Git repository.
+```powershell
+$ReceiptPath = Join-Path $env:ProgramData 'UnityWorkspaceStorage\install-receipt.json'
+$Receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json
+$CurrentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+if ($Receipt.userSid -ne $CurrentSid) { throw 'The installation belongs to another user.' }
+if ($Receipt.componentVersion -notin @('0.0.0+796514b475be.hb9', '0.0.0+c238f283ded2.hb10')) {
+    throw 'This service version requires a separately validated migration.'
+}
+& '.\dist\honeybee-workspace-storage-host.exe' install `
+    --workspace-root $Receipt.workspaceRoot --user-sid $Receipt.userSid `
+    --component-version '0.0.0+c238f283ded2.hb10' --replace
+if ($LASTEXITCODE -ne 0) { throw 'Service upgrade failed; inspect the original diagnostic.' }
+```
 
-If doctor reports that an existing HoneyBee receipt has the same machine identity but an older
-component version, remove every Workspace with the old CLI first, verify that their branches remain,
-then repeat the command with --replace. The broker protocol changed in Beta 4, so do not replace a
-service that still owns an older retained child. Never use --replace to take over an unrelated
-service or a receipt belonging to another user/root.
+For Desktop, replace `dist\honeybee-workspace-storage-host.exe` with
+`resources\win32-x64\honeybee-workspace-storage-host.exe`. Never use `--replace`
+to take over an unrelated service or change an existing installation's root/SID.
+Keep the complete archive and compare it with the published checksums first.
+
+New children use 1 MiB blocks. Existing children retain their geometry and size;
+the upgrade does not compact or rewrite them. One physical reboot with both
+geometries passed, including child identity and content preservation.
 
 Run doctor again from a normal, non-elevated PowerShell. Do not proceed while it reports a blocking
 failure.

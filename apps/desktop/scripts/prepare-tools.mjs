@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const workspaceStorageCommit = "796514b475bece93635df504a32e1bcb54b95493";
-const workspaceStorageVersion = "0.0.0+796514b475be.hb9";
+const workspaceStorageCommit = "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa";
+const workspaceStorageVersion = "0.0.0+c238f283ded2.hb10";
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
@@ -84,7 +84,7 @@ try {
       [
         "work",
         "edit",
-        `-replace=github.com/Kubonsang/unity-workspace-storage@v0.0.0-20260907041419-796514b475be=${sourceRoot}`,
+        `-replace=github.com/Kubonsang/unity-workspace-storage@v0.0.0-20260908094357-cfa606fd4143=${sourceRoot}`,
       ],
       { cwd: workRoot, env: { GOWORK: workFile } },
     );
