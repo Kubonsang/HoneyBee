@@ -1,8 +1,8 @@
 diff --git a/PROVENANCE.md b/PROVENANCE.md
-index 781fc14..7a60b9a 100644
+index 781fc14..f78fd1f 100644
 --- a/PROVENANCE.md
 +++ b/PROVENANCE.md
-@@ -185,3 +185,14 @@ source-tree symlinks and special files remain rejected before cloning. The
+@@ -185,3 +185,24 @@ source-tree symlinks and special files remain rejected before cloning. The
  checkpoint-derived `storage/clone_darwin.go` is unchanged. Native CI separately
  requires two-child isolation, allocated-byte evidence, clean release, and
  daemon restart recovery on APFS and reflink-enabled XFS.
@@ -17,6 +17,16 @@ index 781fc14..7a60b9a 100644
 +now contains 21 entries, including the changed compatibility key. This local
 +patch has not been published as an upstream revision. HoneyBee records its
 +base commit and exact patch SHA-256 in its packaging overlay manifest.
++
++## HoneyBee private Bee compression follow-up (2026-09-09)
++
++The hb12 overlay enables native NTFS compression only on newly seeded private
++Bee data before granting client write access. The complete tree is pinned and
++validated before mutation. Existing retained caches, immutable parent seeds,
++VHDX containers and compatibility keys are unchanged. Added native tests cover
++content/accounting, inheritance, hard-link rejection and mixed compressed/plain
++retained lifecycle behavior. The complete reviewable overlay is SHA-256 pinned
++by HoneyBee; frozen extraction manifests remain unchanged.
 diff --git a/cmd/unity-workspace-storage/main.go b/cmd/unity-workspace-storage/main.go
 index 64105b8..5d930ba 100644
 --- a/cmd/unity-workspace-storage/main.go
@@ -341,12 +351,150 @@ index 0000000..5c75f99
 +		t.Fatal("incomplete bundle published", err)
 +	}
 +}
+diff --git a/workspace/bee_compression_windows.go b/workspace/bee_compression_windows.go
+new file mode 100644
+index 0000000..e0e793b
+--- /dev/null
++++ b/workspace/bee_compression_windows.go
+@@ -0,0 +1,34 @@
++//go:build windows
++
++package workspace
++
++import (
++	"errors"
++	"unsafe"
++
++	"golang.org/x/sys/windows"
++)
++
++func compressBeeCache(root string) (err error) {
++	// Validate and pin the entire tree before changing any attributes. Reparse
++	// points, hard links and conflicting writers fail before the first mutation.
++	tree, err := openBeeTree(root, 3)
++	if err != nil {
++		return err
++	}
++	defer func() { err = errors.Join(err, tree.close()) }()
++	for _, node := range tree.nodes {
++		format := uint16(1) // COMPRESSION_FORMAT_DEFAULT: mutable NTFS compression.
++		var returned uint32
++		if err = windows.DeviceIoControl(windows.Handle(node.file.Fd()), 0x9c040,
++			(*byte)(unsafe.Pointer(&format)), 2, nil, 0, &returned, nil); err != nil {
++			return err
++		}
++		if !node.info.IsDir() {
++			if err = node.file.Sync(); err != nil {
++				return err
++			}
++		}
++	}
++	return nil
++}
+diff --git a/workspace/bee_compression_windows_test.go b/workspace/bee_compression_windows_test.go
+new file mode 100644
+index 0000000..10ef3f6
+--- /dev/null
++++ b/workspace/bee_compression_windows_test.go
+@@ -0,0 +1,92 @@
++//go:build windows
++
++package workspace
++
++import (
++	"bytes"
++	"os"
++	"path/filepath"
++	"testing"
++
++	"golang.org/x/sys/windows"
++)
++
++func requireBeeCompressed(t *testing.T, path string, want bool) {
++	t.Helper()
++	p, err := windows.UTF16PtrFromString(path)
++	if err != nil {
++		t.Fatal(err)
++	}
++	attrs, err := windows.GetFileAttributes(p)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if (attrs&windows.FILE_ATTRIBUTE_COMPRESSED != 0) != want {
++		t.Fatalf("compression attribute %s: %x, want %t", path, attrs, want)
++	}
++}
++
++func TestBeeCompressionPreservesContentAllocationAndInheritance(t *testing.T) {
++	root := filepath.Join(t.TempDir(), "data")
++	if err := os.MkdirAll(filepath.Join(root, "artifacts"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	payload := bytes.Repeat([]byte("private compiled Bee artifact\n"), 40000)
++	file := filepath.Join(root, "artifacts", "cache")
++	if err := os.WriteFile(file, payload, 0600); err != nil {
++		t.Fatal(err)
++	}
++	_, before, err := beeUsage(root)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if err = compressBeeCache(root); err != nil {
++		t.Fatal(err)
++	}
++	for _, path := range []string{root, filepath.Dir(file), file} {
++		requireBeeCompressed(t, path, true)
++	}
++	got, err := os.ReadFile(file)
++	if err != nil || !bytes.Equal(got, payload) {
++		t.Fatal("compression changed content", err)
++	}
++	logical, after, err := beeUsage(root)
++	if err != nil || logical != int64(len(payload)) || after >= before/2 {
++		t.Fatalf("incorrect compressed accounting: %d %d %d %v", logical, before, after, err)
++	}
++	created := filepath.Join(root, "new", "artifact")
++	if err = os.Mkdir(filepath.Dir(created), 0700); err != nil {
++		t.Fatal(err)
++	}
++	if err = os.WriteFile(created, payload, 0600); err != nil {
++		t.Fatal(err)
++	}
++	requireBeeCompressed(t, filepath.Dir(created), true)
++	requireBeeCompressed(t, created, true)
++	if err = os.WriteFile(file, []byte("edited"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if got, err = os.ReadFile(file); err != nil || string(got) != "edited" {
++		t.Fatal("compressed cache is not writable", err)
++	}
++}
++
++func TestBeeCompressionRejectsHardlinksBeforeMutation(t *testing.T) {
++	base := t.TempDir()
++	root := filepath.Join(base, "data")
++	if err := os.Mkdir(root, 0700); err != nil {
++		t.Fatal(err)
++	}
++	file := filepath.Join(root, "first")
++	if err := os.WriteFile(file, []byte("private"), 0600); err != nil {
++		t.Fatal(err)
++	}
++	if err := os.Link(file, filepath.Join(base, "outside")); err != nil {
++		t.Fatal(err)
++	}
++	if err := compressBeeCache(root); err == nil {
++		t.Fatal("hard-linked cache accepted")
++	}
++	requireBeeCompressed(t, root, false)
++	requireBeeCompressed(t, file, false)
++}
 diff --git a/workspace/bee_integration_windows_test.go b/workspace/bee_integration_windows_test.go
 new file mode 100644
-index 0000000..e9611e2
+index 0000000..abf75f0
 --- /dev/null
 +++ b/workspace/bee_integration_windows_test.go
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,234 @@
 +//go:build windows
 +
 +package workspace
@@ -361,6 +509,7 @@ index 0000000..e9611e2
 +	"strings"
 +	"testing"
 +	"time"
++	"unsafe"
 +)
 +
 +func TestExternalBeeNativeLifecycle(t *testing.T) {
@@ -458,6 +607,7 @@ index 0000000..e9611e2
 +	}
 +	for i, l := range leases {
 +		target := filepath.Join(l.MountPath, "Bee", "cache.bin")
++		requireBeeCompressed(t, target, true)
 +		if data, e := os.ReadFile(target); e != nil || string(data) != "warm-cache" {
 +			t.Fatalf("seed read %q %v", data, e)
 +		}
@@ -466,6 +616,33 @@ index 0000000..e9611e2
 +		}
 +		if e := os.WriteFile(target, []byte(fmt.Sprintf("private-%d", i)), 0600); e != nil {
 +			t.Fatal(e)
++		}
++		if i == 0 {
++			// Model an hb11 retained cache: ownership/layout are identical, but
++			// neither its directories nor files have compression enabled.
++			j, e := broker.store.ReadLease(l.LeaseID)
++			if e != nil {
++				t.Fatal(e)
++			}
++			cache, e := beeRoot(*j)
++			if e != nil {
++				t.Fatal(e)
++			}
++			tree, e := openBeeTree(filepath.Join(cache, "data"), 3)
++			if e != nil {
++				t.Fatal(e)
++			}
++			for _, n := range tree.nodes {
++				format := uint16(0)
++				var returned uint32
++				if e = windows.DeviceIoControl(windows.Handle(n.file.Fd()), 0x9c040, (*byte)(unsafe.Pointer(&format)), 2, nil, 0, &returned, nil); e != nil {
++					tree.close()
++					t.Fatal(e)
++				}
++			}
++			if e = tree.close(); e != nil {
++				t.Fatal(e)
++			}
 +		}
 +		call(Request{Operation: OperationRelease, LeaseID: l.LeaseID, RetainChild: true})
 +	}
@@ -481,6 +658,7 @@ index 0000000..e9611e2
 +		if data, e := os.ReadFile(filepath.Join(v.Lease.MountPath, "Bee", "cache.bin")); e != nil || string(data) != fmt.Sprintf("private-%d", i) {
 +			t.Fatalf("reattach reseeded %q %v", data, e)
 +		}
++		requireBeeCompressed(t, filepath.Join(v.Lease.MountPath, "Bee", "cache.bin"), i != 0)
 +		_ = l
 +	}
 +	probe, err := os.Open(filepath.Join(leases[0].MountPath, "Bee", "cache.bin"))
@@ -605,10 +783,10 @@ index 0000000..64b4158
 +}
 diff --git a/workspace/bee_native_windows.go b/workspace/bee_native_windows.go
 new file mode 100644
-index 0000000..c4e4950
+index 0000000..cb91f15
 --- /dev/null
 +++ b/workspace/bee_native_windows.go
-@@ -0,0 +1,208 @@
+@@ -0,0 +1,213 @@
 +//go:build windows
 +
 +package workspace
@@ -747,6 +925,11 @@ index 0000000..c4e4950
 +	if err = tree.copyTo(filepath.Join(root, "data"), false); err != nil {
 +		return err
 +	}
++	// Compress only the new private copy before granting Unity write access.
++	// Retained caches and immutable parent seeds keep their existing state.
++	if err = compressBeeCache(filepath.Join(root, "data")); err != nil {
++		return fmt.Errorf("compress private Bee cache: %w", err)
++	}
 +	return setBeeAccess(filepath.Join(root, "data"), j.UserSID, true)
 +}
 +func validateBeeCache(j LeaseJournal) (string, error) {
@@ -819,10 +1002,10 @@ index 0000000..c4e4950
 +}
 diff --git a/workspace/bee_tree_windows.go b/workspace/bee_tree_windows.go
 new file mode 100644
-index 0000000..f8dd222
+index 0000000..e38ce61
 --- /dev/null
 +++ b/workspace/bee_tree_windows.go
-@@ -0,0 +1,291 @@
+@@ -0,0 +1,295 @@
 +//go:build windows
 +
 +package workspace
@@ -845,6 +1028,7 @@ index 0000000..f8dd222
 +// and reject them, and reject hard-linked files. A directory cannot be swapped
 +// between validation and a privileged read/delete. Mode 2 reserves every file
 +// exclusively before deletion; mode 0 measures without blocking normal writers.
++// Mode 3 permits compression through the pinned handles before publication.
 +type beeNode struct {
 +	path         string
 +	file         *os.File
@@ -920,6 +1104,9 @@ index 0000000..f8dd222
 +		if mode == 2 {
 +			access |= windows.DELETE
 +			share = 0
++		}
++		if mode == 3 {
++			access |= windows.GENERIC_WRITE
 +		}
 +		if attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
 +			access |= windows.FILE_LIST_DIRECTORY

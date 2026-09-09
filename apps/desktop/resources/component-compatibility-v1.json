@@ -1,11 +1,11 @@
 {
   "schemaVersion": 1,
-  "honeybeeVersion": "0.1.0-beta.9",
+  "honeybeeVersion": "0.1.0-beta.10",
   "workspaceStorage": [
     {
       "componentId": "workspace-storage",
-      "version": "0.0.0+cfa606fd4143.hb11",
-      "honeybeeVersion": "0.1.0-beta.9",
+      "version": "0.0.0+cfa606fd4143.hb12",
+      "honeybeeVersion": "0.1.0-beta.10",
       "platform": "win32",
       "architecture": "x64",
       "payloads": [
@@ -14,15 +14,15 @@
           "source": "bundled",
           "fileName": "unity-workspace-storage.exe",
           "byteLength": 4548608,
-          "sha256": "37cca08e8ea66f072caf91beccbd54d2888d25a37527b398886466060b07df47",
+          "sha256": "01c187941a2dc20271b7326601eb1a00e8d097b993ba16615fc27ee36caf86e3",
           "archive": "none"
         },
         {
           "role": "host",
           "source": "bundled",
           "fileName": "honeybee-workspace-storage-host.exe",
-          "byteLength": 5717504,
-          "sha256": "9b790d02c399d1b47aa94cab1863dfe092fb3a89775714b00f01ccc3ca6141aa",
+          "byteLength": 5720576,
+          "sha256": "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3",
           "archive": "none"
         }
       ]

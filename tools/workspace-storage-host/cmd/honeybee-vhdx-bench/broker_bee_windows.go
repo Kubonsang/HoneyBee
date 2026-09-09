@@ -13,13 +13,19 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
 
 // Uses the real broker implementation in an isolated process/store. It never
 // calls the installed pipe. Build with the reviewed storage overlay in GOWORK.
-func runBrokerBee(root, source, unity, testplay string) (err error) {
+func runBrokerBee(root, source, unity, testplay string, compression ...bool) (err error) {
+	compressed := len(compression) > 0 && compression[0]
+	protocol := "broker-bee-v1"
+	if compressed {
+		protocol = "broker-bee-compressed-v1"
+	}
 	if err = validateRoot(root); err != nil {
 		return err
 	}
@@ -39,8 +45,9 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 		return err
 	}
 	var phases []capacityPhase
+	var phaseMu sync.Mutex
 	defer func() {
-		status := map[string]any{"ok": err == nil, "protocol": "broker-bee-v1", "phases": phases, "finishedAt": time.Now().UTC()}
+		status := map[string]any{"ok": err == nil, "protocol": protocol, "phases": phases, "finishedAt": time.Now().UTC()}
 		if err != nil {
 			status["error"] = err.Error()
 		}
@@ -136,7 +143,7 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 	if e != nil {
 		return e
 	}
-	if err = save(filepath.Join(root, "campaign.json"), map[string]any{"protocol": "broker-bee-v1", "parent": parent.Parent, "source": source, "unity": unity, "testplay": testplay}); err != nil {
+	if err = save(filepath.Join(root, "campaign.json"), map[string]any{"protocol": protocol, "parent": parent.Parent, "source": source, "unity": unity, "testplay": testplay}); err != nil {
 		return err
 	}
 	type sample struct {
@@ -144,6 +151,27 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 		lease                        workspace.Lease
 	}
 	var samples []sample
+	checkCompression := func(s sample, phase string) error {
+		if !compressed {
+			return nil
+		}
+		output := filepath.Join(root, phase+"-compression.json")
+		if e := saveFootprintCompression(filepath.Join(s.external, "data"), output); e != nil {
+			return e
+		}
+		var state struct{ Files, CompressedFiles, Directories, CompressedDirectories int }
+		data, e := os.ReadFile(output)
+		if e != nil {
+			return e
+		}
+		if e = json.Unmarshal(data, &state); e != nil {
+			return e
+		}
+		if state.Files == 0 || state.Files != state.CompressedFiles || state.Directories != state.CompressedDirectories {
+			return errors.New("product Bee compression/inheritance missing")
+		}
+		return nil
+	}
 	runTests := func(s sample, round int) error {
 		if e := writeCapacityProbe(s.project, 4000+round); e != nil {
 			return e
@@ -154,8 +182,13 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 			p, e := runCapacityPhase(ctx, root, name, s.child, s.external, func() (string, int, int, error) {
 				return capacityTests(ctx, testplay, s.project, platform, filepath.Join(root, name))
 			})
+			phaseMu.Lock()
 			phases = append(phases, p)
+			phaseMu.Unlock()
 			if e != nil {
+				return e
+			}
+			if e = checkCompression(s, name); e != nil {
 				return e
 			}
 		}
@@ -181,6 +214,9 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 		s.lease = *v.Lease
 		s.child = filepath.Join(cfg.StoreRoot, sid, "children", s.lease.LeaseID+".vhdx")
 		s.external = strings.TrimSuffix(s.child, ".vhdx") + ".bee"
+		if err = checkCompression(s, id+"-created"); err != nil {
+			return err
+		}
 		cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:HB_BEE_PROJECT_LIBRARY -Target $env:HB_BEE_MOUNT | Out-Null`)
 		cmd.Env = append(os.Environ(), "HB_BEE_PROJECT_LIBRARY="+filepath.Join(s.project, "Library"), "HB_BEE_MOUNT="+s.lease.MountPath)
 		cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
@@ -209,30 +245,67 @@ func runBrokerBee(root, source, unity, testplay string) (err error) {
 		}
 		samples = append(samples, s)
 	}
-	broker, e = workspace.NewBroker(cfg, workspace.NewNative())
-	if e != nil {
-		return e
+	lastRound := 3
+	if compressed {
+		lastRound = 5
 	}
-	for i, s := range samples {
-		v, e := call(workspace.Request{Operation: workspace.OperationAttachRetained, RunID: s.id, WorkspaceID: s.id, ClientPID: os.Getpid()})
+	for round := 3; round <= lastRound; round++ {
+		broker, e = workspace.NewBroker(cfg, workspace.NewNative())
 		if e != nil {
 			return e
 		}
-		samples[i].lease = *v.Lease
-		if err = runTests(samples[i], 3); err != nil {
-			return err
+		for i, s := range samples {
+			v, e := call(workspace.Request{Operation: workspace.OperationAttachRetained, RunID: s.id, WorkspaceID: s.id, ClientPID: os.Getpid()})
+			if e != nil {
+				return e
+			}
+			samples[i].lease = *v.Lease
+			if !compressed {
+				if err = runTests(samples[i], round); err != nil {
+					return err
+				}
+			}
+		}
+		if compressed {
+			results := make(chan error, len(samples))
+			for _, s := range samples {
+				go func(s sample) { results <- runTests(s, round) }(s)
+			}
+			for range samples {
+				err = errors.Join(err, <-results)
+			}
+			if err != nil {
+				return err
+			}
+			if err = save(filepath.Join(root, fmt.Sprintf("concurrent-round-%d.json", round)), map[string]any{"ok": true, "round": round, "children": len(samples)}); err != nil {
+				return err
+			}
+			if round < lastRound {
+				for _, s := range samples {
+					if _, err = call(workspace.Request{Operation: workspace.OperationRelease, LeaseID: s.lease.LeaseID, RetainChild: true}); err != nil {
+						return err
+					}
+				}
+			}
 		}
 	}
 	for i, s := range samples {
 		if i == 1 {
-			if err = runTests(s, 4); err != nil {
+			if err = runTests(s, lastRound+1); err != nil {
 				return err
 			}
 		}
 		if _, err = call(workspace.Request{Operation: workspace.OperationPrepareRetainedRemoval, RunID: s.id, WorkspaceID: s.id, TransactionID: "remove-" + s.id}); err != nil {
 			return err
 		}
-		if _, err = call(workspace.Request{Operation: workspace.OperationCommitRetainedRemoval, RunID: s.id, TransactionID: "remove-" + s.id}); err != nil {
+		removed, removalErr := call(workspace.Request{Operation: workspace.OperationCommitRetainedRemoval, RunID: s.id, TransactionID: "remove-" + s.id})
+		if removalErr != nil {
+			return removalErr
+		}
+		if removed.Removal == nil {
+			return errors.New("missing removal receipt")
+		}
+		if err = save(filepath.Join(root, s.id+"-removal.json"), map[string]any{"runId": removed.Removal.RunID, "leaseId": removed.Removal.LeaseID, "childPath": s.child, "state": removed.Removal.State}); err != nil {
 			return err
 		}
 		if err = os.Remove(filepath.Join(s.project, "Library")); err != nil {

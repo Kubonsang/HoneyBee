@@ -12,6 +12,7 @@ import { digest, healthy, inside, inventory, noLinks } from "./shared-host-guard
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const [phase, argument, legacyParent] = process.argv.slice(2);
+const compressionUpgrade = process.env.HONEYBEE_BEE_COMPRESSION_UPGRADE === "1";
 assert(["prepare", "upgrade-check", "restart-check", "resume-reboot", "cleanup"].includes(phase));
 assert(argument && path.isAbsolute(argument));
 const root = inside(path.join(repo, "output"), path.resolve(argument));
@@ -19,7 +20,9 @@ await noLinks(root);
 const statePath = path.join(root, "state.json");
 const tools = path.join(
   repo,
-  "apps/desktop/release-bee-preview/HoneyBee-win32-x64/resources/win32-x64",
+  compressionUpgrade
+    ? "apps/desktop/release-bee-compressed-preview/HoneyBee-win32-x64/resources/win32-x64"
+    : "apps/desktop/release-bee-preview/HoneyBee-win32-x64/resources/win32-x64",
 );
 const host = path.join(tools, "honeybee-workspace-storage-host.exe");
 const client = path.join(tools, "unity-workspace-storage.exe");
@@ -31,9 +34,11 @@ const registryPath = path.join(
   process.env.LOCALAPPDATA,
   "HoneyBee/workspace-core/workspace-registry-v2.json",
 );
-const oldVersion = "0.0.0+c238f283ded2.hb10";
-const newVersion = "0.0.0+cfa606fd4143.hb11";
-const newHostHash = "9b790d02c399d1b47aa94cab1863dfe092fb3a89775714b00f01ccc3ca6141aa";
+const oldVersion = compressionUpgrade ? "0.0.0+cfa606fd4143.hb11" : "0.0.0+c238f283ded2.hb10";
+const newVersion = compressionUpgrade ? "0.0.0+cfa606fd4143.hb12" : "0.0.0+cfa606fd4143.hb11";
+const newHostHash = compressionUpgrade
+  ? "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3"
+  : "9b790d02c399d1b47aa94cab1863dfe092fb3a89775714b00f01ccc3ca6141aa";
 const layout = "external-bee-dag-v1";
 const json = async (p) => JSON.parse((await readFile(p, "utf8")).replace(/^\uFEFF/u, ""));
 const exists = async (p) =>
@@ -45,12 +50,18 @@ async function hashFile(p) {
   for await (const chunk of createReadStream(p)) h.update(chunk);
   return h.digest("hex");
 }
-function run(exe, args, input) {
+function run(exe, args, input, environment = {}) {
   return new Promise((resolve, reject) => {
     const child = execFile(
       exe,
       args,
-      { cwd: repo, windowsHide: true, timeout: 180_000, maxBuffer: 8 << 20 },
+      {
+        cwd: repo,
+        windowsHide: true,
+        timeout: 180_000,
+        maxBuffer: 8 << 20,
+        env: { ...process.env, ...environment },
+      },
       (error, stdout, stderr) => {
         if (error) reject(new Error(`${path.basename(exe)}: ${stdout || stderr || error.message}`));
         else resolve(stdout);
@@ -158,6 +169,23 @@ async function checkMounted(c, lease) {
     assert.equal(await exists(path.join(j.mountPath, "Bee/test.dag")), false);
     const owner = path.join(cache, "owner.json");
     assert.equal(await hashFile(owner), c.ownerHash);
+    if (c.compressed) {
+      for (const relative of ["data", "data/cache.bin", "data/private.txt"]) {
+        const compressed = JSON.parse(
+          await run(
+            "powershell.exe",
+            [
+              "-NoProfile",
+              "-Command",
+              "[bool]((Get-Item -LiteralPath $env:HB_COMPRESSION_CHECK -Force).Attributes -band [IO.FileAttributes]::Compressed) | ConvertTo-Json",
+            ],
+            undefined,
+            { HB_COMPRESSION_CHECK: path.join(cache, relative) },
+          ),
+        );
+        assert.equal(compressed, true, "New private Bee compression/inheritance was lost");
+      }
+    }
   }
   await call("heartbeat", { leaseId: c.leaseId });
 }
@@ -175,6 +203,7 @@ async function create(parentKey, external) {
     leaseId: response.lease.leaseId,
     parentKey,
     external,
+    compressed: compressionUpgrade && external,
     marker: randomUUID() + "\n",
     checks: [],
   };
@@ -287,6 +316,7 @@ if (phase === "prepare") {
   assert.equal(parent.compatibilityKey.layout, undefined);
   state = {
     schemaVersion: 1,
+    compressionUpgrade,
     baseline,
     registryHash: await hashFile(registryPath),
     userRoot,
@@ -300,6 +330,7 @@ if (phase === "prepare") {
   state.prepared = true;
 } else {
   state = await json(statePath);
+  assert.equal(state.compressionUpgrade ?? false, compressionUpgrade, "Upgrade profile mismatch");
   assert(state.prepared);
   await installed(newVersion);
   await guard();
@@ -307,7 +338,7 @@ if (phase === "prepare") {
     assert(!state.upgradePassed && state.children.length === 1);
     const hello = await call("hello");
     assert(hello.parentLayouts.includes(layout));
-    await cycle(state.children[0], "hb10-to-hb11");
+    await cycle(state.children[0], compressionUpgrade ? "hb11-to-hb12" : "hb10-to-hb11");
     state.externalKey = digest(Buffer.from(`HoneyBee installed Bee fixture ${randomUUID()}`));
     await save();
     const begin = JSON.parse(
@@ -361,7 +392,14 @@ if (phase === "prepare") {
     state.upgradePassed = true;
   } else if (phase === "restart-check") {
     assert(state.upgradePassed && !state.restartPassed);
-    const restart = await json(path.join(repo, "output/external-bee-scm-restart.json"));
+    const restart = await json(
+      path.join(
+        repo,
+        compressionUpgrade
+          ? "output/bee-compression-scm-restart.json"
+          : "output/external-bee-scm-restart.json",
+      ),
+    );
     assert(
       restart.ok && restart.beforePid !== restart.afterPid,
       "Recorded SCM restart is required",

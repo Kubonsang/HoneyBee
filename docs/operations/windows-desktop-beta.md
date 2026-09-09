@@ -1,14 +1,14 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 9 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
+HoneyBee Desktop 0.1.0 Beta 10 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
 same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
 work.
 
 ## First start
 
 Extract the complete archive and keep its `resources` directory beside the executable. The archive
-includes `STORAGE-SETUP.md` for the qualified hb10-to-hb11 service upgrade. It requires
-storage version `0.0.0+cfa606fd4143.hb11`; extracting the ZIP does not update that service.
+includes `STORAGE-SETUP.md` for the qualified hb11-to-hb12 service upgrade. It requires
+storage version `0.0.0+cfa606fd4143.hb12`; extracting the ZIP does not update that service.
 Fresh installation and older migrations are not qualified by this release. For Desktop, use
 `resources\win32-x64\honeybee-workspace-storage-host.exe` in place of the CLI guide's
 `dist\honeybee-workspace-storage-host.exe`; the service/root/user and upgrade requirements are the
@@ -57,7 +57,7 @@ junction is never replaced or deleted automatically.
 
 ## Reboot recovery
 
-Beta 9 prepares parents with a shared immutable Bee seed and creates a separate
+Beta 10 prepares parents with a shared immutable Bee seed and creates a separate
 private Bee cache for each new Workspace. Refresh the parent cache before creating
 Workspaces to adopt this layout. Existing parents and children retain their layout;
 they do not shrink automatically. The Storage view separates child VHDX, private

@@ -129,6 +129,9 @@ func archiveStartupSample(root, evidence string, row capacitySample, suffix ...s
 		}
 	}
 	cmd = exec.CommandContext(ctx, "python", "scripts/benchmarks/vhdx/archive_capacity.py", root, archive, "--sample", name)
+	if strings.HasPrefix(row.Mode, "E-fp-") && row.AllocationMeasurement != "native-allocated-v2" {
+		cmd.Args = append(cmd.Args, "--exploratory")
+	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("sample archive: %w: %.500s", err, out)

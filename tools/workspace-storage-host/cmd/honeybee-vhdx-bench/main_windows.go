@@ -62,7 +62,12 @@ func main() {
 	trace := flag.Bool("trace-writes", false, "capture a separate WPR FileIO trace; exclude traced timings from release gates")
 	capacity := flag.Bool("capacity", false, "run the isolated five-candidate capacity campaign")
 	startup := flag.Bool("startup-study", false, "run the bounded external Bee startup study")
+	footprint := flag.Bool("footprint-study", false, "compare Beta 9 with compressed Bee and smaller volumes in an isolated bounded campaign")
+	footprintDiagnostic := flag.Bool("footprint-diagnostic", false, "trace an isolated Beta 9 sample after a terminal footprint study")
+	footprintConfirm := flag.Bool("footprint-confirm", false, "confirm screened footprint policies with native allocation accounting")
+	footprintEditTrace := flag.Bool("footprint-edit-diagnostic", false, "trace one edit cycle with detached before/after allocation snapshots")
 	brokerBee := flag.Bool("broker-bee", false, "validate the packaged external Bee broker with frozen Unity source")
+	brokerBeeCompressed := flag.Bool("broker-bee-compressed", false, "validate compressed Bee creation, concurrent retained cycles and survivor with the product broker")
 	startupLifecycle := flag.Bool("startup-lifecycle", false, "validate the accepted approximate-size DAG candidate across concurrent retained lifecycles")
 	startupTrace := flag.String("startup-trace", "", "trace one diagnostic sample against completed startup-study parents")
 	startupRefine := flag.Bool("startup-refine", false, "test DAG-only refinement after a completed startup study")
@@ -74,8 +79,36 @@ func main() {
 	sampleMode := flag.String("capacity-sample", "", "pilot one new sample against an existing isolated campaign's parents")
 	iteration := flag.Int("iteration", 1, "unique sample iteration for --capacity-sample")
 	flag.Parse()
-	if *brokerBee {
-		if err := runBrokerBee(*root, *source, *unity, *testplay); err != nil {
+	if *footprintEditTrace {
+		if err := runFootprintEditDiagnostic(*root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *footprintConfirm {
+		if err := runFootprintConfirm(*root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *footprintDiagnostic {
+		if err := runFootprintDiagnostic(*root); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *footprint {
+		if err := runFootprintStudy(*root, *source, *unity, *testplay); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *brokerBee || *brokerBeeCompressed {
+		if err := runBrokerBee(*root, *source, *unity, *testplay, *brokerBeeCompressed); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

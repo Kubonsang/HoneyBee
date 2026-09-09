@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 const workspaceStorageCommit = "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa";
-const workspaceStorageVersion = "0.0.0+cfa606fd4143.hb11";
+const workspaceStorageVersion = "0.0.0+cfa606fd4143.hb12";
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");

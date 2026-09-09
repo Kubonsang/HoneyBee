@@ -133,6 +133,7 @@ def analyze(stream, file_bytes):
     payload_blocks = []
     for index in range(payload_count):
         owned_before = owned
+        sector_runs = []
         state, offset = entry(index + index // ratio)
         states[state] += 1
         if state not in (0, 1, 2, 3, 6, 7):
@@ -144,6 +145,7 @@ def analyze(stream, file_bytes):
         if state == 6:
             owned += min(block, virtual - index * block)
             one_mib_blocks += block // MIB
+            sector_runs = [[0, min(block, virtual - index * block) // sector]]
         elif state == 7:
             chunk = index // ratio
             if chunk not in bitmaps:
@@ -157,11 +159,20 @@ def analyze(stream, file_bytes):
             length = block // sector // 8
             bits = bitmap[start:start + length]
             owned += int.from_bytes(bits, 'little').bit_count() * sector
+            run_start = None
+            for bit in range(length * 8 + 1):
+                present = bit < length * 8 and bool(bits[bit // 8] & (1 << (bit % 8)))
+                if present and run_start is None:
+                    run_start = bit
+                if not present and run_start is not None:
+                    sector_runs.append([run_start, bit - run_start])
+                    run_start = None
             step = MIB // sector // 8
             one_mib_blocks += sum(any(bits[p:p + step]) for p in range(0, len(bits), step))
         if state in (6, 7):
             payload_blocks.append({'virtualBlockIndex': index,
-                                   'childSourcedSectorBytes': owned - owned_before})
+                                   'childSourcedSectorBytes': owned - owned_before,
+                                   'childSectorRuns': sector_runs})
     extents.extend([(0, MIB), (meta_offset, meta_offset + meta_length), (bat_offset, bat_offset + bat_length)])
     log_length, log_offset = struct.unpack_from('<IQ', header, 68)
     if log_length:

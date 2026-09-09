@@ -1,5 +1,98 @@
 # Child VHDX allocation benchmark
 
+## Beta 9 footprint study
+
+See the [2026-09-09 measured results](../../../docs/validation/workspace-footprint.md)
+for the compression/capacity decision, trace attribution and verified cleanup.
+
+`--footprint-study` compares the current E-dag behavior with native NTFS
+compression of its private external Bee and 32/16/8 GiB virtual disks. It does
+not compress VHDX files or change the installed broker, user workspaces, Windows
+last-access policy, or hibernation settings. Use a frozen authored export with
+no Library, Unity 6000.6.0f1 and the existing GNF capacity probe/test contract.
+
+```powershell
+go -C tools/workspace-storage-host build -o ../../output/honeybee-footprint-study.exe ./cmd/honeybee-vhdx-bench
+# Elevated terminal, from repository root; use a NEW root under tmp.
+./output/honeybee-footprint-study.exe --footprint-study --root "$PWD/tmp/footprint-study" `
+  --source '<frozen-export>' --unity '<Unity.exe>' --testplay '<testplay.exe>'
+```
+
+The runner preserves Tundra state and regenerates the DAG for every policy.
+Compression and independent Bee copying count toward preparation time. Two fresh
+one-cycle samples screen each policy, reversing order in the second round.
+If full Bee compression misses a timing gate, artifacts-only compression gets
+two samples. Independently passing compression/geometry candidates also receive
+a combined pilot. Every candidate needs at least 5% combined savings to advance
+to three fresh five-cycle samples alongside contemporaneous E-dag controls.
+
+Qualification requires at least 20% combined cache savings and no more than 10%
+median regression in preparation-plus-first-open, first-open, reopen, edit/test
+or PlayMode. Observed combined peaks must not exceed control; child peaks are
+reported separately as a component. Child
+allocation is sampled at 250 ms; combined allocation at approximately one second
+and phase checkpoints. These are observations, not absolute peak bounds.
+The smallest qualifying candidate wins; within 5% of the smallest combined
+allocation, prefer lower preparation-plus-first-open latency. Only a qualifying
+winner proceeds to two independent children, three concurrent reattachments and
+a surviving-child test after removing its peer.
+
+Ordinary files use `FILE_STANDARD_INFO.AllocationSize`. Compressed/sparse files
+use `GetCompressedFileSizeW`. The latter reports EOF for ordinary files, so it
+cannot replace the first counter. Samples identify corrected accounting as
+`native-allocated-v2`. An older completed campaign can explicitly obtain fresh
+confirmation with `--footprint-confirm --root '<existing-root>'`; prior evidence
+is retained and never silently relabeled. Confirmation refuses duplicate starts.
+
+The same 35 GiB initial free-space requirement, 20 GiB reserve and 15 GiB
+experiment budget as the startup study apply. Samples are archived, hash/CRC
+verified and reclaimed only after confirming detachment and exact owned paths.
+Parent/source fixtures remain until final analysis and verified campaign cleanup.
+
+`--footprint-diagnostic --root '<terminal-root>'` creates one separately traced
+E-dag sample, excluded from timing gates. Complete Library extent inventories
+and owned VHDX sector runs distinguish regular data, directory/system metadata,
+mixed blocks and unresolved sectors. NTFS v3 metadata records are queried with
+read-only `FSCTL_GET_NTFS_FILE_RECORD`; inaccessible or partial records remain
+explicit unknowns. No filesystem repair or metadata rewriting is performed.
+
+```powershell
+python scripts/benchmarks/vhdx/analyze_footprint.py '<root>' --output output/footprint-attribution.json
+python scripts/benchmarks/vhdx/correlate_footprint_writes.py '<root>' `
+  --xperf '<xperf.exe>' --output output/footprint-write-correlation.json
+```
+
+Write correlation translates offsets only for matching before/after extent maps.
+It does not establish intermediate file identity, exclusive first-touch writes,
+or causal amplification. A directory is eligible for a separate experiment only
+when the conservative exclusive-block screening estimate, minus the entire
+private directory copy, reaches 50 MB. Otherwise no directory is selected.
+The first campaign does not automatically introduce an unmeasured extra layout.
+
+After terminal confirmation, `--footprint-edit-diagnostic --root '<root>'`
+captures one independent edit/import plus EditMode/PlayMode cycle. Its before
+inventory and sector bitmap are collected while detached or attached read-only;
+the after inventory uses another read-only attachment. Analyze its trace with
+`correlate_footprint_writes.py --phase edit` to distinguish newly allocated
+payload blocks from blocks the child already owned before editing. First-open
+and edit-cycle tracing are separate and excluded from qualification timings.
+
+Once both analysis and evidence validation finish, use
+`cleanup-footprint.ps1 -Root '<root>' -Archive '<checkout>/output/footprint-evidence.zip'`.
+It refuses active experiment processes, unexpected/nested disks, linked paths,
+changed parent images or references from the user registry. It verifies all
+sample archives and the final campaign archive before removing the experiment
+root, then records actual free-space recovery. The input authored export is
+preserved because it may be supplied by the caller rather than created by this
+runner.
+
+Native metadata parsing follows Microsoft's
+[file record header](https://learn.microsoft.com/en-us/windows/win32/devnotes/file-record-segment-header)
+and [attribute mapping pairs](https://learn.microsoft.com/en-us/windows/win32/devnotes/attribute-record-header).
+NTFS compression uses the standard mutable-file mechanism documented by
+[Microsoft](https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/compact),
+not `/EXE` compression intended for files that are seldom modified.
+
 ## External Bee startup study
 
 `--startup-study` runs a separate `startup-v2` experiment with the current external

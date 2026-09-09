@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.0-beta.10 - 2026-09-09
+
+- Compress newly seeded private Bee data with native NTFS compression in hb12.
+  New files inherit compression; existing caches retain their state on attachment.
+- Reuse external-Bee parent seeds without rewriting parents or VHDX containers.
+- Measure 483.80 to 392.31 MB combined cache (18.91% reduction) in the paired GNF
+  study, with timing regressions within 10%. The original 20% gate remains missed.
+- Validate 572 GNF Unity tests, native compressed/uncompressed cache lifecycle,
+  installed hb11-to-hb12 upgrade, service restart and physical Windows reboot.
+- Record interrupted installer reconciliation and the limited preservation scope;
+  remove all disposable installed child Workspaces after reboot validation.
+- Add reproducible footprint, allocation and write-correlation experiments, with
+  verified archival and scoped cleanup of generated experiment data.
+
 ## 0.1.0-beta.9 - 2026-09-09
 
 - Prepare new Library parents with an immutable Bee seed and give each Workspace

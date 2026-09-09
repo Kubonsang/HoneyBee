@@ -49,7 +49,13 @@ compaction content checks passed. See the
 
 Existing children are not rewritten or shrunk by the change.
 
-## Local external Bee overlay (hb11)
+## Local external Bee overlay (hb12)
+
+The current overlay adds native NTFS compression to new private Bee data before
+granting client write access. Existing retained caches are reused as-is, and
+parent seeds/VHDX files are preserved. The layout and parent key do not change.
+See [compression integration and validation](../../docs/validation/bee-compression-product.md).
+The hb11 installation history below remains the earlier baseline.
 
 `external-bee.patch` implements broker-managed `external-bee-dag-v1` parents,
 private child caches and lifecycle/accounting support. Its exact base is

@@ -106,6 +106,12 @@ func graphSeedFile(name string) bool {
 }
 
 func applyStartupPolicy(ctx context.Context, policy, mount, external, seed string) error {
+	if opts, ok := ctx.Value(footprintKey{}).(footprintOptions); ok {
+		if err := applyStartupPolicy(context.WithValue(ctx, footprintKey{}, nil), "E-dag", mount, external, seed); err != nil {
+			return err
+		}
+		return compressFootprintBee(external, opts.Compression)
+	}
 	if ctx.Value(startupKey{}) == nil {
 		return nil
 	}

@@ -30,23 +30,25 @@ type capacityPhase struct {
 	Child        storage.FileUsage `json:"child"`
 	External     storage.FileUsage `json:"external"`
 	ObservedPeak int64             `json:"observedPeakAllocatedBytes"`
+	CombinedPeak int64             `json:"observedCombinedPeakAllocatedBytes,omitempty"`
 	TestRunID    string            `json:"testRunId,omitempty"`
 	Total        int               `json:"total,omitempty"`
 	Passed       int               `json:"passed,omitempty"`
 }
 type capacitySample struct {
-	PreparationMS int64             `json:"preparationMs,omitempty"`
-	ReadyMS       int64             `json:"readyMs,omitempty"`
-	Mode          string            `json:"mode"`
-	Iteration     int               `json:"iteration"`
-	Child         string            `json:"child"`
-	Parent        string            `json:"parent"`
-	External      string            `json:"externalPath,omitempty"`
-	Geometry      storage.SizeInfo  `json:"geometry"`
-	Phases        []capacityPhase   `json:"phases"`
-	Detached      storage.FileUsage `json:"detached"`
-	Verified      storage.FileUsage `json:"afterReadonlyVerification"`
-	Error         string            `json:"error,omitempty"`
+	AllocationMeasurement string            `json:"allocationMeasurement,omitempty"`
+	PreparationMS         int64             `json:"preparationMs,omitempty"`
+	ReadyMS               int64             `json:"readyMs,omitempty"`
+	Mode                  string            `json:"mode"`
+	Iteration             int               `json:"iteration"`
+	Child                 string            `json:"child"`
+	Parent                string            `json:"parent"`
+	External              string            `json:"externalPath,omitempty"`
+	Geometry              storage.SizeInfo  `json:"geometry"`
+	Phases                []capacityPhase   `json:"phases"`
+	Detached              storage.FileUsage `json:"detached"`
+	Verified              storage.FileUsage `json:"afterReadonlyVerification"`
+	Error                 string            `json:"error,omitempty"`
 }
 
 func treeUsage(root string) (usage storage.FileUsage, err error) {
@@ -63,7 +65,7 @@ func treeUsage(root string) (usage storage.FileUsage, err error) {
 		if info.IsDir() {
 			return nil
 		}
-		u, e := storage.FileUsageOf(p)
+		u, e := measuredFileUsage(p)
 		if e != nil {
 			return e
 		}
@@ -261,12 +263,15 @@ func runCapacityPhase(ctx context.Context, root, name, child, external string, f
 	phase.Name = name
 	stop := make(chan struct{})
 	type peakResult struct {
-		bytes int64
-		err   error
+		bytes    int64
+		combined int64
+		err      error
 	}
 	done := make(chan peakResult, 1)
 	go func() {
 		var result peakResult
+		_, footprint := ctx.Value(footprintKey{}).(footprintOptions)
+		var lastExternal time.Time
 		ticker := time.NewTicker(250 * time.Millisecond)
 		defer ticker.Stop()
 		for {
@@ -276,6 +281,16 @@ func runCapacityPhase(ctx context.Context, root, name, child, external string, f
 			}
 			if u.AllocatedBytes > result.bytes {
 				result.bytes = u.AllocatedBytes
+			}
+			if footprint && time.Since(lastExternal) >= time.Second {
+				x, e := footprintLiveUsage(external)
+				if e != nil {
+					result.err = e
+				}
+				if u.AllocatedBytes+x.AllocatedBytes > result.combined {
+					result.combined = u.AllocatedBytes + x.AllocatedBytes
+				}
+				lastExternal = time.Now()
 			}
 			select {
 			case <-stop:
@@ -291,11 +306,15 @@ func runCapacityPhase(ctx context.Context, root, name, child, external string, f
 	close(stop)
 	peak := <-done
 	phase.ObservedPeak = peak.bytes
+	phase.CombinedPeak = peak.combined
 	err = errors.Join(err, peak.err)
 	phase.Child, peak.err = storage.FileUsageOf(child)
 	err = errors.Join(err, peak.err)
 	phase.External, peak.err = treeUsage(external)
 	err = errors.Join(err, peak.err)
+	if ctx.Value(footprintKey{}) != nil && phase.Child.AllocatedBytes+phase.External.AllocatedBytes > phase.CombinedPeak {
+		phase.CombinedPeak = phase.Child.AllocatedBytes + phase.External.AllocatedBytes
+	}
 	if phase.Child.AllocatedBytes > phase.ObservedPeak {
 		phase.ObservedPeak = phase.Child.AllocatedBytes
 	}
@@ -342,6 +361,9 @@ func capacitySampleRun(ctx context.Context, root, frozen, unity, testplay, paren
 	project := filepath.Join(root, name)
 	child := filepath.Join(root, name+".vhdx")
 	row = capacitySample{Mode: mode, Iteration: iteration, Child: child, Parent: parent}
+	if _, ok := ctx.Value(footprintKey{}).(footprintOptions); ok {
+		row.AllocationMeasurement = "native-allocated-v2"
+	}
 	defer func() {
 		if err != nil {
 			row.Error = err.Error()
@@ -464,12 +486,23 @@ func capacitySampleRun(ctx context.Context, root, frozen, unity, testplay, paren
 		if e = saveCapacityExtents(verify, filepath.Join(root, name+"-extents.json"), row.External); e != nil {
 			return e
 		}
+		if _, ok := ctx.Value(footprintKey{}).(footprintOptions); ok {
+			if e = saveFootprintExtents(verify, filepath.Join(root, name+"-full-extents.json")); e != nil {
+				return e
+			}
+			if e = saveFootprintMetadata(ctx, a, filepath.Join(root, name+"-metadata.json")); e != nil {
+				return e
+			}
+		}
 		return saveCapacityVolume(ctx, a, filepath.Join(root, name+"-volume.json"))
 	})
 	if err != nil {
 		return
 	}
 	row.Verified, err = storage.FileUsageOf(child)
+	if _, ok := ctx.Value(footprintKey{}).(footprintOptions); ok && err == nil {
+		err = saveFootprintCompression(row.External, filepath.Join(root, name+"-compression.json"))
+	}
 	if row.Verified != row.Detached {
 		err = errors.Join(err, errors.New("readonly verification changed allocation"))
 	}

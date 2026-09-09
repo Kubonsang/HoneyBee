@@ -25,20 +25,21 @@ codex
 
 ## Status
 
-The current prerelease is [Beta 9](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.9).
-It separates each new Workspace's private Bee cache from its child VHDX while sharing
-an immutable seed. In the measured GNF workload, median child allocation is 357.56 MB
-and combined child plus Bee allocation is 510.98 MB. Authored files and shared parents
-are separate costs; existing Workspaces do not shrink automatically.
+The current prerelease is [Beta 10](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.10).
+It applies NTFS compression to the private Bee cache of newly created Workspaces.
+In the paired GNF study, combined child plus Bee allocation fell from 483.80 MB to
+392.31 MB (18.91% less), with measured timing regressions within 10%. Authored/Git
+files and shared parents are additional costs. Existing Workspaces do not shrink
+automatically; existing external-Bee parent seeds can be reused.
 
-Beta 9 requires storage component `0.0.0+cfa606fd4143.hb11`. The backed-up hb10-to-hb11
-upgrade, service restart, physical reboot and dirty-worktree repair checks passed;
-see the [installed validation record](docs/validation/external-bee-installed.md).
-Fresh service installation and older migrations remain outside this qualification.
-Reboot recovery is explicit: use **Repair** when status reports `repair-required`,
-and wait for `ready` before opening tools. The separate
-[performance report](docs/validation/external-bee-startup.md) preserves the missed
-historical 350 MB median gate; this release does not promise a 300 MB total Workspace.
+Beta 10 requires storage component `0.0.0+cfa606fd4143.hb12`. The hb11-to-hb12
+upgrade, service restart and physical reboot checks passed; see the
+[product validation record](docs/validation/bee-compression-product.md), including
+the interrupted-install recovery and preservation scope. Fresh service installation
+and older migrations remain outside this qualification. Use **Repair** when status
+reports `repair-required`, and wait for `ready` before opening tools.
+The [paired performance report](docs/validation/workspace-footprint.md) retains the
+missed 20% reduction gate; this release does not promise a 300 MB total Workspace.
 
 The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
 The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and

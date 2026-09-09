@@ -8,6 +8,23 @@ import zipfile
 
 
 class ArchiveTests(unittest.TestCase):
+    def test_superseded_footprint_accounting_requires_explicit_exploratory_archive(self):
+        with tempfile.TemporaryDirectory() as location:
+            root = Path(location) / 'campaign'
+            root.mkdir()
+            (root / 'campaign.json').write_text('{}')
+            (root / 'E-fp-base-10-sample.json').write_text(json.dumps({'mode': 'E-fp-base', 'iteration': 10}))
+            archive = Path(location) / 'sample.zip'
+            cmd = [sys.executable, str(Path(__file__).with_name('archive_capacity.py')),
+                   str(root), str(archive), '--sample', 'E-fp-base-10']
+            rejected = subprocess.run(cmd, capture_output=True, text=True)
+            self.assertNotEqual(rejected.returncode, 0)
+            self.assertIn('footprint-accounting-confirmation-required', rejected.stderr)
+            self.assertFalse(archive.exists())
+            kept = subprocess.run(cmd + ['--exploratory'], capture_output=True, text=True)
+            self.assertEqual(kept.returncode, 0, kept.stderr)
+            self.assertTrue(json.loads(archive.with_suffix('.receipt.json').read_text())['exploratoryOnly'])
+
     def test_sample_evidence_is_verified_without_library_and_cannot_overwrite(self):
         with tempfile.TemporaryDirectory() as location:
             root = Path(location) / 'campaign'

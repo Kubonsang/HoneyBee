@@ -14,6 +14,7 @@ def main():
     parser.add_argument('root', type=Path)
     parser.add_argument('archive', type=Path)
     parser.add_argument('--sample', help='Archive one terminal sample before reclaiming its caches')
+    parser.add_argument('--exploratory', action='store_true', help='Preserve a footprint sample with superseded allocation accounting; never qualification evidence')
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
     if args.sample and (Path(args.sample).name != args.sample or '/' in args.sample or '\\' in args.sample or args.sample in ('.', '..')):
@@ -21,6 +22,10 @@ def main():
     terminal = args.sample + '-sample.json' if args.sample else 'status.json'
     if not (root / terminal).is_file() or not (root / 'campaign.json').is_file():
         raise ValueError('campaign must have a terminal status and identity')
+    if args.sample:
+        sample = json.loads((root / terminal).read_text(encoding='utf-8-sig'))
+        if sample.get('mode', '').startswith('E-fp-') and 10 <= sample.get('iteration', -1) <= 12 and sample.get('allocationMeasurement') != 'native-allocated-v2' and not args.exploratory:
+            raise SystemExit('footprint-accounting-confirmation-required: ordinary-file EOF is not allocated bytes; archive explicitly as exploratory and use fresh native-allocated-v2 confirmation')
     if args.archive.exists():
         raise ValueError('archive already exists')
     paths = [p for p in root.iterdir() if p.is_file() and p.suffix in ('.json', '.log', '.traceevents', '.etl')
@@ -72,6 +77,7 @@ def main():
     with args.archive.open('rb') as source:
         digest = hashlib.file_digest(source, 'sha256').hexdigest()
     receipt = {'root': str(root), 'archive': str(args.archive.resolve()), 'sha256': digest,
+               'exploratoryOnly': args.exploratory,
                'sample': args.sample,
                'files': len(inventory), 'verified': True, 'archiveBytes': args.archive.stat().st_size,
                'verifiedAt': datetime.now(timezone.utc).isoformat()}

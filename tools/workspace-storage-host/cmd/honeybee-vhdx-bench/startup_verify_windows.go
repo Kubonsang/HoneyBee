@@ -103,6 +103,17 @@ func validateRetainedStartupRows(root string, rows []capacitySample) error {
 	}
 	seen := map[string]bool{}
 	for _, row := range rows {
+		if strings.HasPrefix(row.Mode, "E-fp-") {
+			if err := validateFootprintRetained(root, row); err != nil {
+				return err
+			}
+			identity := strings.ToLower(filepath.Clean(row.Child))
+			if seen[identity] {
+				return errors.New("retained samples must be independent")
+			}
+			seen[identity] = true
+			continue
+		}
 		switch row.Mode {
 		case "E-control", "E-metadata", "E-pid", "E-graph", "E-dag":
 		default:
