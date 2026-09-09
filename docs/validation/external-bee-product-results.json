@@ -1,0 +1,98 @@
+{
+  "protocol": "broker-bee-v1",
+  "ok": true,
+  "passedTests": 364,
+  "samples": [
+    {
+      "name": "one",
+      "removed": true,
+      "lastObservedChildBytes": 340787200,
+      "lastObservedExternalLogicalBytes": 156125964
+    },
+    {
+      "name": "two",
+      "removed": true,
+      "lastObservedChildBytes": 341835776,
+      "lastObservedExternalLogicalBytes": 156225566
+    }
+  ],
+  "runs": [
+    {
+      "name": "one-cycle1-edit_mode",
+      "runId": "20260909-034637-7c4e1f6c",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle1-play_mode",
+      "runId": "20260909-034651-73bb321d",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle2-edit_mode",
+      "runId": "20260909-034724-a427e133",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle2-play_mode",
+      "runId": "20260909-034738-9a3b90ec",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle1-edit_mode",
+      "runId": "20260909-034906-d27a0e26",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle1-play_mode",
+      "runId": "20260909-034919-37f18f2b",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle2-edit_mode",
+      "runId": "20260909-034951-5cb04481",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle2-play_mode",
+      "runId": "20260909-035005-70a902e6",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle3-edit_mode",
+      "runId": "20260909-035043-2e2deb25",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle3-play_mode",
+      "runId": "20260909-035102-38848063",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle3-edit_mode",
+      "runId": "20260909-035137-0a10ad48",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle3-play_mode",
+      "runId": "20260909-035157-31493798",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle4-edit_mode",
+      "runId": "20260909-035232-568ec933",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle4-play_mode",
+      "runId": "20260909-035246-e873c897",
+      "passed": 15
+    }
+  ],
+  "rebootTested": false,
+  "capacityQualified": false,
+  "limits": [
+    "Phase observations precede final detach; this is not a capacity qualification.",
+    "External Bee phase figures are file lengths, not allocated-cluster measurements.",
+    "Isolated in-process broker; the installed service was not replaced."
+  ]
+}

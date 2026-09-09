@@ -17,6 +17,12 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
+import {
+  listWorkspaceBaseRefs,
+  listWorkspaceBaseHistory,
+  resolveWorkspaceBase,
+} from "./workspace-bases.js";
+import { measureWorkspaceUsage, type WorkspaceUsageReportV1 } from "./workspace-usage.js";
 import { WindowsWorkspaceStorage } from "./workspace-storage.js";
 import { runWorkspaceDoctor, type WorkspaceDoctorOptions } from "./workspace-doctor.js";
 import {
@@ -102,6 +108,7 @@ const libraryBusyError = (error: unknown): boolean =>
   ["EACCES", "EBUSY", "EPERM"].includes(errorCode(error) ?? "");
 
 export interface HoneyBeeWorkspaceCoreOptions {
+  readonly usageCommand?: string;
   readonly dataRoot?: string;
   readonly storage?: WorkspaceStoragePort;
 }
@@ -122,10 +129,12 @@ export interface WorkspaceCreateInput {
 }
 
 export class HoneyBeeWorkspaceCore {
+  readonly #usageCommand: string | undefined;
   readonly #registry: WorkspaceRegistryStore;
   readonly #storage: WorkspaceStoragePort;
 
   public constructor(options: HoneyBeeWorkspaceCoreOptions = {}) {
+    this.#usageCommand = options.usageCommand;
     const dataRoot = path.resolve(options.dataRoot ?? defaultDataRoot());
     this.#registry = new WorkspaceRegistryStore(dataRoot);
     this.#storage = options.storage ?? new WindowsWorkspaceStorage();
@@ -133,6 +142,38 @@ export class HoneyBeeWorkspaceCore {
 
   public get registryPath(): string {
     return this.#registry.path;
+  }
+
+  public async workspaceBaseRefs(projectReference: string, offset = 0) {
+    return listWorkspaceBaseRefs((await this.#project(projectReference)).repositoryRoot, offset);
+  }
+
+  public async workspaceBaseHistory(projectReference: string, reference: string, offset = 0) {
+    return listWorkspaceBaseHistory(
+      (await this.#project(projectReference)).repositoryRoot,
+      reference,
+      offset,
+    );
+  }
+
+  public async resolveWorkspaceBase(projectReference: string, reference: string) {
+    return resolveWorkspaceBase((await this.#project(projectReference)).repositoryRoot, reference);
+  }
+
+  public async workspaceUsage(
+    reference?: string,
+    projectReference?: string,
+  ): Promise<WorkspaceUsageReportV1> {
+    const registry = await this.#registry.read();
+    const project =
+      projectReference === undefined ? undefined : await this.#project(projectReference);
+    const workspaces =
+      reference === undefined
+        ? registry.workspaces.filter(
+            (item) => project === undefined || item.projectId === project.projectId,
+          )
+        : [await this.#workspace(reference, projectReference)];
+    return measureWorkspaceUsage(workspaces, registry.projects, this.#usageCommand);
   }
 
   public async initProject(input: ProjectInitInput): Promise<ProjectRecordV2> {
@@ -266,14 +307,18 @@ export class HoneyBeeWorkspaceCore {
       .update(
         JSON.stringify({
           schemaVersion: 1,
-          kind: "honeybee-library-only-v1",
+          kind: "honeybee-external-bee-dag-v1",
           seedCommit,
           unityRelativePath: project.unityRelativePath.replaceAll("\\", "/"),
           refreshId: randomUUID(),
         }),
       )
       .digest("hex");
-    const build = await this.#storage.beginParent(project.storageCommand, parentId);
+    const build = await this.#storage.beginParent(
+      project.storageCommand,
+      parentId,
+      "external-bee-dag-v1",
+    );
     if (build.transactionId === undefined || build.stagingPath === undefined) {
       if (build.transactionId !== undefined) {
         await this.#storage
@@ -338,6 +383,7 @@ export class HoneyBeeWorkspaceCore {
       ...project,
       cache: {
         kind: "library-only-v1",
+        storageLayout: "external-bee-dag-v1",
         parentId: committed.parentId,
         seedCommit,
         preparedAt: now(),
@@ -1151,7 +1197,7 @@ export class HoneyBeeWorkspaceCore {
   }
 
   async #commit(cwd: string, reference: string): Promise<string> {
-    return this.#git(cwd, ["rev-parse", "--verify", `${reference}^{commit}`]);
+    return this.#git(cwd, ["rev-parse", "--verify", "--end-of-options", `${reference}^{commit}`]);
   }
 
   async #refExists(cwd: string, reference: string): Promise<boolean> {

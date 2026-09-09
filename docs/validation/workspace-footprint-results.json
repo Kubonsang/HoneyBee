@@ -1,0 +1,1142 @@
+{
+  "protocol": "footprint-report-v1",
+  "qualified": false,
+  "pilotGroups": {
+    "E-fp-16": {
+      "firstMs": 41464.5,
+      "reopenMs": 8387.0,
+      "editMs": 14237.0,
+      "playMs": 31646.5,
+      "readyMs": 48251.5,
+      "childMedianBytes": 380108800.0,
+      "externalMedianBytes": 153866719.0,
+      "combinedMedianBytes": 533975519.0,
+      "peakBytes": 380633088,
+      "observedCombinedPeakBytes": 534449787,
+      "passedTests": 104,
+      "samples": 2,
+      "individualValues": {
+        "firstMs": [40885, 42044],
+        "reopenMs": [8233, 8541],
+        "editMs": [13624, 14850],
+        "playMs": [31650, 31643],
+        "readyMs": [47717, 48786],
+        "childMedianBytes": [380633088, 379584512],
+        "externalMedianBytes": [153816699, 153916739],
+        "combinedMedianBytes": [534449787, 533501251]
+      },
+      "preciseAllocation": false
+    },
+    "E-fp-32": {
+      "firstMs": 43274.5,
+      "reopenMs": 8507.0,
+      "editMs": 13721.5,
+      "playMs": 31900.0,
+      "readyMs": 50121.5,
+      "childMedianBytes": 372768768.0,
+      "externalMedianBytes": 153827780.5,
+      "combinedMedianBytes": 526596548.5,
+      "peakBytes": 373293056,
+      "observedCombinedPeakBytes": 529028007,
+      "passedTests": 104,
+      "samples": 2,
+      "individualValues": {
+        "firstMs": [42359, 44190],
+        "reopenMs": [8540, 8474],
+        "editMs": [13269, 14174],
+        "playMs": [31576, 32224],
+        "readyMs": [48865, 51378],
+        "childMedianBytes": [372244480, 373293056],
+        "externalMedianBytes": [153818903, 153836658],
+        "combinedMedianBytes": [526063383, 527129714]
+      },
+      "preciseAllocation": false
+    },
+    "E-fp-8": {
+      "firstMs": 41404.5,
+      "reopenMs": 7704.5,
+      "editMs": 13610.5,
+      "playMs": 32033.5,
+      "readyMs": 48206.0,
+      "childMedianBytes": 362807296.0,
+      "externalMedianBytes": 153879536.5,
+      "combinedMedianBytes": 516686832.5,
+      "peakBytes": 373293056,
+      "observedCombinedPeakBytes": 527247818,
+      "passedTests": 104,
+      "samples": 2,
+      "individualValues": {
+        "firstMs": [40944, 41865],
+        "reopenMs": [7215, 8194],
+        "editMs": [13522, 13699],
+        "playMs": [31956, 32111],
+        "readyMs": [47630, 48782],
+        "childMedianBytes": [362807296, 362807296],
+        "externalMedianBytes": [153954762, 153804311],
+        "combinedMedianBytes": [516762058, 516611607]
+      },
+      "preciseAllocation": false
+    },
+    "E-fp-base": {
+      "firstMs": 39475.0,
+      "reopenMs": 8072.5,
+      "editMs": 13105.0,
+      "playMs": 31581.5,
+      "readyMs": 46000.0,
+      "childMedianBytes": 311951360.0,
+      "externalMedianBytes": 153855783.0,
+      "combinedMedianBytes": 465807143.0,
+      "peakBytes": 312475648,
+      "observedCombinedPeakBytes": 466271687,
+      "passedTests": 104,
+      "samples": 2,
+      "individualValues": {
+        "firstMs": [40523, 38427],
+        "reopenMs": [8291, 7854],
+        "editMs": [13490, 12720],
+        "playMs": [32146, 31017],
+        "readyMs": [47317, 44683],
+        "childMedianBytes": [311427072, 312475648],
+        "externalMedianBytes": [153915527, 153796039],
+        "combinedMedianBytes": [465342599, 466271687]
+      },
+      "preciseAllocation": false
+    },
+    "E-fp-compressed": {
+      "firstMs": 42308.0,
+      "reopenMs": 8413.0,
+      "editMs": 14286.0,
+      "playMs": 31886.5,
+      "readyMs": 50306.0,
+      "childMedianBytes": 312475648.0,
+      "externalMedianBytes": 63055221.0,
+      "combinedMedianBytes": 375530869.0,
+      "peakBytes": 313524224,
+      "observedCombinedPeakBytes": 382088005,
+      "passedTests": 104,
+      "samples": 2,
+      "individualValues": {
+        "firstMs": [40858, 43758],
+        "reopenMs": [8145, 8681],
+        "editMs": [13512, 15060],
+        "playMs": [31406, 32367],
+        "readyMs": [48727, 51885],
+        "childMedianBytes": [311427072, 313524224],
+        "externalMedianBytes": [63014261, 63096181],
+        "combinedMedianBytes": [374441333, 376620405]
+      },
+      "preciseAllocation": false
+    }
+  },
+  "finalGroups": {
+    "E-fp-base": {
+      "firstMs": 38737,
+      "reopenMs": 7521,
+      "editMs": 12678,
+      "playMs": 30764,
+      "readyMs": 45206,
+      "childMedianBytes": 328204288,
+      "externalMedianBytes": 155557992,
+      "combinedMedianBytes": 483803240,
+      "peakBytes": 339738624,
+      "observedCombinedPeakBytes": 497336424,
+      "passedTests": 780,
+      "samples": 3,
+      "individualValues": {
+        "firstMs": [38737, 39121, 33592],
+        "reopenMs": [7521, 8320, 6160],
+        "editMs": [12678, 13952, 10283],
+        "playMs": [30764, 31747, 28962],
+        "readyMs": [45206, 45956, 40619],
+        "childMedianBytes": [328204288, 326107136, 339738624],
+        "externalMedianBytes": [155598952, 155557992, 155299944],
+        "combinedMedianBytes": [483803240, 481665128, 495038568]
+      }
+    },
+    "E-fp-compressed": {
+      "firstMs": 38947,
+      "reopenMs": 7182,
+      "editMs": 13820,
+      "playMs": 31591,
+      "readyMs": 46073,
+      "childMedianBytes": 329252864,
+      "externalMedianBytes": 63039167,
+      "combinedMedianBytes": 392308415,
+      "peakBytes": 339738624,
+      "observedCombinedPeakBytes": 421790150,
+      "passedTests": 780,
+      "samples": 3,
+      "individualValues": {
+        "firstMs": [38947, 41493, 31623],
+        "reopenMs": [7182, 8135, 6076],
+        "editMs": [13820, 13992, 9981],
+        "playMs": [31591, 31756, 28914],
+        "readyMs": [46073, 49225, 37877],
+        "childMedianBytes": [326107136, 329252864, 339738624],
+        "externalMedianBytes": [63039167, 63055551, 62936766],
+        "combinedMedianBytes": [389146303, 392308415, 402675390]
+      }
+    }
+  },
+  "comparisons": {
+    "E-fp-compressed": {
+      "savingsFraction": 0.18911577566119653,
+      "timingRatios": {
+        "firstMs": 1.0054211735549992,
+        "reopenMs": 0.9549262066214599,
+        "editMs": 1.0900772992585581,
+        "playMs": 1.026882069951892,
+        "readyMs": 1.0191788700614963
+      },
+      "gates": {
+        "combinedSavings": false,
+        "combinedPeak": true,
+        "firstMs": true,
+        "reopenMs": true,
+        "editMs": true,
+        "playMs": true,
+        "readyMs": true
+      },
+      "childPeakRatioInformational": 1.0,
+      "capacityTimingQualified": false
+    }
+  },
+  "mbDefinition": 1000000,
+  "sharedParentAndAuthoredFilesExcluded": true,
+  "totalRecordedPassingTestExecutions": 2184,
+  "dateKST": "2026-09-09",
+  "sourceCommit": "4caf0731a0a5959ffa61f6c3d110f303f8779f80",
+  "unityVersion": "6000.6.0f1",
+  "testplayVersion": "0.11.0",
+  "productDefaultsChanged": false,
+  "lifecycleRun": false,
+  "measurementCorrections": {
+    "pilotOrdinaryFilesMeasuredEOF": true,
+    "pilotOriginalAdvancedList": [],
+    "freshConfirmation": {
+      "allocationMeasurement": "native-allocated-v2",
+      "policies": [
+        {
+          "name": "E-fp-base",
+          "capacityGiB": 64,
+          "compression": "none"
+        },
+        {
+          "name": "E-fp-compressed",
+          "capacityGiB": 64,
+          "compression": "all"
+        }
+      ],
+      "selectionRationale": "Preserve pilot evidence; apply registered >=5% combined savings and <=10% timing screening. Final combined peak gate is evaluated in fresh qualification; a component child peak is not the selected combined-cache objective.",
+      "startedAt": "2026-09-09T07:47:23.9417507Z"
+    },
+    "finalIterations": [200, 201, 202]
+  },
+  "provenance": [
+    {
+      "artifact": "honeybee-footprint-study.exe",
+      "sha256": "475d5fd49f90603424848436dda3a6cc7e1819658ebeb1c08cb1fbf34dae1292"
+    },
+    {
+      "artifact": "honeybee-footprint-confirm.exe",
+      "sha256": "4e90886a7224a9b67f42dcf3667624d901219d92aefed39d35e73e514b84d456"
+    },
+    {
+      "artifact": "honeybee-footprint-final.exe",
+      "sha256": "45fec674ef09fb6382f5be158fbe252165e5b119253106870ca8dc82e700560e"
+    },
+    {
+      "artifact": "honeybee-footprint-edit-trace.exe",
+      "sha256": "ed3c5d2fe12583dec0f60d80e4d1c98f7a52172fcea48d8c091bfd66d0090449"
+    },
+    {
+      "artifact": "gnf-capacity-seed-20260908.zip",
+      "sha256": "c5b2cbfb1aef1ca31655411df379d42f04320ad73636b336d90c859c8e79a82e"
+    }
+  ],
+  "attribution": {
+    "E-fp-base-200": {
+      "allocatedBlocks": 308,
+      "blockClasses": {
+        "unresolved": 34,
+        "metadataOnly": 193,
+        "mixed": 14,
+        "regularOnly": 67
+      },
+      "ownedSectorBytes": 41537536,
+      "unresolvedOwnedSectorBytes": 1073152,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 213,
+          "ownedSectorBytes": 27648000,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 41,
+          "ownedSectorBytes": 7467008,
+          "exclusiveFullyExplainedBlocks": 36,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -46480239
+        },
+        "BurstCache": {
+          "overlappingBlocks": 54,
+          "ownedSectorBytes": 4575232,
+          "exclusiveFullyExplainedBlocks": 25,
+          "logicalCopyBytes": 111349193,
+          "screeningNetBytes": -85134793
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190037,
+          "screeningNetBytes": -190037
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 15,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469728,
+          "screeningNetBytes": -25372576
+        },
+        "DataStore": {
+          "overlappingBlocks": 5,
+          "ownedSectorBytes": 167936,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -155290888
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-base-201": {
+      "allocatedBlocks": 306,
+      "blockClasses": {
+        "unresolved": 32,
+        "metadataOnly": 193,
+        "mixed": 15,
+        "regularOnly": 66
+      },
+      "ownedSectorBytes": 41631744,
+      "unresolvedOwnedSectorBytes": 1028096,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 213,
+          "ownedSectorBytes": 27799552,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 40,
+          "ownedSectorBytes": 7462912,
+          "exclusiveFullyExplainedBlocks": 35,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -47528815
+        },
+        "BurstCache": {
+          "overlappingBlocks": 52,
+          "ownedSectorBytes": 4575232,
+          "exclusiveFullyExplainedBlocks": 25,
+          "logicalCopyBytes": 111349193,
+          "screeningNetBytes": -85134793
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190037,
+          "screeningNetBytes": -190037
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 15,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469728,
+          "screeningNetBytes": -25372576
+        },
+        "DataStore": {
+          "overlappingBlocks": 5,
+          "ownedSectorBytes": 159744,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -155290888
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-base-202": {
+      "allocatedBlocks": 319,
+      "blockClasses": {
+        "unresolved": 31,
+        "metadataOnly": 202,
+        "mixed": 17,
+        "regularOnly": 69
+      },
+      "ownedSectorBytes": 42663936,
+      "unresolvedOwnedSectorBytes": 1101824,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 223,
+          "ownedSectorBytes": 28741632,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 41,
+          "ownedSectorBytes": 7475200,
+          "exclusiveFullyExplainedBlocks": 36,
+          "logicalCopyBytes": 84228974,
+          "screeningNetBytes": -46480238
+        },
+        "BurstCache": {
+          "overlappingBlocks": 53,
+          "ownedSectorBytes": 4575232,
+          "exclusiveFullyExplainedBlocks": 26,
+          "logicalCopyBytes": 111349193,
+          "screeningNetBytes": -84086217
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190037,
+          "screeningNetBytes": -190037
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 16,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469728,
+          "screeningNetBytes": -25372576
+        },
+        "DataStore": {
+          "overlappingBlocks": 6,
+          "ownedSectorBytes": 163840,
+          "exclusiveFullyExplainedBlocks": 5,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -154242312
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-base-90": {
+      "allocatedBlocks": 295,
+      "blockClasses": {
+        "unresolved": 6,
+        "metadataOnly": 196,
+        "mixed": 22,
+        "regularOnly": 71
+      },
+      "ownedSectorBytes": 36515840,
+      "unresolvedOwnedSectorBytes": 65536,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 212,
+          "ownedSectorBytes": 26083328,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 39,
+          "ownedSectorBytes": 5079040,
+          "exclusiveFullyExplainedBlocks": 34,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -48577391
+        },
+        "BurstCache": {
+          "overlappingBlocks": 51,
+          "ownedSectorBytes": 4575232,
+          "exclusiveFullyExplainedBlocks": 31,
+          "logicalCopyBytes": 111349193,
+          "screeningNetBytes": -78843337
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 189909,
+          "screeningNetBytes": -189909
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 12,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469716,
+          "screeningNetBytes": -25372564
+        },
+        "DataStore": {
+          "overlappingBlocks": 5,
+          "ownedSectorBytes": 106496,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -155290888
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-base-91": {
+      "allocatedBlocks": 309,
+      "blockClasses": {
+        "unresolved": 6,
+        "metadataOnly": 206,
+        "mixed": 22,
+        "regularOnly": 75
+      },
+      "ownedSectorBytes": 37101568,
+      "unresolvedOwnedSectorBytes": 73728,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 221,
+          "ownedSectorBytes": 26648576,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 39,
+          "ownedSectorBytes": 5091328,
+          "exclusiveFullyExplainedBlocks": 34,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -48577391
+        },
+        "BurstCache": {
+          "overlappingBlocks": 52,
+          "ownedSectorBytes": 4575232,
+          "exclusiveFullyExplainedBlocks": 33,
+          "logicalCopyBytes": 111349193,
+          "screeningNetBytes": -76746185
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 189909,
+          "screeningNetBytes": -189909
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 13,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 27469716,
+          "screeningNetBytes": -23275412
+        },
+        "DataStore": {
+          "overlappingBlocks": 5,
+          "ownedSectorBytes": 106496,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -155290888
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-compressed-200": {
+      "allocatedBlocks": 306,
+      "blockClasses": {
+        "unresolved": 31,
+        "metadataOnly": 193,
+        "mixed": 15,
+        "regularOnly": 67
+      },
+      "ownedSectorBytes": 41574400,
+      "unresolvedOwnedSectorBytes": 1044480,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 213,
+          "ownedSectorBytes": 27713536,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 40,
+          "ownedSectorBytes": 7467008,
+          "exclusiveFullyExplainedBlocks": 35,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -47528815
+        },
+        "BurstCache": {
+          "overlappingBlocks": 51,
+          "ownedSectorBytes": 4579328,
+          "exclusiveFullyExplainedBlocks": 26,
+          "logicalCopyBytes": 111353689,
+          "screeningNetBytes": -84090713
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190805,
+          "screeningNetBytes": -190805
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 15,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469776,
+          "screeningNetBytes": -25372624
+        },
+        "DataStore": {
+          "overlappingBlocks": 5,
+          "ownedSectorBytes": 163840,
+          "exclusiveFullyExplainedBlocks": 4,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -155290888
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-compressed-201": {
+      "allocatedBlocks": 309,
+      "blockClasses": {
+        "unresolved": 31,
+        "metadataOnly": 193,
+        "mixed": 16,
+        "regularOnly": 69
+      },
+      "ownedSectorBytes": 41574400,
+      "unresolvedOwnedSectorBytes": 1003520,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 213,
+          "ownedSectorBytes": 27762688,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 42,
+          "ownedSectorBytes": 7458816,
+          "exclusiveFullyExplainedBlocks": 37,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -45431663
+        },
+        "BurstCache": {
+          "overlappingBlocks": 53,
+          "ownedSectorBytes": 4579328,
+          "exclusiveFullyExplainedBlocks": 25,
+          "logicalCopyBytes": 111353689,
+          "screeningNetBytes": -85139289
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190805,
+          "screeningNetBytes": -190805
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 16,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469776,
+          "screeningNetBytes": -25372624
+        },
+        "DataStore": {
+          "overlappingBlocks": 6,
+          "ownedSectorBytes": 163840,
+          "exclusiveFullyExplainedBlocks": 5,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -154242312
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    },
+    "E-fp-compressed-202": {
+      "allocatedBlocks": 319,
+      "blockClasses": {
+        "unresolved": 25,
+        "metadataOnly": 200,
+        "mixed": 19,
+        "regularOnly": 75
+      },
+      "ownedSectorBytes": 42487808,
+      "unresolvedOwnedSectorBytes": 946176,
+      "groups": {
+        "(filesystem metadata)": {
+          "overlappingBlocks": 223,
+          "ownedSectorBytes": 28717056,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 0,
+          "screeningNetBytes": 0
+        },
+        "(root files)": {
+          "overlappingBlocks": 43,
+          "ownedSectorBytes": 7483392,
+          "exclusiveFullyExplainedBlocks": 38,
+          "logicalCopyBytes": 84228975,
+          "screeningNetBytes": -44383087
+        },
+        "BurstCache": {
+          "overlappingBlocks": 55,
+          "ownedSectorBytes": 4579328,
+          "exclusiveFullyExplainedBlocks": 30,
+          "logicalCopyBytes": 111353689,
+          "screeningNetBytes": -79896409
+        },
+        "PackageManager": {
+          "overlappingBlocks": 2,
+          "ownedSectorBytes": 188416,
+          "exclusiveFullyExplainedBlocks": 0,
+          "logicalCopyBytes": 190805,
+          "screeningNetBytes": -190805
+        },
+        "ScriptAssemblies": {
+          "overlappingBlocks": 14,
+          "ownedSectorBytes": 417792,
+          "exclusiveFullyExplainedBlocks": 2,
+          "logicalCopyBytes": 27469776,
+          "screeningNetBytes": -25372624
+        },
+        "DataStore": {
+          "overlappingBlocks": 6,
+          "ownedSectorBytes": 155648,
+          "exclusiveFullyExplainedBlocks": 5,
+          "logicalCopyBytes": 159485192,
+          "screeningNetBytes": -154242312
+        }
+      },
+      "extentFailures": [
+        {
+          "path": "$Secure",
+          "error": "Access is denied."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$J",
+          "error": "The system cannot find the file specified."
+        },
+        {
+          "path": "$Extend/$UsnJrnl:$Max",
+          "error": "The system cannot find the file specified."
+        }
+      ],
+      "directoryCandidates": [],
+      "causalAttribution": false,
+      "caveat": "Final extent/sector correlation. Renames, freed/reallocated files, resident data and inaccessible metadata prevent complete causal attribution. Group overlaps must not be summed; screening estimates require an independent experiment."
+    }
+  },
+  "diagnostics": {
+    "first": {
+      "writeEvents": 17389,
+      "requestedWriteBytes": 34272887,
+      "unresolvedGlobalWriteEvents": 0,
+      "unmapped": {
+        "outsideMappedExtentsWriteBytes": 16608,
+        "absentFailedOrChangedExtentWriteBytes": 6536062
+      },
+      "causalAttribution": false,
+      "caveat": "Requested bytes include repeated writes and System writeback. Only matching endpoint extents are mapped. Block overlaps are not exclusive or first-touch attribution; do not sum amplification across files.",
+      "archiveSHA256": "1d66d2c1aca12309d875b2e9e4698a96305624cf7298d4f7ee471b54e199a152",
+      "lost": {
+        "Buffers": 0,
+        "Events": 0
+      },
+      "csvMaterialized": false,
+      "decoderWarnings": {
+        "invalidEventsByProvider": {
+          "e13c0d23-ccbc-4e12-931b-d9cc2eee27e4": 8255
+        },
+        "fileIODecoderWarnings": 0
+      },
+      "topFiles": [
+        {
+          "path": "$mft",
+          "requestedWriteBytes": 14508032,
+          "overlappingAllocatedBlocks": 29,
+          "associatedBlockBytesPerRequestedByte": 2.095990965556183
+        },
+        {
+          "path": "$logfile",
+          "requestedWriteBytes": 4435968,
+          "overlappingAllocatedBlocks": 5,
+          "associatedBlockBytesPerRequestedByte": 1.1819021237303786
+        },
+        {
+          "path": "packagecache/com.unity.render-pipelines.universal@8457e85b8184/runtime",
+          "requestedWriteBytes": 69632,
+          "overlappingAllocatedBlocks": 5,
+          "associatedBlockBytesPerRequestedByte": 75.29411764705883
+        },
+        {
+          "path": "artifactdb",
+          "requestedWriteBytes": 57584,
+          "overlappingAllocatedBlocks": 5,
+          "associatedBlockBytesPerRequestedByte": 91.0475131981106
+        },
+        {
+          "path": "packagecache/com.unity.collab-proxy@4628d2ba6ea4/editor",
+          "requestedWriteBytes": 40960,
+          "overlappingAllocatedBlocks": 5,
+          "associatedBlockBytesPerRequestedByte": 128.0
+        },
+        {
+          "path": "packagecache/com.unity.collections@10fff0607388/unity.collections",
+          "requestedWriteBytes": 49152,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 85.33333333333333
+        },
+        {
+          "path": "burstcache/jit/hashes/objects",
+          "requestedWriteBytes": 36864,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 113.77777777777777
+        },
+        {
+          "path": "packagecache/com.unity.timeline@281d5f7e7d7d/editor",
+          "requestedWriteBytes": 32768,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 128.0
+        },
+        {
+          "path": "shadercache/shader",
+          "requestedWriteBytes": 32768,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 128.0
+        },
+        {
+          "path": "packagecache/com.unity.visualscripting@4edfcc09512f/editor/visualscripting.core",
+          "requestedWriteBytes": 28672,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 146.28571428571428
+        },
+        {
+          "path": "packagecache/com.unity.render-pipelines.universal@8457e85b8184/shaders",
+          "requestedWriteBytes": 20480,
+          "overlappingAllocatedBlocks": 4,
+          "associatedBlockBytesPerRequestedByte": 204.8
+        },
+        {
+          "path": "burstcache/jit/burstcachemanifest.cm",
+          "requestedWriteBytes": 2553433,
+          "overlappingAllocatedBlocks": 3,
+          "associatedBlockBytesPerRequestedByte": 1.231960266825094
+        }
+      ]
+    },
+    "edit": {
+      "writeEvents": 32782,
+      "requestedWriteBytes": 16275399,
+      "blockScope": "newly allocated in edit/test cycle",
+      "eligiblePayloadBlocks": 31,
+      "unresolvedGlobalWriteEvents": 0,
+      "unmapped": {
+        "outsideMappedExtentsWriteBytes": 24960,
+        "absentFailedOrChangedExtentWriteBytes": 1344851
+      },
+      "causalAttribution": false,
+      "caveat": "Requested bytes include repeated writes and System writeback. Only matching endpoint extents are mapped. Block overlaps are not exclusive or first-touch attribution; do not sum amplification across files.",
+      "archiveSHA256": "37643b33015f16becfad2e74663401aae9ba9baf220a3fda58abcbf7d7e6e0f0",
+      "lost": {
+        "Buffers": 0,
+        "Events": 0
+      },
+      "csvMaterialized": false,
+      "decoderWarnings": {
+        "invalidEventsByProvider": {
+          "e13c0d23-ccbc-4e12-931b-d9cc2eee27e4": 18746
+        },
+        "fileIODecoderWarnings": 0
+      },
+      "topFiles": [
+        {
+          "path": "artifactdb",
+          "requestedWriteBytes": 1181328,
+          "overlappingAllocatedBlocks": 10,
+          "associatedBlockBytesPerRequestedByte": 8.876247748296832
+        },
+        {
+          "path": "sourceassetdb",
+          "requestedWriteBytes": 7408448,
+          "overlappingAllocatedBlocks": 8,
+          "associatedBlockBytesPerRequestedByte": 1.1323030140725832
+        },
+        {
+          "path": "datastore/uds.db",
+          "requestedWriteBytes": 316232,
+          "overlappingAllocatedBlocks": 3,
+          "associatedBlockBytesPerRequestedByte": 9.947532191555567
+        },
+        {
+          "path": "burstcache/jit/burstcachemanifest.cm",
+          "requestedWriteBytes": 5106652,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "$logfile",
+          "requestedWriteBytes": 491520,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "$mft",
+          "requestedWriteBytes": 266240,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "burstcache/jit/hashes/48677e49d6ef1db462c865913d2f5417.bhc",
+          "requestedWriteBytes": 100338,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "burstcache/jit/hashes/a530a4ed3925d9c2d624245b710bf7c8.bhc",
+          "requestedWriteBytes": 80430,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "burstcache/jit/hashes/bca58b51d472484404201a0f2cb6b58a.bhc",
+          "requestedWriteBytes": 74020,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "scriptassemblies/assembly-csharp-editor.pdb",
+          "requestedWriteBytes": 61736,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "scriptassemblies/combat.presentation.pdb",
+          "requestedWriteBytes": 61552,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        },
+        {
+          "path": "burstcache/jit/hashes/822e767ec34a2f854c8fca28c5af8700.bhc",
+          "requestedWriteBytes": 59454,
+          "overlappingAllocatedBlocks": 0,
+          "associatedBlockBytesPerRequestedByte": 0.0
+        }
+      ]
+    }
+  },
+  "compressionAfterFiveCycles": {
+    "200": {
+      "compressedDirectories": 7,
+      "compressedFiles": 1359,
+      "directories": 7,
+      "files": 1359,
+      "usage": {
+        "logicalBytes": 153847287,
+        "allocatedBytes": 63039167
+      }
+    },
+    "201": {
+      "compressedDirectories": 7,
+      "compressedFiles": 1359,
+      "directories": 7,
+      "files": 1359,
+      "usage": {
+        "logicalBytes": 153899989,
+        "allocatedBytes": 63055551
+      }
+    },
+    "202": {
+      "compressedDirectories": 7,
+      "compressedFiles": 1359,
+      "directories": 7,
+      "files": 1359,
+      "usage": {
+        "logicalBytes": 153546648,
+        "allocatedBytes": 62936766
+      }
+    }
+  },
+  "sampleAllocation": {
+    "E-fp-base-200": {
+      "allocatedBytes": 328204288,
+      "presentPayloadBytes": 322961408,
+      "childSourcedSectorBytes": 41537536,
+      "payloadSlackBytes": 281423872,
+      "otherFileBytes": 5242880,
+      "batSha256": "83b2c9f1d5e32cdaf5db412b36529659a14f193d250124a014eff16d763f15f6"
+    },
+    "E-fp-base-201": {
+      "allocatedBytes": 326107136,
+      "presentPayloadBytes": 320864256,
+      "childSourcedSectorBytes": 41631744,
+      "payloadSlackBytes": 279232512,
+      "otherFileBytes": 5242880,
+      "batSha256": "cd2760f8374edf66b54ad385ce76e690d10949ff87af918db42c7e97129e7977"
+    },
+    "E-fp-base-202": {
+      "allocatedBytes": 339738624,
+      "presentPayloadBytes": 334495744,
+      "childSourcedSectorBytes": 42663936,
+      "payloadSlackBytes": 291831808,
+      "otherFileBytes": 5242880,
+      "batSha256": "aee1005c124f3abf80cb57c67f228535a1e27e2af181df381c59025b487d2201"
+    },
+    "E-fp-compressed-200": {
+      "allocatedBytes": 326107136,
+      "presentPayloadBytes": 320864256,
+      "childSourcedSectorBytes": 41574400,
+      "payloadSlackBytes": 279289856,
+      "otherFileBytes": 5242880,
+      "batSha256": "db129bde21776cd38d3ed860236f571b82ceb1f421cbc19da469287891f0a2fb"
+    },
+    "E-fp-compressed-201": {
+      "allocatedBytes": 329252864,
+      "presentPayloadBytes": 324009984,
+      "childSourcedSectorBytes": 41574400,
+      "payloadSlackBytes": 282435584,
+      "otherFileBytes": 5242880,
+      "batSha256": "9c9fcc82d2e25412c5f36abc037ff7e07cb184ec28f22510d6b57b60ba6dcd5b"
+    },
+    "E-fp-compressed-202": {
+      "allocatedBytes": 339738624,
+      "presentPayloadBytes": 334495744,
+      "childSourcedSectorBytes": 42487808,
+      "payloadSlackBytes": 292007936,
+      "otherFileBytes": 5242880,
+      "batSha256": "59fe9a4a16ae0f0285036bec4c000b8abea2ce8f14ebda4c49185fa157e0362c"
+    }
+  },
+  "localEvidence": {
+    "sampleArchives": "output/footprint-study-20260909-evidence",
+    "campaignArchive": "output/footprint-final-evidence.zip",
+    "completeAttribution": "output/footprint-attribution.json",
+    "completeFirstWriteCorrelation": "output/footprint-write-correlation.json",
+    "completeEditWriteCorrelation": "output/footprint-edit-write-correlation.json"
+  },
+  "cleanup": {
+    "removed": "tmp/footprint-study-20260909",
+    "finishedAt": "2026-09-09T17:23:39.7164575+09:00",
+    "sampleArchivesVerified": 18,
+    "logicalBytes": 6097247835,
+    "registryPreserved": true,
+    "files": 30269,
+    "beforeFreeBytes": 60989661184,
+    "ok": true,
+    "archiveSHA256": "2dd72a53bbad9907f3ab4cbf821a0cb805f7981ba7f6fc1683c604831b627b27",
+    "afterFreeBytes": 67126984704,
+    "reclaimedBytes": 6137323520,
+    "registrySHA256": "cf708f55fc2808ba690c03597da02ad21a5c3bb978a595a5df3c1bd81ad42a7c"
+  },
+  "validation": {
+    "goTestsPassed": true,
+    "goVetPassed": true,
+    "pythonTestsPassed": 46,
+    "cleanupPowerShellParsed": true
+  }
+}

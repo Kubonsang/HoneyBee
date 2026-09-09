@@ -1,0 +1,353 @@
+{
+  "protocol": "broker-bee-compressed-v1",
+  "ok": true,
+  "compressionValidated": true,
+  "concurrentRetainedRounds": 3,
+  "passedTests": 572,
+  "samples": [
+    {
+      "name": "one",
+      "removed": true,
+      "removal": {
+        "runId": "one",
+        "leaseId": "lease-7ed377d1b61c67564626c3a2d38a935a",
+        "childPath": "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-gnf\\store\\S-1-5-21-2836484872-3852242710-1149767053-1001\\children\\lease-7ed377d1b61c67564626c3a2d38a935a.vhdx",
+        "state": "committed"
+      },
+      "lastObservedChildBytes": 360710144,
+      "lastObservedExternalAllocatedBytes": 63126053,
+      "lastObservedExternalLogicalBytes": 154322029
+    },
+    {
+      "name": "two",
+      "removed": true,
+      "removal": {
+        "runId": "two",
+        "leaseId": "lease-0ebe7a7ced28621b7a26a3d909a209a5",
+        "childPath": "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-gnf\\store\\S-1-5-21-2836484872-3852242710-1149767053-1001\\children\\lease-0ebe7a7ced28621b7a26a3d909a209a5.vhdx",
+        "state": "committed"
+      },
+      "lastObservedChildBytes": 359661568,
+      "lastObservedExternalAllocatedBytes": 63453733,
+      "lastObservedExternalLogicalBytes": 155387156
+    }
+  ],
+  "runs": [
+    {
+      "name": "one-cycle1-edit_mode",
+      "runId": "20260909-175113-d714068b",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle1-play_mode",
+      "runId": "20260909-175123-a42ab24b",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle2-edit_mode",
+      "runId": "20260909-175154-a3aace0e",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle2-play_mode",
+      "runId": "20260909-175205-46b9dc3d",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle1-edit_mode",
+      "runId": "20260909-175325-cd50a52b",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle1-play_mode",
+      "runId": "20260909-175335-c7921e88",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle2-edit_mode",
+      "runId": "20260909-175404-03b9ec79",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle2-play_mode",
+      "runId": "20260909-175414-56e967d0",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle3-edit_mode",
+      "runId": "20260909-175456-aab6b964",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle3-edit_mode",
+      "runId": "20260909-175456-9ad8a90e",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle3-play_mode",
+      "runId": "20260909-175513-b2cd2aec",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle3-play_mode",
+      "runId": "20260909-175513-d053b667",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle4-edit_mode",
+      "runId": "20260909-175600-2b2d734b",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle4-edit_mode",
+      "runId": "20260909-175600-2d55f8f9",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle4-play_mode",
+      "runId": "20260909-175617-04612abc",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle4-play_mode",
+      "runId": "20260909-175617-f5ef450f",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle5-edit_mode",
+      "runId": "20260909-175704-1042516e",
+      "passed": 37
+    },
+    {
+      "name": "one-cycle5-edit_mode",
+      "runId": "20260909-175704-a98d2b48",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle5-play_mode",
+      "runId": "20260909-175721-07a2fd98",
+      "passed": 15
+    },
+    {
+      "name": "one-cycle5-play_mode",
+      "runId": "20260909-175722-036738a6",
+      "passed": 15
+    },
+    {
+      "name": "two-cycle6-edit_mode",
+      "runId": "20260909-175756-e8ba520e",
+      "passed": 37
+    },
+    {
+      "name": "two-cycle6-play_mode",
+      "runId": "20260909-175806-ad9c10de",
+      "passed": 15
+    }
+  ],
+  "rebootTested": true,
+  "capacityQualified": false,
+  "limits": [
+    "Phase observations precede final detach; this is not a capacity qualification.",
+    "External Bee allocated bytes use compressed/sparse allocation or ordinary file allocation; logical lengths are reported separately.",
+    "This Unity campaign uses an isolated in-process broker; installed-service validation is recorded separately."
+  ],
+  "component": {
+    "schemaVersion": 1,
+    "workspaceStorageVersion": "0.0.0+cfa606fd4143.hb12",
+    "workspaceStorageCommit": "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa",
+    "workspaceStorageOverlaySHA256": "b9d83537af87e48bf31dedaf9e4658374adc542aa64e393a63f3913e3016bfe9",
+    "files": {
+      "honeybee-usage.exe": {
+        "byteLength": 4123648,
+        "sha256": "983715194682daa3ecce0d58c2fba9b8461b7cbabf1a3b90b424ae5b11bcc2e4"
+      },
+      "unity-workspace-storage.exe": {
+        "byteLength": 4548608,
+        "sha256": "01c187941a2dc20271b7326601eb1a00e8d097b993ba16615fc27ee36caf86e3"
+      },
+      "honeybee-workspace-storage-host.exe": {
+        "byteLength": 5720576,
+        "sha256": "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3"
+      }
+    }
+  },
+  "sourceRevision": "4caf0731a0a5959ffa61f6c3d110f303f8779f80",
+  "unityVersion": "6000.6.0f1",
+  "testplayVersion": "v0.11.0",
+  "validation": {
+    "honeybeeTestFiles": 22,
+    "honeybeeTests": 91,
+    "pythonTests": 46,
+    "storageGoSuite": "passed",
+    "hostGoSuite": "passed",
+    "goVet": "passed",
+    "linuxCrossBuild": "passed",
+    "nativeLifecycle": "passed",
+    "provenanceActiveDestinations": 48,
+    "packagedSmoke": "passed",
+    "formatCaveat": "Two pre-existing user analysis documents were excluded; original pnpm verify failure preserved.",
+    "installedUpgrade": "passed",
+    "installedSCMRestart": "passed",
+    "physicalWindowsReboot": "passed",
+    "installedFixtureCleanup": "passed"
+  },
+  "deployment": {
+    "complete": true,
+    "status": "installed-reboot-verified",
+    "qualificationComplete": true,
+    "published": false,
+    "serviceRunning": true,
+    "receiptVersion": "0.0.0+cfa606fd4143.hb12",
+    "executableDigestMatches": true,
+    "actualHostSHA256": "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3",
+    "installedAt": "2026-09-09T19:06:50.6127239+09:00",
+    "realUserDisksInPreflight": 2,
+    "rollbackPreserved": true,
+    "installedUpgradePassed": true,
+    "scmRestartPassed": true,
+    "scmRestart": {
+      "windowsBoot": "2026-09-09T05:59:25.5000000Z",
+      "ok": true,
+      "afterPid": 35924,
+      "beforePid": 36344,
+      "finishedAt": "2026-09-09T19:08:50.0483937+09:00"
+    },
+    "installedFixtures": [
+      {
+        "external": false,
+        "removed": true,
+        "checks": [
+          "created-retained",
+          "hb11-to-hb12",
+          "post-upgrade",
+          "scm-restart",
+          "physical-reboot",
+          "removal-abort"
+        ]
+      },
+      {
+        "external": true,
+        "removed": true,
+        "checks": ["created-retained", "post-upgrade", "scm-restart", "removal-abort"]
+      },
+      {
+        "external": true,
+        "removed": true,
+        "checks": [
+          "created-retained",
+          "post-upgrade",
+          "scm-restart",
+          "surviving-child",
+          "physical-reboot",
+          "removal-abort"
+        ]
+      }
+    ],
+    "rebootFixturesRemaining": 0,
+    "isolatedFixtureCleanupPending": false,
+    "cleanup": {
+      "removed": [
+        "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-native",
+        "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-gnf"
+      ],
+      "finishedAt": "2026-09-09T19:12:36.4189320+09:00",
+      "experimentParentSHA256": "5974963839a59803403edf09077aef8308559293d2ab6d6b900b9c127b2e6e48",
+      "detachedExperimentParent": "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-gnf\\store\\S-1-5-21-2836484872-3852242710-1149767053-1001\\parents\\eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee\\parent.vhdx",
+      "registryPreserved": true,
+      "beforeFreeBytes": 60653117440,
+      "ok": true,
+      "archiveSHA256": "22de06b1eef3d83482c275fdb05a095b091ddc272a16d12f1129b4f26da069a1",
+      "afterFreeBytes": 63331983360
+    },
+    "rebootTested": true,
+    "preservationScope": {
+      "at": "2026-09-09T10:06:29.835Z",
+      "reason": "Both original VHDX hashes changed at the interrupted install timestamp; IDs, sizes, lease and retained journals unchanged, no active client, repeated hashes stable. Original content preservation across that interruption is unproven. This baseline measures only subsequent recovery.",
+      "audit": "output/bee-compression-current-audit.json"
+    },
+    "preservedUserDisksSinceRecoveryBaseline": 2,
+    "interruptedInstallHistory": {
+      "previousExecutableRemovalDenied": true,
+      "windowsUACRetryCanceled": true,
+      "originalVHDXHashesChangedAtInterruptedInstall": true,
+      "originalPreInterruptionContentPreservationProven": false,
+      "recoveryBaselineAudit": "output/bee-compression-current-audit.json",
+      "originalStateEvidence": "output/bee-compression-installed/state-before-install-recovery.json",
+      "coordinatorCleanupInitiallyRefusedRemainingParent": true,
+      "cleanupCompletedSeparatelyWithDetachedParentValidation": true
+    },
+    "installedFixtureCleanupPassed": true,
+    "finalStatus": {
+      "provider": "vhdx-differencing",
+      "bootSessionId": "system-process-01dd404500da8a15",
+      "parentTTLSeconds": 2592000,
+      "userSid": "S-1-5-21-2836484872-3852242710-1149767053-1001",
+      "parentCount": 5,
+      "activeChildCount": 0,
+      "retainedChildCount": 2,
+      "pendingCount": 0,
+      "quarantineCount": 0,
+      "parentAllocatedBytes": 9198108672,
+      "parentLogicalBytes": 9198108672,
+      "activeChildAllocatedBytes": 0,
+      "activeChildLogicalBytes": 0,
+      "retainedChildAllocatedBytes": 2241855488,
+      "retainedChildLogicalBytes": 2241855488,
+      "quarantineAllocatedBytes": 0,
+      "quarantineLogicalBytes": 0,
+      "manualRecoveryRequired": false,
+      "gcBlocked": false,
+      "capacity": {
+        "quotaBytes": 34359738368,
+        "allocatedBytes": 11439964224,
+        "reclaimableBytes": 0,
+        "hostFreeBytes": 70223491072,
+        "hostFloorBytes": 21474836480,
+        "reserveBytes": 0
+      }
+    },
+    "physicalReboot": {
+      "beforeWindowsBoot": "2026-09-09T05:59:25.5000000Z",
+      "afterWindowsBoot": "2026-09-09T10:21:32.5000000Z",
+      "beforeBrokerBoot": "system-process-01dd402062b9e483",
+      "afterBrokerBoot": "system-process-01dd404500da8a15",
+      "environment": {
+        "checkedAt": "2026-09-09T22:18:44.4316073+09:00",
+        "windowsBoot": "2026-09-09T10:21:32.5000000Z",
+        "serviceState": "Running",
+        "servicePid": 6948
+      },
+      "diagnostic": {
+        "serviceExists": true,
+        "serviceState": "running",
+        "receiptExists": true,
+        "receiptValid": true,
+        "componentVersion": "0.0.0+cfa606fd4143.hb12",
+        "workspaceRoot": "C:\\Users\\user\\AppData\\Local\\HoneyBee\\Workspaces",
+        "workspaceRootAccessible": true,
+        "executableExists": true,
+        "executableDigestMatches": true,
+        "userMatches": true
+      },
+      "resultFile": "output/bee-compression-installed/resume-reboot-result.json"
+    },
+    "retainedTestParent": {
+      "key": "35c18fa332e70ea623842903ba30a14fd267ef0128be92ca690ff0c7df5f6ec2",
+      "imageBytes": 90177536,
+      "beeSeedAllocatedBytes": 32,
+      "policy": "ordinary broker retention; no global GC forced"
+    }
+  },
+  "evidenceArchive": {
+    "root": "C:\\Users\\user\\Documents\\HoneyBee\\tmp\\bee-compression-gnf",
+    "archive": "C:\\Users\\user\\Documents\\HoneyBee\\output\\bee-compression-gnf-evidence.zip",
+    "sha256": "22de06b1eef3d83482c275fdb05a095b091ddc272a16d12f1129b4f26da069a1",
+    "exploratoryOnly": false,
+    "sample": null,
+    "files": 266,
+    "verified": true,
+    "archiveBytes": 1010855,
+    "verifiedAt": "2026-09-09T09:07:47.021750+00:00"
+  },
+  "rebootTestScope": "Installed-service fixtures; the isolated Unity campaign did not include a reboot."
+}

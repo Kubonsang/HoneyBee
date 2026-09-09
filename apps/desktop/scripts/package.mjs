@@ -33,6 +33,7 @@ assertOwned(staging, appRoot);
 assertOwned(output, appRoot);
 await access(path.join(bundledTools, "unity-workspace-storage.exe"));
 await access(path.join(bundledTools, "honeybee-workspace-storage-host.exe"));
+await access(path.join(bundledTools, "honeybee-usage.exe"));
 await access(compatibilityManifest);
 await access(brandPng);
 await access(windowsIcon);
@@ -58,6 +59,20 @@ for (const payload of approvedStorage.payloads) {
     prepared.sha256 !== payload.sha256
   ) {
     throw new Error("Prepared workspace-storage does not match the compatibility manifest.");
+  }
+}
+
+// Vite embeds this manifest in main; matching extraResource files alone cannot
+// detect a bundle built before the final storage tools were prepared.
+const mainBundle = await readFile(path.join(appRoot, "dist", "main", "main", "main.js"), "utf8");
+for (const identity of [
+  approvedStorage.version,
+  ...approvedStorage.payloads.map((p) => p.sha256),
+]) {
+  if (!mainBundle.includes(JSON.stringify(identity))) {
+    throw new Error(
+      "Desktop main contains stale storage compatibility metadata. Rebuild Desktop before packaging.",
+    );
   }
 }
 

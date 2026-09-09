@@ -25,18 +25,21 @@ codex
 
 ## Status
 
-The published prerelease is [Beta 5](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.5),
-released on 2026-09-05 from `246226e`. It supports limited evaluation on an existing matching hb8
-storage installation. Fresh installation and Beta 3 upgrade remain unverified. The
-[quality follow-up checklist](docs/validation/beta4-release-readiness.md) records final package and
-physical-reboot evidence. Beta 6 usability work is in development.
-Beta 5 pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
-the native identity-checked stale-mount cleanup and adds an exclusive Library-volume removal
-handshake. It also refuses to publish a cache that leaves no capacity for its first child.
-The physical Windows reboot gate in
-[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passed on the final Beta 5 CLI. Reboot
-recovery is explicit: wait for `workspace status` to report `repair-required`, run
-`workspace repair`, and do not open the Workspace until it reports `ready` again.
+The current prerelease is [Beta 11](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.11).
+It adds visual starting-commit selection and retains Beta 10's NTFS compression for private Bee caches.
+In the paired GNF study, combined child plus Bee allocation fell from 483.80 MB to
+392.31 MB (18.91% less), with measured timing regressions within 10%. Authored/Git
+files and shared parents are additional costs. Existing Workspaces do not shrink
+automatically; existing external-Bee parent seeds can be reused.
+
+Beta 11 requires the same storage component `0.0.0+cfa606fd4143.hb12`. The hb11-to-hb12
+upgrade, service restart and physical reboot checks passed; see the
+[product validation record](docs/validation/bee-compression-product.md), including
+the interrupted-install recovery and preservation scope. Fresh service installation
+and older migrations remain outside this qualification. Use **Repair** when status
+reports `repair-required`, and wait for `ready` before opening tools.
+The [paired performance report](docs/validation/workspace-footprint.md) retains the
+missed 20% reduction gate; this release does not promise a 300 MB total Workspace.
 
 The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
 The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and
@@ -97,9 +100,21 @@ Desktop is a small view over the same Workspace Core. It contains:
 - project preflight, registration, cache preparation, and cache state;
 - Workspaces, branch/HEAD state, and changed files;
 - a bounded Git diff viewer;
+- a Storage tab for on-demand file, TestPlay cache and VHDX allocation measurements;
 - an interactive PowerShell terminal rooted in the selected Workspace;
 - create/attach, repair, and safe remove actions;
 - explicit one-click CMD, PowerShell, VS Code, and exact-version Unity launches.
+
+When creating a Workspace, choose a **Starting point** from local branches, tags, or locally
+available remote branches, then select a commit by its message, author, and date. Older history is
+paged in groups of 50. The default is the source project's current commit. The selected commit is
+pinned when displayed, so later branch updates do not change the Workspace's starting point.
+Direct branch/tag/commit entry remains available under **Advanced**; CLI `--base` is unchanged.
+
+Starting-point queries do not fetch, clone, write a history index, or rebuild the Library parent.
+Remote branches show their last locally synced state. Workspaces continue to share Git objects and
+the existing Library parent; authored-file checkout and Unity reimport costs still depend on the
+selected content. See the [selection validation report](docs/validation/workspace-base-selection.md).
 
 It has no Agent Manager, Run/DAG, approval, verified-patch, publish, or merge surface. The sandboxed
 renderer receives only strict versioned DTOs through the preload bridge; filesystem, Git, storage,
@@ -107,6 +122,10 @@ process launch, and PTY authority stay in the main process. Git clone is onboard
 uses the system Git credential flow, does not store credentials, and preserves partial output on
 failure. External tools are launched only when the user clicks an action; HoneyBee does not monitor,
 restart, or orchestrate them. See the [Desktop Beta guide](docs/operations/windows-desktop-beta.md).
+
+The same storage report is available with `honeybee workspace usage --json`.
+See the [shared TestPlay cache guide](docs/operations/shared-testplay-cache.md)
+for accounting limits and the optional TestPlay follow-up build.
 
 ## Safety and persistence
 

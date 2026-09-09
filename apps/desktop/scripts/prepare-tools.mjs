@@ -8,8 +8,8 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
-const workspaceStorageCommit = "796514b475bece93635df504a32e1bcb54b95493";
-const workspaceStorageVersion = "0.0.0+796514b475be.hb9";
+const workspaceStorageCommit = "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa";
+const workspaceStorageVersion = "0.0.0+cfa606fd4143.hb12";
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
@@ -17,6 +17,11 @@ const hostRoot = path.join(repositoryRoot, "tools", "workspace-storage-host");
 const outputRoot = path.join(appRoot, ".tools", "win32-x64");
 const clientOutput = path.join(outputRoot, "unity-workspace-storage.exe");
 const hostOutput = path.join(outputRoot, "honeybee-workspace-storage-host.exe");
+const usageOutput = path.join(outputRoot, "honeybee-usage.exe");
+const overlayRoot = path.join(repositoryRoot, "integrations", "storage");
+const overlay = JSON.parse(
+  await readFile(path.join(overlayRoot, "external-bee-overlay.json"), "utf8"),
+);
 
 const run = async (command, args, options = {}) =>
   execFileAsync(command, args, {
@@ -33,6 +38,7 @@ const sha256 = async (target) =>
     .digest("hex");
 
 let temporary;
+let overlayTemporary;
 let sourceRoot =
   process.env.HONEYBEE_WORKSPACE_STORAGE_SOURCE ??
   path.resolve(repositoryRoot, "..", "unity-workspace-storage");
@@ -56,6 +62,22 @@ try {
   if (dirty.length !== 0) {
     throw new Error("workspace-storage source has uncommitted changes.");
   }
+
+  const patch = path.join(overlayRoot, "external-bee.patch");
+  if (
+    overlay.baseCommit !== workspaceStorageCommit ||
+    overlay.componentVersion !== workspaceStorageVersion ||
+    (await sha256(patch)) !== overlay.sha256
+  ) {
+    throw new Error("External Bee storage overlay identity mismatch.");
+  }
+  overlayTemporary = await mkdtemp(path.join(tmpdir(), "honeybee-storage-overlay-"));
+  const patchedSource = path.join(overlayTemporary, "source");
+  await run("git", ["clone", "--no-hardlinks", "--no-checkout", sourceRoot, patchedSource]);
+  await run("git", ["checkout", "--detach", workspaceStorageCommit], { cwd: patchedSource });
+  await run("git", ["apply", "--check", patch], { cwd: patchedSource });
+  await run("git", ["apply", patch], { cwd: patchedSource });
+  sourceRoot = patchedSource;
 
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(outputRoot, { recursive: true });
@@ -83,7 +105,7 @@ try {
       [
         "work",
         "edit",
-        `-replace=github.com/Kubonsang/unity-workspace-storage@v0.0.0-20260907041419-796514b475be=${sourceRoot}`,
+        `-replace=github.com/Kubonsang/unity-workspace-storage@v0.0.0-20260908094357-cfa606fd4143=${sourceRoot}`,
       ],
       { cwd: workRoot, env: { GOWORK: workFile } },
     );
@@ -100,13 +122,36 @@ try {
   }
 
   await writeFile(
+    path.join(outputRoot, "usage-build.txt"),
+    "Read-only measurement companion; no service installation.\n",
+    "utf8",
+  );
+  await run(
+    "go",
+    [
+      "build",
+      "-buildvcs=false",
+      "-trimpath",
+      "-ldflags=-buildid=",
+      "-o",
+      usageOutput,
+      "./cmd/honeybee-usage",
+    ],
+    { cwd: hostRoot, env: buildEnvironment },
+  );
+  await writeFile(
     path.join(outputRoot, "manifest.json"),
     JSON.stringify(
       {
         schemaVersion: 1,
         workspaceStorageVersion,
         workspaceStorageCommit,
+        workspaceStorageOverlaySHA256: overlay.sha256,
         files: {
+          "honeybee-usage.exe": {
+            byteLength: (await stat(usageOutput)).size,
+            sha256: await sha256(usageOutput),
+          },
           "unity-workspace-storage.exe": {
             byteLength: (await stat(clientOutput)).size,
             sha256: await sha256(clientOutput),
@@ -124,6 +169,9 @@ try {
   );
   process.stdout.write("Prepared pinned HoneyBee tools at " + outputRoot + "\n");
 } finally {
+  if (overlayTemporary !== undefined) {
+    await rm(overlayTemporary, { recursive: true, force: true });
+  }
   if (temporary !== undefined) {
     await rm(temporary, { recursive: true, force: true });
   }

@@ -90,8 +90,15 @@ const parseCache = (value: unknown): ProjectCacheV2 | undefined => {
     );
   }
   const allocatedBytes = optionalBytes(value.allocatedBytes, "cache.allocatedBytes");
+  if (value.storageLayout !== undefined && value.storageLayout !== "external-bee-dag-v1") {
+    throw new WorkspaceCoreError(
+      "registry.layout-unsupported",
+      "The registered cache storage layout is unsupported.",
+    );
+  }
   return {
     kind: PROJECT_CACHE_KIND,
+    ...(value.storageLayout === undefined ? {} : { storageLayout: value.storageLayout }),
     parentId: string(value.parentId, "cache.parentId"),
     seedCommit: string(value.seedCommit, "cache.seedCommit"),
     preparedAt: timestamp(value.preparedAt, "cache.preparedAt"),

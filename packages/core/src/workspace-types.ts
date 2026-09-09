@@ -4,6 +4,7 @@ export type WorkspaceState =
   "provisioning" | "ready" | "repair-required" | "removing" | "cleanup-pending";
 
 export interface ProjectCacheV2 {
+  readonly storageLayout?: "external-bee-dag-v1";
   readonly kind: "library-only-v1";
   readonly parentId: string;
   readonly seedCommit: string;
@@ -134,7 +135,11 @@ export interface StorageRemovalPreparation {
 }
 
 export interface WorkspaceStoragePort {
-  beginParent(command: string, compatibilityKey: string): Promise<StorageParentBuild>;
+  beginParent(
+    command: string,
+    compatibilityKey: string,
+    layout?: "external-bee-dag-v1",
+  ): Promise<StorageParentBuild>;
   commitParent(command: string, transactionId: string): Promise<StorageParentBuild>;
   abortParent(command: string, transactionId: string): Promise<void>;
   acquire(

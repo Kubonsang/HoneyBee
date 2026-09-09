@@ -1,6 +1,69 @@
 # Changelog
 
-## 0.1.0-beta.7 - Unreleased
+## 0.1.0-beta.11 - 2026-09-10
+
+- Choose a Workspace starting commit from local branches, tags, and locally available remote
+  branches using commit messages, authors, and dates. Direct SHA entry remains optional.
+- Page older history, pin the selected commit, and handle failed or stale queries without
+  accidentally creating from a different branch tip.
+- Keep starting-point queries read-only and bounded; reuse shared Git objects and the prepared
+  Library parent without fetching, cloning, or rebuilding the cache.
+- Measure 191 ms first-query p95 and 4.88 ms median additional creation time in a paired Core/Git
+  fixture. Physical VHDX allocation and Unity import times were not remeasured for this feature.
+- Retain Beta 10's hb12 storage payload and compatibility. Existing hb12 installations need no
+  service replacement for this release.
+
+## 0.1.0-beta.10 - 2026-09-09
+
+- Compress newly seeded private Bee data with native NTFS compression in hb12.
+  New files inherit compression; existing caches retain their state on attachment.
+- Reuse external-Bee parent seeds without rewriting parents or VHDX containers.
+- Measure 483.80 to 392.31 MB combined cache (18.91% reduction) in the paired GNF
+  study, with timing regressions within 10%. The original 20% gate remains missed.
+- Validate 572 GNF Unity tests, native compressed/uncompressed cache lifecycle,
+  installed hb11-to-hb12 upgrade, service restart and physical Windows reboot.
+- Record interrupted installer reconciliation and the limited preservation scope;
+  remove all disposable installed child Workspaces after reboot validation.
+- Add reproducible footprint, allocation and write-correlation experiments, with
+  verified archival and scoped cleanup of generated experiment data.
+
+## 0.1.0-beta.9 - 2026-09-09
+
+- Prepare new Library parents with an immutable Bee seed and give each Workspace
+  an independent external Bee cache, managed by the hb11 storage broker.
+- Retain compiled Bee artifacts and Tundra state while regenerating allowlisted
+  DAG/input files; reattachment preserves each Workspace's modified cache.
+- Include private Bee and shared seed allocation in usage, quota and lifecycle
+  cleanup. Existing parents and Workspaces keep their current layout.
+- Measure 357.56 MB median child and 510.98 MB combined cache in the GNF startup
+  campaign: 55.83% and 36.88% lower respectively. This does not meet the historical
+  350 MB child median gate or guarantee a 300 MB total Workspace.
+- Validate actual GNF broker integration with 364 passing tests, plus an installed
+  hb10-to-hb11 upgrade, SCM restart and physical reboot. Repair two dirty user
+  Workspaces while preserving all 21 changed files and Git HEAD/index contents.
+- Reject stale storage compatibility metadata in Desktop bundles before packaging.
+  Record the exact storage base revision and overlay SHA-256 in built tools.
+- Update development/test dependencies to Vitest 4.1.11, addressing
+  GHSA-82fw-gwwq-j7x9 reported by the release dependency audit.
+
+## 0.1.0-beta.8 - 2026-09-08
+
+- Create new Windows child VHDX with 1 MiB payload blocks, reusing existing
+  2 MiB parents and preserving retained children at their original geometry.
+- Measure 18.84% lower median persisted child allocation in the GNF Unity
+  benchmark, with no qualifying first-open or reopen timing regression.
+- Show measured logical/allocated Workspace storage and shared-parent usage,
+  keeping unknown or partial measurements explicit.
+- Include optional TestPlay shared-cache integration guidance; TestPlay's
+  separate implementation is not installed or enabled by HoneyBee.
+- Pin hb10 storage and verify old/new retained children across three reattach
+  cycles and one physical reboot. Preserve all four original user child hashes
+  and remove both disposable validation children.
+- Update the bundled hb9-to-hb10 service-upgrade instructions. Existing child
+  files do not shrink automatically; fresh install and older migrations remain
+  outside this release's native qualification.
+
+## 0.1.0-beta.7 - 2026-09-07
 
 - Keep the changed-file list beside the unified diff, with file-type groups, search,
   line numbers, colors, new-file previews and per-file scroll restoration.

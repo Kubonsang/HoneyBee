@@ -7,6 +7,9 @@ import { HoneyBeeWorkspaceCore, type ProjectRecordV2, type WorkspaceViewV1 } fro
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 
 import {
+  DesktopBaseRefsRequestV1Schema,
+  DesktopBaseHistoryRequestV1Schema,
+  DesktopBaseResolveRequestV1Schema,
   DesktopCloneRequestV1Schema,
   DesktopExternalLaunchRequestV1Schema,
   DesktopFolderPickerRequestV1Schema,
@@ -30,6 +33,7 @@ import {
 import { readDiff } from "./git-diff.js";
 import { verifyWorkspaceFeedback } from "./workspace-feedback-smoke.js";
 import { verifyWorkbench } from "./workbench-smoke.js";
+import { verifyWorkspaceBasePicker } from "./workspace-base-smoke.js";
 import { setupBlockers } from "../shared/setup-checks.js";
 import compatibility from "../../resources/component-compatibility-v1.json" with { type: "json" };
 import { desktopError, DesktopMainError } from "./desktop-errors.js";
@@ -42,7 +46,11 @@ import {
 } from "./project-onboarding.js";
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
 
-const core = new HoneyBeeWorkspaceCore();
+const core = new HoneyBeeWorkspaceCore({
+  usageCommand: app.isPackaged
+    ? path.join(process.resourcesPath, "win32-x64", "honeybee-usage.exe")
+    : path.join(app.getAppPath(), ".tools", "win32-x64", "honeybee-usage.exe"),
+});
 const ptySessions = new DesktopPtySessionManager();
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v2";
 const captureDirectory = process.env.HONEYBEE_DESKTOP_CAPTURE_DIR;
@@ -55,6 +63,7 @@ let mainWindow: BrowserWindow | undefined;
 let smokeTerminalRoot: string | undefined;
 let smokeRefreshFailure = false;
 let smokeLaunchFailure = false;
+let smokeBaseRefsFailure = true;
 
 const smokeProject: DesktopProjectV2 = {
   projectId: "smoke-project",
@@ -64,6 +73,28 @@ const smokeProject: DesktopProjectV2 = {
   workspaceRoot: "D:\\HoneyBee\\GKF_",
   cacheState: "ready",
   unityVersion: "6000.0.42f1",
+};
+const smokeBaseCommits = [
+  {
+    commit: "a".repeat(40),
+    subject: "Update combat balance",
+    author: "Alex",
+    authoredAt: "2026-09-09T10:00:00+09:00",
+  },
+  {
+    commit: "b".repeat(40),
+    subject: "전투 씬 추가",
+    author: "민수",
+    authoredAt: "2026-09-08T10:00:00+09:00",
+  },
+];
+const pendingBaseQueries = new Map<string, Promise<unknown>>();
+const shareBaseQuery = <T>(key: string, query: () => Promise<T>): Promise<T> => {
+  const pending = pendingBaseQueries.get(key);
+  if (pending !== undefined) return pending as Promise<T>;
+  const result = query().finally(() => pendingBaseQueries.delete(key));
+  pendingBaseQueries.set(key, result);
+  return result;
 };
 let smokeWorkspaces: DesktopWorkspaceV2[] = [
   {
@@ -431,6 +462,121 @@ const registerIpc = (): void => {
     }),
   );
   ipcMain.handle(
+    DesktopIpcChannels.workspaceUsage,
+    handler(async (value) => {
+      const request = DesktopWorkspaceRequestV1Schema.parse(value);
+      if (fixtureMode)
+        return {
+          schemaVersion: 1 as const,
+          measuredAt: new Date().toISOString(),
+          knownAllocatedBytes: 1_200_000_000,
+          complete: false,
+          entries: [
+            {
+              id: "files",
+              kind: "files",
+              scope: "workspace",
+              workspaceId: request.workspaceId,
+              logicalBytes: 20_000_000,
+              allocatedBytes: 21_000_000,
+              fileCount: 352,
+              omittedLinks: 0,
+              complete: true,
+              errors: [],
+            },
+            {
+              id: "child",
+              kind: "child-vhdx",
+              scope: "workspace",
+              workspaceId: request.workspaceId,
+              logicalBytes: null,
+              allocatedBytes: null,
+              fileCount: 0,
+              omittedLinks: 0,
+              complete: false,
+              errors: ["Fixture: unavailable storage identity"],
+            },
+            {
+              id: "shared",
+              kind: "testplay-shared",
+              scope: "shared",
+              logicalBytes: 1_170_000_000,
+              allocatedBytes: 1_179_000_000,
+              fileCount: 100,
+              omittedLinks: 0,
+              complete: true,
+              errors: [],
+            },
+          ],
+        };
+      return core.workspaceUsage(request.workspaceId, request.projectId);
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.workspaceBaseRefs,
+    handler(async (value) => {
+      const request = DesktopBaseRefsRequestV1Schema.parse(value);
+      if (smokeMode && smokeBaseRefsFailure) {
+        smokeBaseRefsFailure = false;
+        throw new DesktopMainError(
+          "git.base-query-failed",
+          "Simulated first reference query failure.",
+        );
+      }
+      if (fixtureMode)
+        return {
+          head: smokeBaseCommits[0],
+          currentBranch: "main",
+          refs: [
+            { reference: "refs/heads/main", label: "main", kind: "branch" },
+            { reference: "refs/heads/history-smoke", label: "history-smoke", kind: "branch" },
+          ],
+          nextOffset: null,
+        };
+      return shareBaseQuery(`refs:${JSON.stringify(request)}`, () =>
+        core.workspaceBaseRefs(request.projectId, request.offset),
+      );
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.workspaceBaseHistory,
+    handler(async (value) => {
+      const request = DesktopBaseHistoryRequestV1Schema.parse(value);
+      if (fixtureMode && request.reference === "refs/heads/history-smoke") {
+        await new Promise((resolve) => setTimeout(resolve, 350));
+        return {
+          tip: smokeBaseCommits[1]?.commit,
+          commits: [smokeBaseCommits[1]],
+          nextOffset: null,
+        };
+      }
+      if (fixtureMode)
+        return {
+          tip: smokeBaseCommits[0]?.commit,
+          commits: request.offset === 0 ? smokeBaseCommits : [],
+          nextOffset: null,
+        };
+      return shareBaseQuery(`history:${JSON.stringify(request)}`, () =>
+        core.workspaceBaseHistory(request.projectId, request.reference, request.offset),
+      );
+    }),
+  );
+  ipcMain.handle(
+    DesktopIpcChannels.workspaceBaseResolve,
+    handler(async (value) => {
+      const request = DesktopBaseResolveRequestV1Schema.parse(value);
+      if (fixtureMode) {
+        const commit = smokeBaseCommits.find((item) => item.commit === request.reference);
+        if (commit === undefined)
+          throw new DesktopMainError("git.invalid-base", "Choose a valid branch, tag, or commit.");
+        return commit;
+      }
+      return shareBaseQuery(`resolve:${JSON.stringify(request)}`, () =>
+        core.resolveWorkspaceBase(request.projectId, request.reference),
+      );
+    }),
+  );
+  ipcMain.handle(
     DesktopIpcChannels.workspaceCreate,
     handler(async (value) => {
       const request = DesktopWorkspaceCreateRequestV1Schema.parse(value);
@@ -445,7 +591,12 @@ const registerIpc = (): void => {
           libraryConnected: true,
           branch: request.branch,
           baseCommit: request.base ?? "a1b2c3d4",
-          git: { branch: request.branch, head: "a1b2c3d4", dirty: false, changes: [] },
+          git: {
+            branch: request.branch,
+            head: request.base ?? "a1b2c3d4",
+            dirty: false,
+            changes: [],
+          },
         };
         smokeWorkspaces = [...smokeWorkspaces, created];
         return created;
@@ -686,6 +837,9 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
     throw new Error(`Visual fixture timed out: ${selector}`);
   };
   const capture = async (name: string): Promise<void> => {
+    await window.webContents.executeJavaScript(
+      "new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))",
+    );
     await writeFile(
       path.join(target, `${name}.png`),
       (await window.webContents.capturePage()).toPNG(),
@@ -699,6 +853,7 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await waitFor("[data-testid='workspace-workbench']");
   await click("[data-testid='new-workspace']");
   await waitFor("[data-testid='workspace-dialog']");
+  await waitFor("[data-testid='base-summary']");
   await capture("02-create-dialog");
   await click("[data-testid='workspace-dialog'] header .icon-button");
   await waitFor("[data-testid='workspace-workbench']");
@@ -706,6 +861,10 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await click(".workspace-row:nth-child(2)");
   await waitFor(".diff-line.added");
   await capture("07-changes-review");
+  await click("[data-testid='usage-tab']");
+  await click(".usage-toolbar button");
+  await waitFor(".usage-panel tbody tr");
+  await capture("08-storage-usage");
   await click(".workspace-row:first-child");
   await click(".breadcrumb-project");
   await waitFor("[data-testid='project-picker']");
@@ -736,6 +895,7 @@ const createWindow = async (): Promise<void> => {
       ? path.join(process.resourcesPath, "honeybee.png")
       : path.join(app.getAppPath(), "resources", "brand", "honeybee.png"),
     webPreferences: {
+      backgroundThrottling: !fixtureMode,
       preload: desktopPreloadPath(),
       contextIsolation: true,
       nodeIntegration: false,
@@ -774,6 +934,7 @@ const createWindow = async (): Promise<void> => {
       if (result.ready !== true || result.projects !== true)
         throw new Error("invalid smoke result");
       try {
+        await verifyWorkspaceBasePicker(mainWindow);
         await verifyWorkbench(mainWindow);
         const original = structuredClone(smokeWorkspaces);
         await verifyWorkspaceFeedback(mainWindow, (scenario) => {

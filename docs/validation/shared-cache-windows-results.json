@@ -1,0 +1,299 @@
+{
+  "schemaVersion": 1,
+  "validatedOn": "2026-09-08",
+  "unityVersion": "6000.6.0f1",
+  "testSuite": "Combat.Tests.CombatSimulationTests",
+  "testNamesSha256": "e47b80dc4763a5088b0d0cb9cef85e10a03b10a4579bc54c7855234590ff7ccb",
+  "testplayBase": "95d65521ec2d56419b5b0e2351a70e0e1b2059ee",
+  "executableSha256": "a98df80f47fdd6ef3d4639fe176023322e0af546ed9338e7132222f6dd89f194",
+  "patchSha256": "0fc0e607feab7e34aaa46e908a166fd83c46faa645ac8d3630ed668f133891db",
+  "capacity": {
+    "sourceFileCount": 59177,
+    "duplicateLogicalCandidateBytes": 796336496,
+    "originalAllocatedBytes": 2441425328,
+    "sharedAllocatedBytes": 1630328792,
+    "netAllocatedSavingsBytes": 811096536,
+    "savingsFraction": 0.33222254504275384,
+    "netSavingsMeetNinetyPercentOfLogicalCandidate": true,
+    "restoredAndHashVerified": true
+  },
+  "qualification": {
+    "schemaVersion": 1,
+    "modes": {
+      "local": {
+        "runs": 10,
+        "testsPassed": 220,
+        "correct": true,
+        "medianWallMs": 92994.5,
+        "medianPreparationMs": 16018,
+        "medianWriteBackMs": 29252.5,
+        "peakAllocatedBytes": 3620987512
+      },
+      "shared-content": {
+        "runs": 10,
+        "testsPassed": 220,
+        "correct": true,
+        "medianWallMs": 67559.5,
+        "medianPreparationMs": 17374,
+        "medianWriteBackMs": 9002,
+        "peakAllocatedBytes": 2554362144
+      }
+    },
+    "ratios": {
+      "total": 0.7264892009742512,
+      "preparation": 1.084654763391185,
+      "peak": 0.705432464358082
+    },
+    "gates": {
+      "identicalSuccessfulTests": true,
+      "medianTotalWithinTenPercent": true,
+      "medianPreparationWithinTenPercent": true,
+      "observedPeakDoesNotIncrease": true
+    },
+    "nativeQualified": true,
+    "caveat": "Observed phase-boundary allocations exclude directory/MFT overhead; they are not continuous system-wide peak sampling."
+  },
+  "finalUnreferencedBlobBytes": 0,
+  "warmRuns": [
+    {
+      "mode": "local",
+      "iteration": 1,
+      "runId": "20260908-022854-fbd0784a",
+      "wallMs": 85714,
+      "preparationMs": 15556,
+      "cacheWriteBackMs": 30216,
+      "observedPeakAllocatedBytes": 3620491896,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 1,
+      "runId": "20260908-023019-25ac42c9",
+      "wallMs": 64645,
+      "preparationMs": 16836,
+      "cacheWriteBackMs": 8976,
+      "observedPeakAllocatedBytes": 2554239264,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 2,
+      "runId": "20260908-023124-f6d4b003",
+      "wallMs": 65843,
+      "preparationMs": 16481,
+      "cacheWriteBackMs": 8953,
+      "observedPeakAllocatedBytes": 2554255648,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 2,
+      "runId": "20260908-023230-ec32b16d",
+      "wallMs": 91048,
+      "preparationMs": 15637,
+      "cacheWriteBackMs": 28793,
+      "observedPeakAllocatedBytes": 3620356728,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 3,
+      "runId": "20260908-023401-e28d1a46",
+      "wallMs": 93742,
+      "preparationMs": 15959,
+      "cacheWriteBackMs": 29169,
+      "observedPeakAllocatedBytes": 3620409976,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 3,
+      "runId": "20260908-023535-bf6de819",
+      "wallMs": 68327,
+      "preparationMs": 17470,
+      "cacheWriteBackMs": 9493,
+      "observedPeakAllocatedBytes": 2554263840,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 4,
+      "runId": "20260908-023643-702a27dc",
+      "wallMs": 69985,
+      "preparationMs": 18091,
+      "cacheWriteBackMs": 8957,
+      "observedPeakAllocatedBytes": 2554312992,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 4,
+      "runId": "20260908-023753-258c702a",
+      "wallMs": 89273,
+      "preparationMs": 16077,
+      "cacheWriteBackMs": 29273,
+      "observedPeakAllocatedBytes": 3620487800,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 5,
+      "runId": "20260908-023922-f9307233",
+      "wallMs": 95956,
+      "preparationMs": 16732,
+      "cacheWriteBackMs": 30180,
+      "observedPeakAllocatedBytes": 3620639352,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 5,
+      "runId": "20260908-024058-68783b6f",
+      "wallMs": 69907,
+      "preparationMs": 17368,
+      "cacheWriteBackMs": 9857,
+      "observedPeakAllocatedBytes": 2554362144,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 6,
+      "runId": "20260908-024208-1df3822c",
+      "wallMs": 67572,
+      "preparationMs": 18031,
+      "cacheWriteBackMs": 9927,
+      "observedPeakAllocatedBytes": 2554292512,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 6,
+      "runId": "20260908-024316-443b1ce0",
+      "wallMs": 101644,
+      "preparationMs": 16963,
+      "cacheWriteBackMs": 32008,
+      "observedPeakAllocatedBytes": 3620864632,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 7,
+      "runId": "20260908-024457-b4b059e9",
+      "wallMs": 100441,
+      "preparationMs": 16738,
+      "cacheWriteBackMs": 33446,
+      "observedPeakAllocatedBytes": 3620987512,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 7,
+      "runId": "20260908-024638-7290263d",
+      "wallMs": 69390,
+      "preparationMs": 17594,
+      "cacheWriteBackMs": 10103,
+      "observedPeakAllocatedBytes": 2554333472,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 8,
+      "runId": "20260908-024747-2ca229b4",
+      "wallMs": 67547,
+      "preparationMs": 17380,
+      "cacheWriteBackMs": 9028,
+      "observedPeakAllocatedBytes": 2554353952,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 8,
+      "runId": "20260908-024855-bf06eb93",
+      "wallMs": 92247,
+      "preparationMs": 16551,
+      "cacheWriteBackMs": 28613,
+      "observedPeakAllocatedBytes": 3620713080,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 9,
+      "runId": "20260908-025027-1992a808",
+      "wallMs": 94025,
+      "preparationMs": 15741,
+      "cacheWriteBackMs": 29232,
+      "observedPeakAllocatedBytes": 3620778616,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 9,
+      "runId": "20260908-025201-08d16a99",
+      "wallMs": 60721,
+      "preparationMs": 15743,
+      "cacheWriteBackMs": 7842,
+      "observedPeakAllocatedBytes": 2554145056,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "shared-content",
+      "iteration": 10,
+      "runId": "20260908-025302-7d0f7555",
+      "wallMs": 61368,
+      "preparationMs": 14106,
+      "cacheWriteBackMs": 8261,
+      "observedPeakAllocatedBytes": 2554059040,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    },
+    {
+      "mode": "local",
+      "iteration": 10,
+      "runId": "20260908-025403-f0b606ee",
+      "wallMs": 85312,
+      "preparationMs": 13957,
+      "cacheWriteBackMs": 26456,
+      "observedPeakAllocatedBytes": 3620385400,
+      "passed": 22,
+      "failed": 0,
+      "warnings": []
+    }
+  ]
+}

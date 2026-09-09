@@ -1,0 +1,124 @@
+{
+  "protocol": "startup-lifecycle-v1",
+  "ok": true,
+  "candidate": "E-dag",
+  "capacityGateChanged": false,
+  "samples": [
+    {
+      "name": "E-dag-10",
+      "initialChildBytes": 314572800,
+      "initialExternalBytes": 153535785,
+      "removed": true,
+      "archiveSHA256": "2f6648f5ab6791a6972ca915d8fe0dd4c87d7a4ce845754430fa9f00fc3b548a"
+    },
+    {
+      "name": "E-dag-11",
+      "initialChildBytes": 319815680,
+      "initialExternalBytes": 153487459,
+      "removed": true,
+      "archiveSHA256": "3534c38e82375aa324d260b4c0f8b7f7e68d3496678ba3f6bb9a948c787d8845"
+    }
+  ],
+  "passedTests": 468,
+  "initialPassedTests": 104,
+  "concurrentPassedTests": 312,
+  "survivorPassedTests": 52,
+  "runs": [
+    {
+      "phase": "E-dag-10-cycle1-edit_mode",
+      "runId": "20260909-031414-20cacdf3",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-10-cycle1-play_mode",
+      "runId": "20260909-031423-b0d51175",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-11-cycle1-edit_mode",
+      "runId": "20260909-031550-8557ea04",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-11-cycle1-play_mode",
+      "runId": "20260909-031600-360ac558",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-10-compat1-edit_mode",
+      "runId": "20260909-031653-f79fa5ea",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-10-compat1-play_mode",
+      "runId": "20260909-031708-83857b94",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-11-compat1-edit_mode",
+      "runId": "20260909-031653-2f64a705",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-11-compat1-play_mode",
+      "runId": "20260909-031708-17542769",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-10-compat2-edit_mode",
+      "runId": "20260909-031744-d507cfa3",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-10-compat2-play_mode",
+      "runId": "20260909-031804-7819d3bd",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-11-compat2-edit_mode",
+      "runId": "20260909-031744-b98653e1",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-11-compat2-play_mode",
+      "runId": "20260909-031804-0164899f",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-10-compat3-edit_mode",
+      "runId": "20260909-031841-fb0eb0c9",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-10-compat3-play_mode",
+      "runId": "20260909-031900-ec5c5cec",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-11-compat3-edit_mode",
+      "runId": "20260909-031841-39a2fb5e",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-11-compat3-play_mode",
+      "runId": "20260909-031900-a6ae47d6",
+      "passed": 15
+    },
+    {
+      "phase": "E-dag-11-compat4-edit_mode",
+      "runId": "20260909-031939-14b94814",
+      "passed": 37
+    },
+    {
+      "phase": "E-dag-11-compat4-play_mode",
+      "runId": "20260909-031956-26df93d4",
+      "passed": 15
+    }
+  ],
+  "rebootTested": false,
+  "backend": "two independent batch Unity processes",
+  "limits": [
+    "Native isolated lifecycle only; installed broker integration is separate.",
+    "No GUI session, service restart or physical reboot was tested."
+  ]
+}

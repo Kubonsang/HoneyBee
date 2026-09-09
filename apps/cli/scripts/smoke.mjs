@@ -20,6 +20,7 @@ await Promise.all([
   access(path.join(bundleRoot, "dist", "unity-workspace-storage.exe")),
   access(path.join(bundleRoot, "dist", "honeybee-workspace-storage-host.exe")),
   access(path.join(bundleRoot, "dist", "manifest.json")),
+  access(path.join(bundleRoot, "dist", "honeybee-usage.exe")),
   access(path.join(bundleRoot, "README.md")),
 ]);
 
@@ -39,11 +40,13 @@ await Promise.all([
   assertOnlyJavaScript(path.join(bundleRoot, "node_modules", "@honeybee", "core", "dist"), [
     "git-status.js",
     "index.js",
+    "workspace-bases.js",
     "workspace-core.js",
     "workspace-doctor.js",
     "workspace-registry.js",
     "workspace-storage.js",
     "workspace-types.js",
+    "workspace-usage.js",
   ]),
 ]);
 

@@ -24,6 +24,7 @@ await Promise.all([
   access(path.join(bundledTools, "unity-workspace-storage.exe")),
   access(path.join(bundledTools, "honeybee-workspace-storage-host.exe")),
   access(path.join(bundledTools, "manifest.json")),
+  access(path.join(bundledTools, "honeybee-usage.exe")),
 ]);
 await rm(outputRoot, { recursive: true, force: true });
 await mkdir(bundledCore, { recursive: true });
@@ -41,6 +42,10 @@ await Promise.all([
     path.join(bundleRoot, "dist", "honeybee-workspace-storage-host.exe"),
   ),
   cp(path.join(bundledTools, "manifest.json"), path.join(bundleRoot, "dist", "manifest.json")),
+  cp(
+    path.join(bundledTools, "honeybee-usage.exe"),
+    path.join(bundleRoot, "dist", "honeybee-usage.exe"),
+  ),
   cp(path.join(repositoryRoot, "LICENSE"), path.join(bundleRoot, "LICENSE")),
   cp(
     path.join(repositoryRoot, "docs", "operations", "windows-cli-beta.md"),

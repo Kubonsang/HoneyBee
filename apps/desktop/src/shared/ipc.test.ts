@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  DesktopBaseHistoryRequestV1Schema,
+  DesktopBaseHistoryV1Schema,
+  DesktopBaseRefsRequestV1Schema,
   DesktopCloneRequestV1Schema,
   DesktopIpcChannels,
   DesktopPtyCreateRequestV1Schema,
@@ -10,6 +13,25 @@ import {
 } from "./ipc.js";
 
 describe("Workspace Workbench IPC v2", () => {
+  it("bounds starting point queries and requires immutable commit results", () => {
+    expect(DesktopBaseRefsRequestV1Schema.parse({ projectId: "project" }).offset).toBe(0);
+    expect(() =>
+      DesktopBaseRefsRequestV1Schema.parse({ projectId: "project", offset: -1 }),
+    ).toThrow();
+    expect(() =>
+      DesktopBaseHistoryRequestV1Schema.parse({
+        projectId: "project",
+        reference: "main",
+        path: "C:\\other",
+      }),
+    ).toThrow();
+    expect(() =>
+      DesktopBaseHistoryRequestV1Schema.parse({ projectId: "project", reference: "bad\nref" }),
+    ).toThrow();
+    expect(() =>
+      DesktopBaseHistoryV1Schema.parse({ tip: "main", commits: [], nextOffset: null }),
+    ).toThrow();
+  });
   it("exposes only onboarding, Workspace, diff, terminal, and user-triggered tool channels", () => {
     expect(Object.values(DesktopIpcChannels)).not.toContain("desktop.agent.start.v1");
     expect(Object.values(DesktopIpcChannels)).not.toContain("desktop.git.push.v1");

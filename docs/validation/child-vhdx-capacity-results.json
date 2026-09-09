@@ -1,0 +1,818 @@
+{
+  "schemaVersion": 1,
+  "protocol": "capacity-v1",
+  "qualifiedProtocol": true,
+  "targetBytes": 300000000,
+  "runs": 3,
+  "cycles": 5,
+  "candidates": {
+    "A-legacy": {
+      "valid": true,
+      "samples": [
+        {
+          "iteration": 0,
+          "childBytes": 808452096,
+          "externalBytes": 0,
+          "combinedBytes": 808452096,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 38005,
+          "reopenMs": 6687,
+          "editCompileAndTestMs": 11084,
+          "playModeMs": 29717
+        },
+        {
+          "iteration": 1,
+          "childBytes": 775946240,
+          "externalBytes": 0,
+          "combinedBytes": 775946240,
+          "observedPeakBytes": 775946240,
+          "firstOpenMs": 40116,
+          "reopenMs": 6809,
+          "editCompileAndTestMs": 11775,
+          "playModeMs": 30165
+        },
+        {
+          "iteration": 2,
+          "childBytes": 775946240,
+          "externalBytes": 0,
+          "combinedBytes": 775946240,
+          "observedPeakBytes": 775946240,
+          "firstOpenMs": 38527,
+          "reopenMs": 6501,
+          "editCompileAndTestMs": 11686,
+          "playModeMs": 29933
+        }
+      ],
+      "medians": {
+        "childBytes": 775946240,
+        "externalBytes": 0,
+        "combinedBytes": 775946240,
+        "firstOpenMs": 38527,
+        "reopenMs": 6687,
+        "editCompileAndTestMs": 11686,
+        "playModeMs": 29933
+      },
+      "maxObservedChildBytes": 809500672,
+      "combinedSavingsFraction": 0.0,
+      "timingRatios": {
+        "firstOpenMs": 1.0,
+        "reopenMs": 1.0,
+        "editCompileAndTestMs": 1.0
+      },
+      "capacityTargetMet": false,
+      "timingGatePassed": true,
+      "qualified": false
+    },
+    "B-fresh": {
+      "valid": true,
+      "samples": [
+        {
+          "iteration": 0,
+          "childBytes": 776994816,
+          "externalBytes": 0,
+          "combinedBytes": 776994816,
+          "observedPeakBytes": 776994816,
+          "firstOpenMs": 33622,
+          "reopenMs": 6670,
+          "editCompileAndTestMs": 10963,
+          "playModeMs": 29582
+        },
+        {
+          "iteration": 1,
+          "childBytes": 754974720,
+          "externalBytes": 0,
+          "combinedBytes": 754974720,
+          "observedPeakBytes": 775946240,
+          "firstOpenMs": 34282,
+          "reopenMs": 6733,
+          "editCompileAndTestMs": 11346,
+          "playModeMs": 29719
+        },
+        {
+          "iteration": 2,
+          "childBytes": 767557632,
+          "externalBytes": 0,
+          "combinedBytes": 767557632,
+          "observedPeakBytes": 775946240,
+          "firstOpenMs": 34709,
+          "reopenMs": 6777,
+          "editCompileAndTestMs": 11509,
+          "playModeMs": 29919
+        }
+      ],
+      "medians": {
+        "childBytes": 767557632,
+        "externalBytes": 0,
+        "combinedBytes": 767557632,
+        "firstOpenMs": 34282,
+        "reopenMs": 6733,
+        "editCompileAndTestMs": 11346,
+        "playModeMs": 29719
+      },
+      "maxObservedChildBytes": 776994816,
+      "combinedSavingsFraction": 0.010810810810810811,
+      "timingRatios": {
+        "firstOpenMs": 0.8898175305629819,
+        "reopenMs": 1.0068790189920742,
+        "editCompileAndTestMs": 0.9709053568372411
+      },
+      "capacityTargetMet": false,
+      "timingGatePassed": true,
+      "qualified": false
+    },
+    "C-no-bee": {
+      "valid": true,
+      "samples": [
+        {
+          "iteration": 0,
+          "childBytes": 791674880,
+          "externalBytes": 0,
+          "combinedBytes": 791674880,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 44643,
+          "reopenMs": 6783,
+          "editCompileAndTestMs": 11181,
+          "playModeMs": 29969
+        },
+        {
+          "iteration": 1,
+          "childBytes": 791674880,
+          "externalBytes": 0,
+          "combinedBytes": 791674880,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 45982,
+          "reopenMs": 7306,
+          "editCompileAndTestMs": 11255,
+          "playModeMs": 29709
+        },
+        {
+          "iteration": 2,
+          "childBytes": 794820608,
+          "externalBytes": 0,
+          "combinedBytes": 794820608,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 46772,
+          "reopenMs": 9798,
+          "editCompileAndTestMs": 11667,
+          "playModeMs": 29965
+        }
+      ],
+      "medians": {
+        "childBytes": 791674880,
+        "externalBytes": 0,
+        "combinedBytes": 791674880,
+        "firstOpenMs": 45982,
+        "reopenMs": 7306,
+        "editCompileAndTestMs": 11255,
+        "playModeMs": 29965
+      },
+      "maxObservedChildBytes": 809500672,
+      "combinedSavingsFraction": -0.020270270270270174,
+      "timingRatios": {
+        "firstOpenMs": 1.1935006618734914,
+        "reopenMs": 1.0925676686107373,
+        "editCompileAndTestMs": 0.9631182611672087
+      },
+      "capacityTargetMet": false,
+      "timingGatePassed": false,
+      "qualified": false
+    },
+    "D-hot-last": {
+      "valid": true,
+      "samples": [
+        {
+          "iteration": 0,
+          "childBytes": 797966336,
+          "externalBytes": 0,
+          "combinedBytes": 797966336,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 34105,
+          "reopenMs": 9993,
+          "editCompileAndTestMs": 11429,
+          "playModeMs": 29774
+        },
+        {
+          "iteration": 1,
+          "childBytes": 786432000,
+          "externalBytes": 0,
+          "combinedBytes": 786432000,
+          "observedPeakBytes": 809500672,
+          "firstOpenMs": 34202,
+          "reopenMs": 6831,
+          "editCompileAndTestMs": 11426,
+          "playModeMs": 29841
+        },
+        {
+          "iteration": 2,
+          "childBytes": 775946240,
+          "externalBytes": 0,
+          "combinedBytes": 775946240,
+          "observedPeakBytes": 775946240,
+          "firstOpenMs": 34358,
+          "reopenMs": 6875,
+          "editCompileAndTestMs": 11557,
+          "playModeMs": 29988
+        }
+      ],
+      "medians": {
+        "childBytes": 786432000,
+        "externalBytes": 0,
+        "combinedBytes": 786432000,
+        "firstOpenMs": 34202,
+        "reopenMs": 6875,
+        "editCompileAndTestMs": 11429,
+        "playModeMs": 29841
+      },
+      "maxObservedChildBytes": 809500672,
+      "combinedSavingsFraction": -0.013513513513513598,
+      "timingRatios": {
+        "firstOpenMs": 0.8877410647078672,
+        "reopenMs": 1.028114251532825,
+        "editCompileAndTestMs": 0.9780078726681499
+      },
+      "capacityTargetMet": false,
+      "timingGatePassed": true,
+      "qualified": false
+    },
+    "E-external-bee": {
+      "valid": true,
+      "samples": [
+        {
+          "iteration": 0,
+          "childBytes": 336592896,
+          "externalBytes": 153731176,
+          "combinedBytes": 490324072,
+          "observedPeakBytes": 339738624,
+          "firstOpenMs": 66011,
+          "reopenMs": 6867,
+          "editCompileAndTestMs": 11860,
+          "playModeMs": 29900
+        },
+        {
+          "iteration": 1,
+          "childBytes": 338690048,
+          "externalBytes": 153615072,
+          "combinedBytes": 492305120,
+          "observedPeakBytes": 339738624,
+          "firstOpenMs": 65839,
+          "reopenMs": 6802,
+          "editCompileAndTestMs": 11302,
+          "playModeMs": 29702
+        },
+        {
+          "iteration": 2,
+          "childBytes": 348127232,
+          "externalBytes": 153672372,
+          "combinedBytes": 501799604,
+          "observedPeakBytes": 373293056,
+          "firstOpenMs": 65108,
+          "reopenMs": 7115,
+          "editCompileAndTestMs": 11526,
+          "playModeMs": 29789
+        }
+      ],
+      "medians": {
+        "childBytes": 338690048,
+        "externalBytes": 153672372,
+        "combinedBytes": 492305120,
+        "firstOpenMs": 65839,
+        "reopenMs": 6867,
+        "editCompileAndTestMs": 11526,
+        "playModeMs": 29789
+      },
+      "maxObservedChildBytes": 373293056,
+      "combinedSavingsFraction": 0.3655422313793285,
+      "timingRatios": {
+        "firstOpenMs": 1.7089054429361228,
+        "reopenMs": 1.0269179004037685,
+        "editCompileAndTestMs": 0.9863084032175252
+      },
+      "capacityTargetMet": false,
+      "timingGatePassed": false,
+      "qualified": false
+    }
+  },
+  "sharedParentUsage": {
+    "A-legacy": {
+      "logicalBytes": 1331691520,
+      "allocatedBytes": 1331691520
+    },
+    "B-fresh": {
+      "logicalBytes": 1402994688,
+      "allocatedBytes": 1402994688
+    },
+    "C-no-bee": {
+      "logicalBytes": 1197473792,
+      "allocatedBytes": 1197473792
+    },
+    "D-hot-last": {
+      "logicalBytes": 1411383296,
+      "allocatedBytes": 1411383296
+    },
+    "E-external-bee": {
+      "logicalBytes": 1197473792,
+      "allocatedBytes": 1197473792
+    }
+  },
+  "limits": [
+    "Observed peaks use 250 ms sampling, not a guaranteed upper bound.",
+    "Edit timing includes compilation and EditMode tests, not isolated compiler CPU time.",
+    "Timed phases exclude parent preparation and initial source/external Bee copies.",
+    "Shared parents and authored files are excluded from per-workspace totals.",
+    "Concurrent/reconnect/removal validation is a separate gate for qualifying candidates."
+  ],
+  "environment": {
+    "datesKST": "2026-09-08 through 2026-09-09",
+    "finishedAtUTC": "2026-09-08T15:05:52.9704048Z",
+    "unity": "6000.6.0f1",
+    "testplay": "v0.11.0",
+    "sourceCommit": "4caf0731a0a5959ffa61f6c3d110f303f8779f80",
+    "sourceSelection": "Git archive; dirty user changes excluded",
+    "legacyParentHash": {
+      "bytes": 1331691520,
+      "sha256": "b20fd99c0adf27f13f0a1152d7c1c5f88fd264669265cc09bffd14ddc6c8ecbc"
+    },
+    "childBlockBytes": 1048576,
+    "sectorBytes": 4096,
+    "peakPollMs": 250,
+    "externalBee": "private directory prefilled from fresh seed, exact junction verified after every phase"
+  },
+  "validation": {
+    "completedSamples": 15,
+    "completedPhases": 180,
+    "passedTests": 3900,
+    "editModeTestsPerCycle": 37,
+    "playModeTestsPerCycle": 15,
+    "processBackendRuns": 150,
+    "unchangedReadonlyAllocations": 15,
+    "originalLegacyParentHashUnchanged": true,
+    "allocationInspectionsPassed": 15,
+    "extentFailures": 0,
+    "goTestsAndVet": "passed",
+    "pythonTestsPassed": 25,
+    "concurrentRetainedValidation": "not run: no candidate passed capacity qualification",
+    "productIntegration": "not performed: no candidate qualified"
+  },
+  "allocation": {
+    "A-legacy-0": {
+      "fileBytes": 808452096,
+      "allocatedBytes": 808452096,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 723517440,
+      "childSourcedSectorBytes": 471302144,
+      "payloadSlackBytes": 252215296,
+      "otherFileBytes": 84934656
+    },
+    "B-fresh-0": {
+      "fileBytes": 776994816,
+      "allocatedBytes": 776994816,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 771751936,
+      "childSourcedSectorBytes": 225533952,
+      "payloadSlackBytes": 546217984,
+      "otherFileBytes": 5242880
+    },
+    "C-no-bee-0": {
+      "fileBytes": 791674880,
+      "allocatedBytes": 791674880,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 786432000,
+      "childSourcedSectorBytes": 290496512,
+      "payloadSlackBytes": 495935488,
+      "otherFileBytes": 5242880
+    },
+    "D-hot-last-0": {
+      "fileBytes": 797966336,
+      "allocatedBytes": 797966336,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 792723456,
+      "childSourcedSectorBytes": 227852288,
+      "payloadSlackBytes": 564871168,
+      "otherFileBytes": 5242880
+    },
+    "E-external-bee-0": {
+      "fileBytes": 336592896,
+      "allocatedBytes": 336592896,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 331350016,
+      "childSourcedSectorBytes": 40742912,
+      "payloadSlackBytes": 290607104,
+      "otherFileBytes": 5242880
+    },
+    "B-fresh-1": {
+      "fileBytes": 754974720,
+      "allocatedBytes": 754974720,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 749731840,
+      "childSourcedSectorBytes": 222253056,
+      "payloadSlackBytes": 527478784,
+      "otherFileBytes": 5242880
+    },
+    "C-no-bee-1": {
+      "fileBytes": 791674880,
+      "allocatedBytes": 791674880,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 786432000,
+      "childSourcedSectorBytes": 283918336,
+      "payloadSlackBytes": 502513664,
+      "otherFileBytes": 5242880
+    },
+    "D-hot-last-1": {
+      "fileBytes": 786432000,
+      "allocatedBytes": 786432000,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 781189120,
+      "childSourcedSectorBytes": 223453184,
+      "payloadSlackBytes": 557735936,
+      "otherFileBytes": 5242880
+    },
+    "E-external-bee-1": {
+      "fileBytes": 338690048,
+      "allocatedBytes": 338690048,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 333447168,
+      "childSourcedSectorBytes": 41054208,
+      "payloadSlackBytes": 292392960,
+      "otherFileBytes": 5242880
+    },
+    "A-legacy-1": {
+      "fileBytes": 775946240,
+      "allocatedBytes": 775946240,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 732954624,
+      "childSourcedSectorBytes": 470859776,
+      "payloadSlackBytes": 262094848,
+      "otherFileBytes": 42991616
+    },
+    "C-no-bee-2": {
+      "fileBytes": 794820608,
+      "allocatedBytes": 794820608,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 789577728,
+      "childSourcedSectorBytes": 283701248,
+      "payloadSlackBytes": 505876480,
+      "otherFileBytes": 5242880
+    },
+    "D-hot-last-2": {
+      "fileBytes": 775946240,
+      "allocatedBytes": 775946240,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 770703360,
+      "childSourcedSectorBytes": 220889088,
+      "payloadSlackBytes": 549814272,
+      "otherFileBytes": 5242880
+    },
+    "E-external-bee-2": {
+      "fileBytes": 348127232,
+      "allocatedBytes": 348127232,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 342884352,
+      "childSourcedSectorBytes": 42053632,
+      "payloadSlackBytes": 300830720,
+      "otherFileBytes": 5242880
+    },
+    "A-legacy-2": {
+      "fileBytes": 775946240,
+      "allocatedBytes": 775946240,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 724566016,
+      "childSourcedSectorBytes": 463048704,
+      "payloadSlackBytes": 261517312,
+      "otherFileBytes": 51380224
+    },
+    "B-fresh-2": {
+      "fileBytes": 767557632,
+      "allocatedBytes": 767557632,
+      "blockBytes": 1048576,
+      "sectorBytes": 4096,
+      "virtualBytes": 68719476736,
+      "presentPayloadBytes": 762314752,
+      "childSourcedSectorBytes": 224284672,
+      "payloadSlackBytes": 538030080,
+      "otherFileBytes": 5242880
+    }
+  },
+  "selectedFileBlockOverlap": {
+    "A-legacy-0": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 72,
+          "childSourcedBytesInOverlappingBlocks": 39624704
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 166,
+          "childSourcedBytesInOverlappingBlocks": 168329216
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 8,
+          "childSourcedBytesInOverlappingBlocks": 45056
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "B-fresh-0": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 7294976
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 321,
+          "childSourcedBytesInOverlappingBlocks": 156135424
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 22,
+          "childSourcedBytesInOverlappingBlocks": 3264512
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "C-no-bee-0": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 7045120
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 308,
+          "childSourcedBytesInOverlappingBlocks": 179650560
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 34,
+          "childSourcedBytesInOverlappingBlocks": 29900800
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "D-hot-last-0": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 42,
+          "childSourcedBytesInOverlappingBlocks": 6836224
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 339,
+          "childSourcedBytesInOverlappingBlocks": 150892544
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 19,
+          "childSourcedBytesInOverlappingBlocks": 2125824
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "E-external-bee-0": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 6828032
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 6,
+          "childSourcedBytesInOverlappingBlocks": 442368
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "B-fresh-1": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 7397376
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 322,
+          "childSourcedBytesInOverlappingBlocks": 149487616
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 17,
+          "childSourcedBytesInOverlappingBlocks": 2928640
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "C-no-bee-1": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 7057408
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 322,
+          "childSourcedBytesInOverlappingBlocks": 178315264
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 31,
+          "childSourcedBytesInOverlappingBlocks": 25550848
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "D-hot-last-1": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 6840320
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 331,
+          "childSourcedBytesInOverlappingBlocks": 150802432
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 21,
+          "childSourcedBytesInOverlappingBlocks": 2715648
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "E-external-bee-1": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 40,
+          "childSourcedBytesInOverlappingBlocks": 6844416
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 6,
+          "childSourcedBytesInOverlappingBlocks": 442368
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "A-legacy-1": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 72,
+          "childSourcedBytesInOverlappingBlocks": 39542784
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 174,
+          "childSourcedBytesInOverlappingBlocks": 168960000
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 8,
+          "childSourcedBytesInOverlappingBlocks": 45056
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "C-no-bee-2": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 7065600
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 314,
+          "childSourcedBytesInOverlappingBlocks": 180191232
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 31,
+          "childSourcedBytesInOverlappingBlocks": 27508736
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "D-hot-last-2": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 40,
+          "childSourcedBytesInOverlappingBlocks": 6848512
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 325,
+          "childSourcedBytesInOverlappingBlocks": 147496960
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 19,
+          "childSourcedBytesInOverlappingBlocks": 2600960
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "E-external-bee-2": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 41,
+          "childSourcedBytesInOverlappingBlocks": 6836224
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 12,
+          "childSourcedBytesInOverlappingBlocks": 483328
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "A-legacy-2": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 71,
+          "childSourcedBytesInOverlappingBlocks": 38572032
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 168,
+          "childSourcedBytesInOverlappingBlocks": 167698432
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 8,
+          "childSourcedBytesInOverlappingBlocks": 45056
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    },
+    "B-fresh-2": {
+      "byDirectory": {
+        "(root)": {
+          "overlappingAllocatedBlocks": 39,
+          "childSourcedBytesInOverlappingBlocks": 6979584
+        },
+        "Bee": {
+          "overlappingAllocatedBlocks": 324,
+          "childSourcedBytesInOverlappingBlocks": 151134208
+        },
+        "ScriptAssemblies": {
+          "overlappingAllocatedBlocks": 19,
+          "childSourcedBytesInOverlappingBlocks": 2408448
+        }
+      },
+      "extentFailures": [],
+      "caveat": "Up to 80 largest selected Library files only. Overlap is not causal write attribution; groups may share blocks. Do not sum groups."
+    }
+  },
+  "localEvidenceArchives": {
+    "capacity-full": {
+      "sha256": "e5e676a99bbfe16f9901c2943461ea5e7044d9ad75d5c2fc3cc01a88dee4926a",
+      "files": 1673,
+      "archiveBytes": 27028967,
+      "verifiedAt": "2026-09-08T15:07:25.174261+00:00"
+    },
+    "capacity-pilot": {
+      "sha256": "655a1fb0c8e93c6bb5ab0498a020de061a49a0a56574989e63905138fd74a6f0",
+      "files": 187,
+      "archiveBytes": 9601832,
+      "verifiedAt": "2026-09-08T15:07:23.652318+00:00"
+    }
+  },
+  "cleanup": {
+    "ok": true,
+    "cleanedAt": "2026-09-09T00:11:24.8874960+09:00",
+    "roots": [
+      {
+        "name": "capacity-pilot-20260908",
+        "removedFiles": 33374,
+        "detachedImagesRemoved": 10
+      },
+      {
+        "name": "capacity-full-20260908",
+        "removedFiles": 40800,
+        "detachedImagesRemoved": 19
+      },
+      {
+        "name": "gnf-capacity-seed-20260908",
+        "removedFiles": 461,
+        "detachedImagesRemoved": 0
+      }
+    ]
+  }
+}
