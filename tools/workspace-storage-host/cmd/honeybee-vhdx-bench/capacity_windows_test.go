@@ -12,7 +12,13 @@ import (
 )
 
 func TestNativeSeededBeeJunction(t *testing.T) {
-	root := t.TempDir()
+	// Windows runners can expose TEMP through an 8.3 alias. PowerShell expands
+	// that alias when writing the junction target. Normalize this ordinary host
+	// fixture directory while preserving the strict target assertions below.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	mount, external, seed := filepath.Join(root, "Library"), filepath.Join(root, "external"), filepath.Join(root, "seed")
 	for _, p := range []string{mount, seed} {
 		if err := os.Mkdir(p, 0700); err != nil {

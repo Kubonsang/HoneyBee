@@ -74,3 +74,7 @@ remaining quality gates. `pnpm audit --audit-level=low` reported no known vulner
 `pnpm package:release` also passed: packaged CLI smoke, Desktop IPC/UI smoke, and packaged
 interactive PTY smoke. Packaging verified the unchanged hb12 payload hashes. The CLI package's
 explicit JavaScript inventory now includes the new `workspace-bases.js` module.
+The first GitHub Windows run exposed a pre-existing benchmark fixture issue with 8.3 TEMP aliases.
+The failure was reproduced locally with an actual short path. Canonicalizing the ordinary host
+fixture directory fixes the test while retaining exact junction-target and content assertions;
+production storage code and payloads are unchanged.
