@@ -62,14 +62,16 @@ type Receipt struct {
 	ServiceName   string `json:"serviceName"`
 }
 type Journal struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	LeaseID       string `json:"leaseId"`
-	RunID         string `json:"runId"`
-	WorkspaceID   string `json:"workspaceId"`
-	UserSID       string `json:"userSid"`
-	ParentKey     string `json:"parentKey"`
-	ParentPath    string `json:"parentPath"`
-	ChildPath     string `json:"childPath"`
+	Layout         string `json:"layout"`
+	OwnershipToken string `json:"ownershipToken"`
+	SchemaVersion  int    `json:"schemaVersion"`
+	LeaseID        string `json:"leaseId"`
+	RunID          string `json:"runId"`
+	WorkspaceID    string `json:"workspaceId"`
+	UserSID        string `json:"userSid"`
+	ParentKey      string `json:"parentKey"`
+	ParentPath     string `json:"parentPath"`
+	ChildPath      string `json:"childPath"`
 }
 
 var identifier = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -180,6 +182,19 @@ func measure(req Request) Report {
 			appendEntry(unknown(w.ID+":child", "child-vhdx", "workspace", w.ID, storageErr))
 		} else {
 			appendEntry(scan(w.ID+":child", "child-vhdx", "workspace", w.ID, child, nil, false, global, &report.KnownAllocatedBytes))
+			if j.Layout != "" {
+				bee := strings.TrimSuffix(child, ".vhdx") + ".bee"
+				var owner struct{ Layout, LeaseID, ParentKey, OwnershipToken string }
+				err := readJSON(filepath.Join(bee, "owner.json"), &owner)
+				if err == nil && (j.Layout != "external-bee-dag-v1" || owner.Layout != j.Layout || owner.LeaseID != j.LeaseID || owner.ParentKey != j.ParentKey || owner.OwnershipToken == "" || owner.OwnershipToken != j.OwnershipToken) {
+					err = errors.New("external Bee ownership mismatch")
+				}
+				if err != nil {
+					appendEntry(unknown(w.ID+":bee", "external-bee", "workspace", w.ID, err))
+				} else {
+					appendEntry(scan(w.ID+":bee", "external-bee", "workspace", w.ID, bee, nil, false, global, &report.KnownAllocatedBytes))
+				}
+			}
 		}
 		sharedID := "parent:" + w.ParentID
 		if storageErr != nil {
@@ -190,6 +205,9 @@ func measure(req Request) Report {
 			if storageErr == nil {
 				shared[sharedID] = true
 				appendEntry(scan(sharedID, "parent-vhdx", "shared", "", parent, nil, false, global, &report.KnownAllocatedBytes))
+				if j.Layout == "external-bee-dag-v1" {
+					appendEntry(scan(sharedID+":bee", "bee-seed", "shared", "", filepath.Join(filepath.Dir(parent), "bee-seed"), nil, false, global, &report.KnownAllocatedBytes))
+				}
 			}
 		}
 	}

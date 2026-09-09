@@ -60,7 +60,69 @@ func main() {
 	unity := flag.String("unity", "", "Unity executable")
 	runs := flag.Int("runs", 3, "fresh children per geometry (1..10)")
 	trace := flag.Bool("trace-writes", false, "capture a separate WPR FileIO trace; exclude traced timings from release gates")
+	capacity := flag.Bool("capacity", false, "run the isolated five-candidate capacity campaign")
+	startup := flag.Bool("startup-study", false, "run the bounded external Bee startup study")
+	brokerBee := flag.Bool("broker-bee", false, "validate the packaged external Bee broker with frozen Unity source")
+	startupLifecycle := flag.Bool("startup-lifecycle", false, "validate the accepted approximate-size DAG candidate across concurrent retained lifecycles")
+	startupTrace := flag.String("startup-trace", "", "trace one diagnostic sample against completed startup-study parents")
+	startupRefine := flag.Bool("startup-refine", false, "test DAG-only refinement after a completed startup study")
+	startupConfirm := flag.Bool("startup-confirm", false, "confirm a completed DAG-only pilot with fresh contemporaneous controls; gates unchanged")
+	legacyParent := flag.String("legacy-parent", "", "immutable parent to copy for the capacity control")
+	testplay := flag.String("testplay", "", "absolute TestPlay executable for capacity tests")
+	cycles := flag.Int("cycles", 5, "edit/import/test cycles per capacity sample")
+	verifyMode := flag.String("capacity-verify", "", "verify two retained samples of this capacity candidate concurrently")
+	sampleMode := flag.String("capacity-sample", "", "pilot one new sample against an existing isolated campaign's parents")
+	iteration := flag.Int("iteration", 1, "unique sample iteration for --capacity-sample")
 	flag.Parse()
+	if *brokerBee {
+		if err := runBrokerBee(*root, *source, *unity, *testplay); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *startupRefine || *startupConfirm {
+		if err := refineStartupStudy(*root, *unity, *testplay, *startupConfirm); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *startupTrace != "" {
+		if err := runStartupTrace(*root, *unity, *testplay, *startupTrace, *iteration); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *startup || *startupLifecycle {
+		if err := runStartupStudy(*root, *source, *unity, *legacyParent, *testplay, *startupLifecycle); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *sampleMode != "" {
+		if err := retestCapacity(*root, *unity, *testplay, *sampleMode, *iteration, *cycles); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *verifyMode != "" {
+		if err := verifyCapacity(*root, *unity, *testplay, *verifyMode); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *capacity {
+		if err := runCapacity(*root, *source, *unity, *legacyParent, *testplay, *runs, *cycles); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(*root, *source, *unity, *runs, *trace); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -266,6 +328,8 @@ func withReadOnlyDisk(ctx context.Context, disk, mount string, fn func(*storage.
 	return fn(a)
 }
 func launchUnity(ctx context.Context, unity, project, log string, trace bool) (elapsed int64, err error) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
 	if trace {
 		instance := fmt.Sprintf("HoneyBeeVhdx-%d-%d", os.Getpid(), time.Now().UnixNano())
 		startTrace := exec.CommandContext(ctx, "wpr.exe", "-start", "FileIO", "-filemode", "-instancename", instance)
@@ -284,7 +348,7 @@ func launchUnity(ctx context.Context, unity, project, log string, trace bool) (e
 		}()
 	}
 	start := time.Now()
-	cmd := exec.CommandContext(ctx, unity, "-batchmode", "-nographics", "-quit", "-projectPath", project, "-logFile", log)
+	cmd := ownedCommand(ctx, unity, "-batchmode", "-nographics", "-quit", "-projectPath", project, "-logFile", log)
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	out, err := cmd.CombinedOutput()
 	elapsed = time.Since(start).Milliseconds()

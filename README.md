@@ -25,18 +25,20 @@ codex
 
 ## Status
 
-The published prerelease is [Beta 5](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.5),
-released on 2026-09-05 from `246226e`. It supports limited evaluation on an existing matching hb8
-storage installation. Fresh installation and Beta 3 upgrade remain unverified. The
-[quality follow-up checklist](docs/validation/beta4-release-readiness.md) records final package and
-physical-reboot evidence. Beta 6 usability work is in development.
-Beta 5 pins `unity-workspace-storage` revision `68e05e0`, which lets retained attach reach
-the native identity-checked stale-mount cleanup and adds an exclusive Library-volume removal
-handshake. It also refuses to publish a cache that leaves no capacity for its first child.
-The physical Windows reboot gate in
-[ADR-031](docs/decisions/ADR-031-git-worktree-library-only-cow.md) passed on the final Beta 5 CLI. Reboot
-recovery is explicit: wait for `workspace status` to report `repair-required`, run
-`workspace repair`, and do not open the Workspace until it reports `ready` again.
+The current prerelease is [Beta 9](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.9).
+It separates each new Workspace's private Bee cache from its child VHDX while sharing
+an immutable seed. In the measured GNF workload, median child allocation is 357.56 MB
+and combined child plus Bee allocation is 510.98 MB. Authored files and shared parents
+are separate costs; existing Workspaces do not shrink automatically.
+
+Beta 9 requires storage component `0.0.0+cfa606fd4143.hb11`. The backed-up hb10-to-hb11
+upgrade, service restart, physical reboot and dirty-worktree repair checks passed;
+see the [installed validation record](docs/validation/external-bee-installed.md).
+Fresh service installation and older migrations remain outside this qualification.
+Reboot recovery is explicit: use **Repair** when status reports `repair-required`,
+and wait for `ready` before opening tools. The separate
+[performance report](docs/validation/external-bee-startup.md) preserves the missed
+historical 350 MB median gate; this release does not promise a 300 MB total Workspace.
 
 The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
 The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and

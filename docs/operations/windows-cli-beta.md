@@ -1,9 +1,9 @@
 # HoneyBee Windows CLI Beta
 
-HoneyBee 0.1.0 Beta 8 is an unsigned Windows 11 x64 prerelease. It requires Node.js 24 or
-newer, Git for Windows, and storage component `0.0.0+c238f283ded2.hb10`.
+HoneyBee 0.1.0 Beta 9 is an unsigned Windows 11 x64 prerelease. It requires Node.js 24 or
+newer, Git for Windows, and storage component `0.0.0+cfa606fd4143.hb11`.
 HoneyBee does not install or upgrade the Windows service automatically. This
-release qualifies an existing hb9-to-hb10 upgrade; fresh installation and older
+release qualifies an existing hb10-to-hb11 upgrade; fresh installation and older
 service/protocol migrations remain unqualified.
 
 ## 1. Extract and verify
@@ -16,14 +16,14 @@ Verify the ZIP against the published SHA256SUMS.txt, then run:
 
 Doctor is read-only. A missing service or receipt is expected before the one-time setup below.
 
-## 2. Upgrade an existing hb9 storage service
+## 2. Upgrade an existing hb10 storage service
 
 Extracting this ZIP does not upgrade the service. Close Unity, HoneyBee and tools
 using its Workspaces. Back up the existing install receipt, broker executable,
 broker config and Workspace registry before replacement. Preserve the recorded
-storage root and user SID. A same-user hb9 installation can retain its existing
-2 MiB children during this upgrade; do not remove authored Workspaces just to
-enable the new block size.
+storage root and user SID. A same-user hb10 installation can retain its existing
+children during this upgrade; do not remove authored Workspaces to enable
+external Bee storage.
 
 From an elevated PowerShell opened as the same installed user, change to the
 extracted CLI directory. Inspect the existing receipt and use its identity:
@@ -33,12 +33,12 @@ $ReceiptPath = Join-Path $env:ProgramData 'UnityWorkspaceStorage\install-receipt
 $Receipt = Get-Content -LiteralPath $ReceiptPath -Raw | ConvertFrom-Json
 $CurrentSid = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value
 if ($Receipt.userSid -ne $CurrentSid) { throw 'The installation belongs to another user.' }
-if ($Receipt.componentVersion -notin @('0.0.0+796514b475be.hb9', '0.0.0+c238f283ded2.hb10')) {
+if ($Receipt.componentVersion -notin @('0.0.0+c238f283ded2.hb10', '0.0.0+cfa606fd4143.hb11')) {
     throw 'This service version requires a separately validated migration.'
 }
 & '.\dist\honeybee-workspace-storage-host.exe' install `
     --workspace-root $Receipt.workspaceRoot --user-sid $Receipt.userSid `
-    --component-version '0.0.0+c238f283ded2.hb10' --replace
+    --component-version '0.0.0+cfa606fd4143.hb11' --replace
 if ($LASTEXITCODE -ne 0) { throw 'Service upgrade failed; inspect the original diagnostic.' }
 ```
 
@@ -47,14 +47,21 @@ For Desktop, replace `dist\honeybee-workspace-storage-host.exe` with
 to take over an unrelated service or change an existing installation's root/SID.
 Keep the complete archive and compare it with the published checksums first.
 
-New children use 1 MiB blocks. Existing children retain their geometry and size;
-the upgrade does not compact or rewrite them. One physical reboot with both
-geometries passed, including child identity and content preservation.
+Newly prepared parents use a shared immutable Bee seed with independent private
+Bee caches for their children. Existing parents and children keep their layout;
+the upgrade does not compact, rewrite or migrate them. Legacy and external Bee
+retained children passed service restart and one physical reboot.
 
 Run doctor again from a normal, non-elevated PowerShell. Do not proceed while it reports a blocking
 failure.
 
 ## 3. Register and prepare a project
+
+When upgrading an existing project, run `project init` again with its existing
+source and Workspace-root paths from this new CLI directory. This updates the
+registered storage tool path while preserving the parent and Workspaces. Use
+`workspace repair` to reconnect retained Workspaces, including dirty worktrees.
+Run `cache prepare` separately to enable external Bee for future Workspaces.
 
 The source must be a Git repository containing Assets, Packages, and ProjectSettings. Open it in
 Unity once to create Library, close every Unity Editor using it, and ensure Library is ignored by

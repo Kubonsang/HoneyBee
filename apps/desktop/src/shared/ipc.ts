@@ -10,7 +10,15 @@ export const DesktopWorkspaceUsageV1Schema = z
       z
         .object({
           id: z.string(),
-          kind: z.enum(["files", "testplay-local", "child-vhdx", "parent-vhdx", "testplay-shared"]),
+          kind: z.enum([
+            "files",
+            "testplay-local",
+            "child-vhdx",
+            "parent-vhdx",
+            "external-bee",
+            "bee-seed",
+            "testplay-shared",
+          ]),
           scope: z.enum(["workspace", "shared"]),
           workspaceId: z.string().optional(),
           logicalBytes: z.number().int().nonnegative().nullable(),

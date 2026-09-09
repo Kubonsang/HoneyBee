@@ -62,6 +62,20 @@ for (const payload of approvedStorage.payloads) {
   }
 }
 
+// Vite embeds this manifest in main; matching extraResource files alone cannot
+// detect a bundle built before the final storage tools were prepared.
+const mainBundle = await readFile(path.join(appRoot, "dist", "main", "main", "main.js"), "utf8");
+for (const identity of [
+  approvedStorage.version,
+  ...approvedStorage.payloads.map((p) => p.sha256),
+]) {
+  if (!mainBundle.includes(JSON.stringify(identity))) {
+    throw new Error(
+      "Desktop main contains stale storage compatibility metadata. Rebuild Desktop before packaging.",
+    );
+  }
+}
+
 await rm(staging, { recursive: true, force: true });
 await rm(output, { recursive: true, force: true });
 await mkdir(staging, { recursive: true });

@@ -49,6 +49,25 @@ compaction content checks passed. See the
 
 Existing children are not rewritten or shrunk by the change.
 
+## Local external Bee overlay (hb11)
+
+`external-bee.patch` implements broker-managed `external-bee-dag-v1` parents,
+private child caches and lifecycle/accounting support. Its exact base is
+`cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa`; version and patch SHA-256 are pinned
+in `external-bee-overlay.json`. This overlay is a local implementation artifact,
+not a published upstream commit. The component is now installed locally and
+has passed SCM restart, [physical reboot validation](../../docs/validation/external-bee-installed.md)
+and existing-project repair/readiness checks.
+
+Set `HONEYBEE_WORKSPACE_STORAGE_SOURCE` to a clean checkout of that base and run
+`node apps/desktop/scripts/prepare-tools.mjs` from HoneyBee. The script verifies
+the source revision and patch digest, applies the patch in a temporary clone,
+and builds against the patched source. The tool manifest records the overlay
+digest alongside binary hashes. Rebuilding reproduced all three executables.
+
+See the [product validation record](../../docs/validation/external-bee-product.md)
+for native lifecycle, GNF Unity tests, package checks and deployment limitations.
+
 ## Published provenance record
 
 `provenance-overlay.patch` applies to `c238f283ded29f716f72e7d556cfeef3efd98639`

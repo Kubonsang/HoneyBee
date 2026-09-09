@@ -130,7 +130,9 @@ def analyze(stream, file_bytes):
     owned = 0
     one_mib_blocks = 0
     extents = []
+    payload_blocks = []
     for index in range(payload_count):
+        owned_before = owned
         state, offset = entry(index + index // ratio)
         states[state] += 1
         if state not in (0, 1, 2, 3, 6, 7):
@@ -157,6 +159,9 @@ def analyze(stream, file_bytes):
             owned += int.from_bytes(bits, 'little').bit_count() * sector
             step = MIB // sector // 8
             one_mib_blocks += sum(any(bits[p:p + step]) for p in range(0, len(bits), step))
+        if state in (6, 7):
+            payload_blocks.append({'virtualBlockIndex': index,
+                                   'childSourcedSectorBytes': owned - owned_before})
     extents.extend([(0, MIB), (meta_offset, meta_offset + meta_length), (bat_offset, bat_offset + bat_length)])
     log_length, log_offset = struct.unpack_from('<IQ', header, 68)
     if log_length:
@@ -174,6 +179,7 @@ def analyze(stream, file_bytes):
         'fileBytes': file_bytes, 'blockBytes': block, 'sectorBytes': sector,
         'virtualBytes': virtual, 'headerSequence': sequence,
         'payloadStates': dict(sorted(states.items())), 'presentPayloadBytes': payload,
+        'allocatedPayloadBlocks': payload_blocks,
         'childSourcedSectorBytes': owned, 'payloadSlackBytes': payload - owned,
         'otherFileBytes': file_bytes - payload, 'sectorBitmapCountRead': len(bitmaps),
         'modeledOneMiBPayloadBytes': one_mib_blocks * MIB,

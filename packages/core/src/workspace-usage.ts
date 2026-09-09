@@ -12,7 +12,14 @@ import {
 
 export interface WorkspaceUsageEntryV1 {
   readonly id: string;
-  readonly kind: "files" | "testplay-local" | "child-vhdx" | "parent-vhdx" | "testplay-shared";
+  readonly kind:
+    | "files"
+    | "testplay-local"
+    | "child-vhdx"
+    | "parent-vhdx"
+    | "external-bee"
+    | "bee-seed"
+    | "testplay-shared";
   readonly scope: "workspace" | "shared";
   readonly workspaceId?: string;
   readonly logicalBytes: number | null;
@@ -45,9 +52,15 @@ export function parseWorkspaceUsage(value: unknown): WorkspaceUsageReportV1 {
       (e: unknown) =>
         isObject(e) &&
         typeof e.id === "string" &&
-        ["files", "testplay-local", "child-vhdx", "parent-vhdx", "testplay-shared"].includes(
-          String(e.kind),
-        ) &&
+        [
+          "files",
+          "testplay-local",
+          "child-vhdx",
+          "parent-vhdx",
+          "external-bee",
+          "bee-seed",
+          "testplay-shared",
+        ].includes(String(e.kind)) &&
         ["workspace", "shared"].includes(String(e.scope)) &&
         (e.workspaceId === undefined || typeof e.workspaceId === "string") &&
         (e.logicalBytes === null || bytes(e.logicalBytes)) &&

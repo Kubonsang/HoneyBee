@@ -45,6 +45,8 @@ export function WorkspaceUsage({
     "testplay-local": "usageLocalCache",
     "child-vhdx": "usageChild",
     "parent-vhdx": "usageParent",
+    "external-bee": "usageBee",
+    "bee-seed": "usageBeeSeed",
     "testplay-shared": "usageSharedCache",
   };
   return (

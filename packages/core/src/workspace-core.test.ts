@@ -651,6 +651,7 @@ describe("HoneyBeeWorkspaceCore", () => {
     });
     await writeFile(path.join(source, "Library", "ArtifactDB"), "refreshed-cache\n", "utf8");
     const refreshedProject = await core.prepareCache(project.projectId);
+    expect(refreshedProject.cache?.storageLayout).toBe("external-bee-dag-v1");
     const second = await core.createWorkspace({
       project: project.projectId,
       name: "second",

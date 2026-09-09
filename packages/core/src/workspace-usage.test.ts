@@ -26,6 +26,13 @@ describe("workspace usage contract", () => {
     expect(parseWorkspaceUsage(report).entries[0]?.allocatedBytes).toBeNull();
     expect(parseWorkspaceUsage(report).complete).toBe(false);
   });
+  it("preserves separate private and shared Bee usage categories", () => {
+    const entries = ["external-bee", "bee-seed"].map((kind) => ({ ...report.entries[0], kind }));
+    expect(parseWorkspaceUsage({ ...report, entries }).entries.map((entry) => entry.kind)).toEqual([
+      "external-bee",
+      "bee-seed",
+    ]);
+  });
   it("rejects invalid byte counts and malformed helper output", () => {
     for (const invalid of [-1, NaN, Number.MAX_SAFE_INTEGER + 1, "0"])
       expect(() => parseWorkspaceUsage({ ...report, knownAllocatedBytes: invalid })).toThrow(

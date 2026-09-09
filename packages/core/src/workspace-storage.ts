@@ -132,12 +132,17 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
   });
 
 export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
-  public async beginParent(command: string, compatibilityKey: string): Promise<StorageParentBuild> {
+  public async beginParent(
+    command: string,
+    compatibilityKey: string,
+    layout?: "external-bee-dag-v1",
+  ): Promise<StorageParentBuild> {
     const response = await run(command, [
       "parent",
       "begin",
       "--compatibility-key",
       compatibilityKey,
+      ...(layout === undefined ? [] : ["--layout", layout]),
       "--request-id",
       `hb-parent-begin-${randomUUID()}`,
     ]);

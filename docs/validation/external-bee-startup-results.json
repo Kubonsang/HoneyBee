@@ -1,0 +1,1390 @@
+{
+  "protocol": "startup-v2",
+  "ok": true,
+  "selected": "E-dag",
+  "qualified": false,
+  "passedTests": 2184,
+  "groups": {
+    "pilot/A-legacy": [
+      {
+        "iteration": 0,
+        "childBytes": 787480576,
+        "externalBytes": 0,
+        "peakBytes": 809500672,
+        "preparationMs": 2359,
+        "readyMs": 34273,
+        "firstMs": 31914,
+        "reopenMs": 5444,
+        "editMs": 9103,
+        "beeAdditionalRunSeconds": [0.27],
+        "beeBuildUpdatedItems": [625],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 534941696,
+          "payloadSlackBytes": 247296000,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 782237696
+        },
+        "combinedBytes": 787480576
+      },
+      {
+        "iteration": 1,
+        "childBytes": 806354944,
+        "externalBytes": 0,
+        "peakBytes": 809500672,
+        "preparationMs": 2161,
+        "readyMs": 37035,
+        "firstMs": 34874,
+        "reopenMs": 5723,
+        "editMs": 9772,
+        "beeAdditionalRunSeconds": [0.26],
+        "beeBuildUpdatedItems": [625],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 537575424,
+          "payloadSlackBytes": 263536640,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 801112064
+        },
+        "combinedBytes": 806354944
+      }
+    ],
+    "pilot/E-control": [
+      {
+        "iteration": 0,
+        "childBytes": 326107136,
+        "externalBytes": 153444425,
+        "peakBytes": 339738624,
+        "preparationMs": 3384,
+        "readyMs": 62881,
+        "firstMs": 59497,
+        "reopenMs": 5991,
+        "editMs": 9588,
+        "beeAdditionalRunSeconds": [30.18],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179863399,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114408014,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36274176,
+          "payloadSlackBytes": 284590080,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 320864256
+        },
+        "combinedBytes": 479551561
+      },
+      {
+        "iteration": 1,
+        "childBytes": 331350016,
+        "externalBytes": 153536273,
+        "peakBytes": 339738624,
+        "preparationMs": 3357,
+        "readyMs": 59659,
+        "firstMs": 56302,
+        "reopenMs": 8398,
+        "editMs": 9619,
+        "beeAdditionalRunSeconds": [30.17],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179980665,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114525280,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36278272,
+          "payloadSlackBytes": 289828864,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 326107136
+        },
+        "combinedBytes": 484886289
+      }
+    ],
+    "pilot/E-metadata": [
+      {
+        "iteration": 0,
+        "childBytes": 326107136,
+        "externalBytes": 153478385,
+        "peakBytes": 339738624,
+        "preparationMs": 3671,
+        "readyMs": 63088,
+        "firstMs": 59417,
+        "reopenMs": 5783,
+        "editMs": 9600,
+        "beeAdditionalRunSeconds": [30.17],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179883534,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114428149,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36229120,
+          "payloadSlackBytes": 284635136,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 320864256
+        },
+        "combinedBytes": 479585521
+      },
+      {
+        "iteration": 1,
+        "childBytes": 329252864,
+        "externalBytes": 153497430,
+        "peakBytes": 339738624,
+        "preparationMs": 3603,
+        "readyMs": 60320,
+        "firstMs": 56717,
+        "reopenMs": 8078,
+        "editMs": 9809,
+        "beeAdditionalRunSeconds": [30.19],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179942066,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114486681,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36331520,
+          "payloadSlackBytes": 287678464,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 324009984
+        },
+        "combinedBytes": 482750294
+      }
+    ],
+    "pilot/E-pid": [
+      {
+        "iteration": 0,
+        "childBytes": 326107136,
+        "externalBytes": 153465155,
+        "peakBytes": 339738624,
+        "preparationMs": 3417,
+        "readyMs": 63197,
+        "firstMs": 59780,
+        "reopenMs": 5690,
+        "editMs": 9480,
+        "beeAdditionalRunSeconds": [30.17],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179927014,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114471629,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36339712,
+          "payloadSlackBytes": 284524544,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 320864256
+        },
+        "combinedBytes": 479572291
+      },
+      {
+        "iteration": 1,
+        "childBytes": 326107136,
+        "externalBytes": 153493045,
+        "peakBytes": 339738624,
+        "preparationMs": 3385,
+        "readyMs": 62875,
+        "firstMs": 59490,
+        "reopenMs": 5848,
+        "editMs": 9908,
+        "beeAdditionalRunSeconds": [30.17],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": true,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1295,
+          "afterFiles": 1359,
+          "beforeBytes": 156624165,
+          "afterBytes": 179882097,
+          "addedFiles": 64,
+          "removedFiles": 0,
+          "changedContentFiles": 329,
+          "changedContentAfterBytes": 114426712,
+          "sameContentChangedMetadataFiles": 363,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 36249600,
+          "payloadSlackBytes": 284614656,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 320864256
+        },
+        "combinedBytes": 479600181
+      }
+    ],
+    "pilot/E-graph": [
+      {
+        "iteration": 0,
+        "childBytes": 475004928,
+        "externalBytes": 153636890,
+        "peakBytes": 475004928,
+        "preparationMs": 3400,
+        "readyMs": 36825,
+        "firstMs": 33425,
+        "reopenMs": 8200,
+        "editMs": 9453,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [1107],
+        "ilppBusyObserved": false,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1286,
+          "afterFiles": 1358,
+          "beforeBytes": 77990079,
+          "afterBytes": 155675138,
+          "addedFiles": 72,
+          "removedFiles": 0,
+          "changedContentFiles": 372,
+          "changedContentAfterBytes": 13451546,
+          "sameContentChangedMetadataFiles": 836,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 93147136,
+          "payloadSlackBytes": 376614912,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 469762048
+        },
+        "combinedBytes": 628641818
+      },
+      {
+        "iteration": 1,
+        "childBytes": 473956352,
+        "externalBytes": 153559957,
+        "peakBytes": 473956352,
+        "preparationMs": 3497,
+        "readyMs": 37672,
+        "firstMs": 34175,
+        "reopenMs": 5982,
+        "editMs": 9955,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [1107],
+        "ilppBusyObserved": false,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1286,
+          "afterFiles": 1358,
+          "beforeBytes": 77990079,
+          "afterBytes": 155572070,
+          "addedFiles": 72,
+          "removedFiles": 0,
+          "changedContentFiles": 372,
+          "changedContentAfterBytes": 13348478,
+          "sameContentChangedMetadataFiles": 836,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 91197440,
+          "payloadSlackBytes": 377516032,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 468713472
+        },
+        "combinedBytes": 627516309
+      }
+    ],
+    "pilot/E-dag": [
+      {
+        "iteration": 0,
+        "childBytes": 340787200,
+        "externalBytes": 153483438,
+        "peakBytes": 340787200,
+        "preparationMs": 14093,
+        "readyMs": 52602,
+        "firstMs": 38509,
+        "reopenMs": 5860,
+        "editMs": 10219,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": false,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1288,
+          "afterFiles": 1359,
+          "beforeBytes": 78514879,
+          "afterBytes": 180009056,
+          "addedFiles": 71,
+          "removedFiles": 0,
+          "changedContentFiles": 322,
+          "changedContentAfterBytes": 36912650,
+          "sameContentChangedMetadataFiles": 362,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 37416960,
+          "payloadSlackBytes": 298127360,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 335544320
+        },
+        "combinedBytes": 494270638
+      },
+      {
+        "iteration": 1,
+        "childBytes": 337641472,
+        "externalBytes": 153492643,
+        "peakBytes": 339738624,
+        "preparationMs": 3194,
+        "readyMs": 33072,
+        "firstMs": 29878,
+        "reopenMs": 5842,
+        "editMs": 9763,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": false,
+        "beeSnapshotDelta": {
+          "beforeFiles": 1288,
+          "afterFiles": 1359,
+          "beforeBytes": 78514879,
+          "afterBytes": 179966934,
+          "addedFiles": 71,
+          "removedFiles": 0,
+          "changedContentFiles": 322,
+          "changedContentAfterBytes": 36870528,
+          "sameContentChangedMetadataFiles": 362,
+          "caveat": "Snapshot changes do not measure write traffic or establish invalidation cause."
+        },
+        "allocation": {
+          "childSourcedSectorBytes": 37457920,
+          "payloadSlackBytes": 294940672,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 332398592
+        },
+        "combinedBytes": 491134115
+      }
+    ],
+    "qualification/A-legacy": [
+      {
+        "iteration": 10,
+        "childBytes": 809500672,
+        "externalBytes": 0,
+        "peakBytes": 809500672,
+        "preparationMs": 2425,
+        "readyMs": 36625,
+        "firstMs": 34200,
+        "reopenMs": 8107,
+        "editMs": 9580,
+        "beeAdditionalRunSeconds": [0.3],
+        "beeBuildUpdatedItems": [625],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 456617984,
+          "payloadSlackBytes": 263753728,
+          "otherFileBytes": 89128960,
+          "presentPayloadBytes": 720371712
+        },
+        "combinedBytes": 809500672
+      },
+      {
+        "iteration": 11,
+        "childBytes": 775946240,
+        "externalBytes": 0,
+        "peakBytes": 775946240,
+        "preparationMs": 2091,
+        "readyMs": 36795,
+        "firstMs": 34704,
+        "reopenMs": 8289,
+        "editMs": 9551,
+        "beeAdditionalRunSeconds": [0.31],
+        "beeBuildUpdatedItems": [625],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 460103680,
+          "payloadSlackBytes": 256073728,
+          "otherFileBytes": 59768832,
+          "presentPayloadBytes": 716177408
+        },
+        "combinedBytes": 775946240
+      },
+      {
+        "iteration": 12,
+        "childBytes": 833617920,
+        "externalBytes": 0,
+        "peakBytes": 843055104,
+        "preparationMs": 2168,
+        "readyMs": 35822,
+        "firstMs": 33654,
+        "reopenMs": 5633,
+        "editMs": 9338,
+        "beeAdditionalRunSeconds": [0.26],
+        "beeBuildUpdatedItems": [625],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 478797824,
+          "payloadSlackBytes": 260448256,
+          "otherFileBytes": 94371840,
+          "presentPayloadBytes": 739246080
+        },
+        "combinedBytes": 833617920
+      }
+    ],
+    "qualification/E-dag": [
+      {
+        "iteration": 10,
+        "childBytes": 357564416,
+        "externalBytes": 153464440,
+        "peakBytes": 373293056,
+        "preparationMs": 12876,
+        "readyMs": 42870,
+        "firstMs": 29994,
+        "reopenMs": 5677,
+        "editMs": 9440,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 41533440,
+          "payloadSlackBytes": 310788096,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 352321536
+        },
+        "combinedBytes": 511028856
+      },
+      {
+        "iteration": 11,
+        "childBytes": 355467264,
+        "externalBytes": 153441481,
+        "peakBytes": 373293056,
+        "preparationMs": 3263,
+        "readyMs": 32020,
+        "firstMs": 28757,
+        "reopenMs": 5772,
+        "editMs": 9496,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 41541632,
+          "payloadSlackBytes": 308682752,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 350224384
+        },
+        "combinedBytes": 508908745
+      },
+      {
+        "iteration": 12,
+        "childBytes": 357564416,
+        "externalBytes": 153420098,
+        "peakBytes": 373293056,
+        "preparationMs": 3346,
+        "readyMs": 32140,
+        "firstMs": 28794,
+        "reopenMs": 5790,
+        "editMs": 9415,
+        "beeAdditionalRunSeconds": [],
+        "beeBuildUpdatedItems": [465],
+        "ilppBusyObserved": false,
+        "allocation": {
+          "childSourcedSectorBytes": 41451520,
+          "payloadSlackBytes": 310870016,
+          "otherFileBytes": 5242880,
+          "presentPayloadBytes": 352321536
+        },
+        "combinedBytes": 510984514
+      }
+    ]
+  },
+  "limits": [
+    "Pilot snapshots can affect timing and are excluded from final qualification.",
+    "Ready time includes per-workspace preparation, excluding diagnostic collection.",
+    "Shared parent creation is a separate one-time preparation cost.",
+    "Batch process tests do not establish GUI behavior or reboot compatibility."
+  ],
+  "qualification": {
+    "baseline": {
+      "childMedianBytes": 809500672,
+      "combinedMedianBytes": 809500672,
+      "editMs": 9551,
+      "firstMs": 34200,
+      "peakBytes": 843055104,
+      "readyMs": 36625,
+      "reopenMs": 8107
+    },
+    "candidate": {
+      "childMedianBytes": 357564416,
+      "combinedMedianBytes": 510984514,
+      "editMs": 9440,
+      "firstMs": 28794,
+      "peakBytes": 373293056,
+      "readyMs": 32140,
+      "reopenMs": 5772
+    },
+    "qualified": false,
+    "selected": "E-dag",
+    "testsPassed": 1560
+  },
+  "refinement-pilot": {
+    "baseline": {
+      "childMedianBytes": 796917760,
+      "combinedMedianBytes": 796917760,
+      "editMs": 9437.5,
+      "firstMs": 33394,
+      "peakBytes": 809500672,
+      "readyMs": 35654,
+      "reopenMs": 5583.5
+    },
+    "candidate": {
+      "childMedianBytes": 339214336,
+      "combinedMedianBytes": 492702376.5,
+      "editMs": 9991,
+      "firstMs": 34193.5,
+      "peakBytes": 340787200,
+      "readyMs": 42837,
+      "reopenMs": 5851
+    },
+    "passesScreening": false
+  },
+  "confirmation-protocol": {
+    "cycles": 5,
+    "gatesChanged": false,
+    "pilotPassed": false,
+    "reason": "DAG pilot eliminated ILPP delay but preparation-plus-first-open failed against earlier-session controls; run three fresh contemporaneous pairs",
+    "runsPerMode": 3
+  },
+  "diagnosticTraces": [
+    {
+      "policy": "E-control",
+      "qualifiedTiming": false,
+      "passedTests": 52,
+      "runs": [
+        {
+          "phase": "E-control-90-cycle1-edit_mode",
+          "runId": "20260909-025635-548ae42b",
+          "passed": 37
+        },
+        {
+          "phase": "E-control-90-cycle1-play_mode",
+          "runId": "20260909-025644-7200ef2b",
+          "passed": 15
+        }
+      ],
+      "additionalTundraRunSeconds": [30.2],
+      "buildUpdatedItems": [465]
+    },
+    {
+      "policy": "E-dag",
+      "qualifiedTiming": false,
+      "passedTests": 52,
+      "runs": [
+        {
+          "phase": "E-dag-90-cycle1-edit_mode",
+          "runId": "20260909-025906-658371b5",
+          "passed": 37
+        },
+        {
+          "phase": "E-dag-90-cycle1-play_mode",
+          "runId": "20260909-025915-e00628cd",
+          "passed": 15
+        }
+      ],
+      "additionalTundraRunSeconds": [],
+      "buildUpdatedItems": [465]
+    }
+  ],
+  "totalPassedTests": 2288,
+  "cleanup": {
+    "initialObservedReclaimedBytes": 5651488768,
+    "finalExperimentObservedReclaimedBytes": 4345864192,
+    "removedExperimentLogicalBytes": 4305056397,
+    "experimentRootsRemoved": true,
+    "sampleArchivesVerified": 20,
+    "currentFreeBytes": 70983655424,
+    "caveat": "Initial cleanup reclaims older caches. Final cleanup reclaims newly created experiment data; do not add these as permanent savings."
+  },
+  "evidenceArchives": [
+    {
+      "name": "A-legacy-0.zip",
+      "bytes": 1543941,
+      "sha256": "0334ed285812abcd494b2c9d6a94c0c0f1c08914e62e4a51139977e010119c48",
+      "files": 33
+    },
+    {
+      "name": "A-legacy-1.zip",
+      "bytes": 1543545,
+      "sha256": "9a3e83e5836fe51de9da1ece6e02567edd61f56c35bd78ce6e9a1f01b8ae065f",
+      "files": 33
+    },
+    {
+      "name": "A-legacy-10.zip",
+      "bytes": 1699319,
+      "sha256": "4ce207940e29c0c8fe64ea020ef8ef04e2295b9e66a13e2cda7e54f1b2e704be",
+      "files": 113
+    },
+    {
+      "name": "A-legacy-11.zip",
+      "bytes": 1699124,
+      "sha256": "2b5fefa9063a8128e041f81ad200e60b3066bdc4dbf24cf9b81f9cd749aabb94",
+      "files": 113
+    },
+    {
+      "name": "A-legacy-12.zip",
+      "bytes": 1699207,
+      "sha256": "77203443c230a43e96fe482e298f40bef10f4661773b31e6e98ba189135fafd3",
+      "files": 113
+    },
+    {
+      "name": "E-control-0.zip",
+      "bytes": 3696828,
+      "sha256": "9be43d01129ff55044fb060568834c53bc98731b33d56194b7aa10c5f79f8979",
+      "files": 40
+    },
+    {
+      "name": "E-control-1.zip",
+      "bytes": 3708559,
+      "sha256": "284fa60c9acf792ec190251630bfa1b53eedbb7649acfa78043e125a45bfd534",
+      "files": 40
+    },
+    {
+      "name": "E-control-90.zip",
+      "bytes": 223563656,
+      "sha256": "0fff0cd7b0ccb52d43f82df285cfdbfd88e97410519f313d1a51a4193213e3ce",
+      "files": 41
+    },
+    {
+      "name": "E-dag-0.zip",
+      "bytes": 3722864,
+      "sha256": "4b621e2b7fe4522e8603c32b9de08f335e3a514ac1e85b66700451284632cad4",
+      "files": 40
+    },
+    {
+      "name": "E-dag-1.zip",
+      "bytes": 3717206,
+      "sha256": "28374cfaa165dab2c9f9a11a4d4add31f8ade1ad5c472f4f57fd281f588c2b27",
+      "files": 40
+    },
+    {
+      "name": "E-dag-10.zip",
+      "bytes": 1665895,
+      "sha256": "627d5a760630d91c8352149cf21c8c9c9bfd0d78487c517db69c31fb8e1bb400",
+      "files": 113
+    },
+    {
+      "name": "E-dag-11.zip",
+      "bytes": 1665827,
+      "sha256": "1ee5755b84141459d76f3fe6f0045d87428be38c812ad9ac89376a2f753a0b96",
+      "files": 113
+    },
+    {
+      "name": "E-dag-12.zip",
+      "bytes": 1665543,
+      "sha256": "b7668c3352ce6cad6cdd617202b1424e4248d7082a42de19361baacd12326888",
+      "files": 113
+    },
+    {
+      "name": "E-dag-90.zip",
+      "bytes": 199837057,
+      "sha256": "510d58b1792dbaa2aafaa5d43d57257b090b31e87d4365f8540ed9b197f43482",
+      "files": 41
+    },
+    {
+      "name": "E-graph-0.zip",
+      "bytes": 2072766,
+      "sha256": "3e5b0515c96afafcfdc0812c1ba5baf6c1d5e0be446df7db37f6fb5399846c7c",
+      "files": 40
+    },
+    {
+      "name": "E-graph-1.zip",
+      "bytes": 2058232,
+      "sha256": "13e1380ab561393db7ffbd3377fc715f7aebc590807679ae382142f27f342c48",
+      "files": 40
+    },
+    {
+      "name": "E-metadata-0.zip",
+      "bytes": 3701002,
+      "sha256": "5115c2ed3116ed9ac42a10b2ff80acceb8775643c5331c13e64e5466392c8c20",
+      "files": 40
+    },
+    {
+      "name": "E-metadata-1.zip",
+      "bytes": 3702790,
+      "sha256": "5193e3aba2a1277fa464e5e00525c83247fbb55336c8225d35da67f805d93649",
+      "files": 40
+    },
+    {
+      "name": "E-pid-0.zip",
+      "bytes": 3700579,
+      "sha256": "2f9beaf6bd97b0eff8e7b68af938aca996f71e4be276508d1306e396f16d95ab",
+      "files": 40
+    },
+    {
+      "name": "E-pid-1.zip",
+      "bytes": 3696445,
+      "sha256": "29195ca598e2bf707b9b582c0ab43ca97725a202be16acc0447efe2ef4a846dd",
+      "files": 40
+    },
+    {
+      "name": "startup-final-evidence.zip",
+      "bytes": 54831907,
+      "sha256": "0958a153a02c40bd6b83560adaf946e22e6d47501d741520bb584d530fe8561c",
+      "files": 625
+    }
+  ],
+  "fileIO": {
+    "E-control": {
+      "library": {
+        "schemaVersion": 1,
+        "library": "library",
+        "writeEvents": 17982,
+        "requestedWriteBytes": 39122263,
+        "requestedReadBytes": 1442802135,
+        "operations": {
+          "FileIoRead": 32098,
+          "FileIoSetInfo": 232,
+          "FileIoWrite": 17982
+        },
+        "writeBytesByDirectory": {
+          "(filesystem metadata)": 25280512,
+          "BurstCache": 8705044,
+          "PackageCache": 3174400,
+          "(root)": 1520694,
+          "PackageManager": 379711,
+          "ShaderCache": 57344,
+          "Pipeline": 4558
+        },
+        "writeBytesByProcess": {
+          "System (   4)": 33898496,
+          "dotnet.exe (39832)": 4285460,
+          "Unity.exe (37844)": 814462,
+          "UnityPackageManager.exe (41204)": 82640,
+          "Unity.exe (41348)": 33008,
+          "Unity.DataStore.exe (5484)": 8192,
+          "Unity.ILPP.Runner.exe (10984)": 5
+        },
+        "topWrittenFiles": [
+          {
+            "path": "$Mft",
+            "requestedBytes": 19832832
+          },
+          {
+            "path": "$LogFile",
+            "requestedBytes": 5410816
+          },
+          {
+            "path": "BurstCache/JIT/BurstCacheManifest.cm",
+            "requestedBytes": 2553403
+          },
+          {
+            "path": "SourceAssetDB",
+            "requestedBytes": 1344208
+          },
+          {
+            "path": "BurstCache/JIT/eda1e61f479761a1b368106bff6f91f0.pdb",
+            "requestedBytes": 811008
+          },
+          {
+            "path": "BurstCache/JIT/9ec1e2a2ece16877b673d65e5e928c1e.pdb",
+            "requestedBytes": 794624
+          },
+          {
+            "path": "BurstCache/JIT/039ccb4e7dfc1d8d145e49f8c035acb0.pdb",
+            "requestedBytes": 532480
+          },
+          {
+            "path": "BurstCache/JIT/b177dc5ded2f7cbc99c94e531a81f560.pdb",
+            "requestedBytes": 499712
+          },
+          {
+            "path": "PackageManager/ProjectCache",
+            "requestedBytes": 317519
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/83e38251cf538673adb7244c9658ba86.obj",
+            "requestedBytes": 235218
+          },
+          {
+            "path": "BurstCache/JIT/eda1e61f479761a1b368106bff6f91f0.dll",
+            "requestedBytes": 219648
+          },
+          {
+            "path": "BurstCache/JIT/9ec1e2a2ece16877b673d65e5e928c1e.dll",
+            "requestedBytes": 145920
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/1d418c3b9c92015c30f7d453aa4449b5.obj",
+            "requestedBytes": 138132
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/6b703862d15c5aaaa9d11925ddfce20a.obj",
+            "requestedBytes": 135497
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/60c1b1d2511957db3be75b26cd80e8f7.obj",
+            "requestedBytes": 128917
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/018f60dcdad1d8faa033eca55c8768cd.obj",
+            "requestedBytes": 128847
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/7bc6d8bd921d99e606b645046f8dd448.obj",
+            "requestedBytes": 128784
+          },
+          {
+            "path": "BurstCache/JIT/b177dc5ded2f7cbc99c94e531a81f560.dll",
+            "requestedBytes": 128512
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/8d0bf5f41767192a3963f938ee7a67b5.obj",
+            "requestedBytes": 122610
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/43dd5a486dce1588162e172bc499e197.obj",
+            "requestedBytes": 121351
+          },
+          {
+            "path": "BurstCache/JIT/039ccb4e7dfc1d8d145e49f8c035acb0.dll",
+            "requestedBytes": 111616
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/ae681d701ef7ac68423c95b333eefedc.obj",
+            "requestedBytes": 111037
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/f4561f80a97bac2be5d5411fd6c22577.obj",
+            "requestedBytes": 95141
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/1ee3a3ff7d7d402e89c8e8c6f9a20537.obj",
+            "requestedBytes": 89188
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/7ea9083abf8b17b74e2a42d3e59bf7f8.obj",
+            "requestedBytes": 87499
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/c56c3e3042da489dad51fbaed42769e2.obj",
+            "requestedBytes": 86267
+          },
+          {
+            "path": "PackageCache/com.unity.collab-proxy@4628d2ba6ea4/Editor",
+            "requestedBytes": 81920
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/c8c6846f1db153ebc89610d9beacf430.obj",
+            "requestedBytes": 81340
+          },
+          {
+            "path": "ScriptAssemblies",
+            "requestedBytes": 73728
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/e32fe5891e84a59d60103bbac1f4ddcc.obj",
+            "requestedBytes": 73442
+          }
+        ],
+        "unresolvedGlobalWriteEvents": 0,
+        "rowsWithUndecodableBytes": 1,
+        "matchedRowsWithUndecodableBytes": 0,
+        "caveat": "Exact Library path only; includes System writeback. Rewrites count repeatedly. Unresolved names are not attributed."
+      },
+      "externalBee": {
+        "schemaVersion": 1,
+        "library": "externalBee",
+        "writeEvents": 21165,
+        "requestedWriteBytes": 521753035,
+        "requestedReadBytes": 250007601,
+        "operations": {
+          "FileIoWrite": 21165,
+          "FileIoSetInfo": 1679,
+          "FileIoRead": 14719
+        },
+        "writeBytesByDirectory": {
+          "(root)": 304033039,
+          "artifacts": 217719996
+        },
+        "writeBytesByProcess": {
+          "System (   4)": 298348544,
+          "bee_backend.exe (13020)": 95245036,
+          "dotnet.exe (30772)": 44845989,
+          "dotnet.exe (27632)": 38366342,
+          "Unity.ILPP.Runner.exe (10984)": 34307812,
+          "Unity.exe (37844)": 6938060,
+          "bee_backend.exe (40104)": 3701252
+        },
+        "topWrittenFiles": [
+          {
+            "path": "1900b0aE.dag",
+            "requestedBytes": 112911632
+          },
+          {
+            "path": "1900b0aE.dag.json",
+            "requestedBytes": 69079864
+          },
+          {
+            "path": "1900b0aE.dag.payloads",
+            "requestedBytes": 60156536
+          },
+          {
+            "path": "tundra.log.json",
+            "requestedBytes": 29049519
+          },
+          {
+            "path": "1900b0aE-inputdata.json",
+            "requestedBytes": 13568382
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.PlasticSCM.Editor.dll",
+            "requestedBytes": 6664192
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.PlasticSCM.Editor.dll",
+            "requestedBytes": 6506628
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.InputSystem.dll",
+            "requestedBytes": 6021120
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.ShaderGraph.Editor.dll",
+            "requestedBytes": 5768260
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.ShaderGraph.Editor.dll",
+            "requestedBytes": 5759488
+          },
+          {
+            "path": "tundra.digestcache.tmp",
+            "requestedBytes": 4870864
+          },
+          {
+            "path": "backend2.traceevents",
+            "requestedBytes": 4494634
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Core.Runtime.dll",
+            "requestedBytes": 4360192
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Core.Runtime.dll",
+            "requestedBytes": 4189165
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.VisualScripting.Core.Editor.dll",
+            "requestedBytes": 3783680
+          },
+          {
+            "path": "1900b0aE.dag_derived",
+            "requestedBytes": 3696704
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.VisualScripting.Core.Editor.dll",
+            "requestedBytes": 3656108
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.PlasticSCM.Editor.pdb",
+            "requestedBytes": 3153544
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Universal.Runtime.dll",
+            "requestedBytes": 3140608
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Universal.Editor.dll",
+            "requestedBytes": 3017290
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Core.Editor.dll",
+            "requestedBytes": 2963968
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Core.Editor.dll",
+            "requestedBytes": 2947644
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.PlasticSCM.Editor.pdb",
+            "requestedBytes": 2879300
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Universal.Runtime.dll",
+            "requestedBytes": 2854772
+          },
+          {
+            "path": "fullprofile.json",
+            "requestedBytes": 2679886
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.Timeline.Editor.dll",
+            "requestedBytes": 2519552
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.Timeline.Editor.dll",
+            "requestedBytes": 2384736
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.PlasticSCM.Editor.ref.dll",
+            "requestedBytes": 2310288
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.ShaderGraph.Editor.pdb",
+            "requestedBytes": 2285000
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.InputSystem.pdb",
+            "requestedBytes": 2213748
+          }
+        ],
+        "unresolvedGlobalWriteEvents": 0,
+        "rowsWithUndecodableBytes": 1,
+        "matchedRowsWithUndecodableBytes": 0,
+        "caveat": "Exact Library path only; includes System writeback. Rewrites count repeatedly. Unresolved names are not attributed."
+      },
+      "archiveSHA256": "0fff0cd7b0ccb52d43f82df285cfdbfd88e97410519f313d1a51a4193213e3ce",
+      "etlBytes": 2575302656,
+      "csvMaterialized": false,
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "xperfWarningProviderIds": ["{e13c0d23-ccbc-4e12-931b-d9cc2eee27e4}"],
+      "xperfWarningsRetained": true
+    },
+    "E-dag": {
+      "library": {
+        "schemaVersion": 1,
+        "library": "library",
+        "writeEvents": 18408,
+        "requestedWriteBytes": 41546374,
+        "requestedReadBytes": 1442172051,
+        "operations": {
+          "FileIoRead": 32081,
+          "FileIoSetInfo": 253,
+          "FileIoWrite": 18408
+        },
+        "writeBytesByDirectory": {
+          "(filesystem metadata)": 25542656,
+          "BurstCache": 8819532,
+          "PackageCache": 5165056,
+          "(root)": 1578037,
+          "PackageManager": 379199,
+          "ShaderCache": 57344,
+          "Pipeline": 4550
+        },
+        "writeBytesByProcess": {
+          "System (   4)": 36331520,
+          "dotnet.exe (7192)": 4285260,
+          "Unity.exe (40804)": 814197,
+          "UnityPackageManager.exe (7160)": 82384,
+          "Unity.exe (37144)": 33008,
+          "Unity.ILPP.Runner.exe (37560)": 5
+        },
+        "topWrittenFiles": [
+          {
+            "path": "$Mft",
+            "requestedBytes": 20058112
+          },
+          {
+            "path": "$LogFile",
+            "requestedBytes": 5394432
+          },
+          {
+            "path": "BurstCache/JIT/BurstCacheManifest.cm",
+            "requestedBytes": 2553403
+          },
+          {
+            "path": "SourceAssetDB",
+            "requestedBytes": 1344208
+          },
+          {
+            "path": "BurstCache/JIT/eda1e61f479761a1b368106bff6f91f0.pdb",
+            "requestedBytes": 811008
+          },
+          {
+            "path": "BurstCache/JIT/9ec1e2a2ece16877b673d65e5e928c1e.pdb",
+            "requestedBytes": 794624
+          },
+          {
+            "path": "BurstCache/JIT/039ccb4e7dfc1d8d145e49f8c035acb0.pdb",
+            "requestedBytes": 532480
+          },
+          {
+            "path": "BurstCache/JIT/b177dc5ded2f7cbc99c94e531a81f560.pdb",
+            "requestedBytes": 499712
+          },
+          {
+            "path": "PackageManager/ProjectCache",
+            "requestedBytes": 317263
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/83e38251cf538673adb7244c9658ba86.obj",
+            "requestedBytes": 235214
+          },
+          {
+            "path": "BurstCache/JIT/eda1e61f479761a1b368106bff6f91f0.dll",
+            "requestedBytes": 219648
+          },
+          {
+            "path": "BurstCache/JIT/9ec1e2a2ece16877b673d65e5e928c1e.dll",
+            "requestedBytes": 145920
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/1d418c3b9c92015c30f7d453aa4449b5.obj",
+            "requestedBytes": 138128
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/6b703862d15c5aaaa9d11925ddfce20a.obj",
+            "requestedBytes": 135493
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/60c1b1d2511957db3be75b26cd80e8f7.obj",
+            "requestedBytes": 128913
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/018f60dcdad1d8faa033eca55c8768cd.obj",
+            "requestedBytes": 128843
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/7bc6d8bd921d99e606b645046f8dd448.obj",
+            "requestedBytes": 128780
+          },
+          {
+            "path": "BurstCache/JIT/b177dc5ded2f7cbc99c94e531a81f560.dll",
+            "requestedBytes": 128512
+          },
+          {
+            "path": "ScriptAssemblies",
+            "requestedBytes": 126976
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/8d0bf5f41767192a3963f938ee7a67b5.obj",
+            "requestedBytes": 122606
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/43dd5a486dce1588162e172bc499e197.obj",
+            "requestedBytes": 121347
+          },
+          {
+            "path": "BurstCache/JIT/039ccb4e7dfc1d8d145e49f8c035acb0.dll",
+            "requestedBytes": 111616
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/ae681d701ef7ac68423c95b333eefedc.obj",
+            "requestedBytes": 111033
+          },
+          {
+            "path": "BurstCache/JIT/Hashes",
+            "requestedBytes": 102400
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/f4561f80a97bac2be5d5411fd6c22577.obj",
+            "requestedBytes": 95137
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/1ee3a3ff7d7d402e89c8e8c6f9a20537.obj",
+            "requestedBytes": 89184
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/7ea9083abf8b17b74e2a42d3e59bf7f8.obj",
+            "requestedBytes": 87495
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/c56c3e3042da489dad51fbaed42769e2.obj",
+            "requestedBytes": 86263
+          },
+          {
+            "path": "BurstCache/JIT/Hashes/Objects/c8c6846f1db153ebc89610d9beacf430.obj",
+            "requestedBytes": 81336
+          },
+          {
+            "path": "PackageCache/com.unity.collab-proxy@4628d2ba6ea4/Editor",
+            "requestedBytes": 77824
+          }
+        ],
+        "unresolvedGlobalWriteEvents": 0,
+        "rowsWithUndecodableBytes": 1,
+        "matchedRowsWithUndecodableBytes": 0,
+        "caveat": "Exact Library path only; includes System writeback. Rewrites count repeatedly. Unresolved names are not attributed."
+      },
+      "externalBee": {
+        "schemaVersion": 1,
+        "library": "externalBee",
+        "writeEvents": 20432,
+        "requestedWriteBytes": 389040697,
+        "requestedReadBytes": 242709639,
+        "operations": {
+          "FileIoRead": 13420,
+          "FileIoWrite": 20432,
+          "FileIoSetInfo": 1331
+        },
+        "writeBytesByDirectory": {
+          "(root)": 223156270,
+          "artifacts": 165884427
+        },
+        "writeBytesByProcess": {
+          "System (   4)": 168091648,
+          "bee_backend.exe (4984)": 96489175,
+          "dotnet.exe (14800)": 44782902,
+          "dotnet.exe (37124)": 38599373,
+          "Unity.ILPP.Runner.exe (37560)": 34202240,
+          "Unity.exe (40804)": 6875359
+        },
+        "topWrittenFiles": [
+          {
+            "path": "1900b0aE.dag",
+            "requestedBytes": 82288512
+          },
+          {
+            "path": "1900b0aE.dag.json",
+            "requestedBytes": 46051892
+          },
+          {
+            "path": "1900b0aE.dag.payloads",
+            "requestedBytes": 40908401
+          },
+          {
+            "path": "tundra.log.json",
+            "requestedBytes": 29773037
+          },
+          {
+            "path": "1900b0aE-inputdata.json",
+            "requestedBytes": 9205530
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.PlasticSCM.Editor.dll",
+            "requestedBytes": 6664192
+          },
+          {
+            "path": "backend2.traceevents",
+            "requestedBytes": 4610732
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.PlasticSCM.Editor.dll",
+            "requestedBytes": 4467488
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.InputSystem.dll",
+            "requestedBytes": 4145152
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.ShaderGraph.Editor.dll",
+            "requestedBytes": 3969536
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.ShaderGraph.Editor.dll",
+            "requestedBytes": 3963122
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Core.Runtime.dll",
+            "requestedBytes": 3037184
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Core.Editor.dll",
+            "requestedBytes": 2963968
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Core.Editor.dll",
+            "requestedBytes": 2918972
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Core.Runtime.dll",
+            "requestedBytes": 2880016
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.PlasticSCM.Editor.pdb",
+            "requestedBytes": 2879300
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Universal.Runtime.dll",
+            "requestedBytes": 2878464
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Universal.Runtime.dll",
+            "requestedBytes": 2844980
+          },
+          {
+            "path": "1900b0aE.dag_derived",
+            "requestedBytes": 2758720
+          },
+          {
+            "path": "fullprofile.json",
+            "requestedBytes": 2654661
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.VisualScripting.Core.Editor.dll",
+            "requestedBytes": 2653184
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.VisualScripting.Core.Editor.dll",
+            "requestedBytes": 2634288
+          },
+          {
+            "path": "tundra.digestcache.tmp",
+            "requestedBytes": 2435504
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.PlasticSCM.Editor.pdb",
+            "requestedBytes": 2285192
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.RenderPipelines.Universal.Editor.dll",
+            "requestedBytes": 2167808
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.RenderPipelines.Universal.Editor.dll",
+            "requestedBytes": 2058930
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/post-processed/Unity.Timeline.Editor.dll",
+            "requestedBytes": 1896960
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.InputSystem.dll",
+            "requestedBytes": 1875968
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.Timeline.Editor.dll",
+            "requestedBytes": 1713092
+          },
+          {
+            "path": "artifacts/1900b0aE.dag/Unity.ShaderGraph.Editor.pdb",
+            "requestedBytes": 1641928
+          }
+        ],
+        "unresolvedGlobalWriteEvents": 0,
+        "rowsWithUndecodableBytes": 1,
+        "matchedRowsWithUndecodableBytes": 0,
+        "caveat": "Exact Library path only; includes System writeback. Rewrites count repeatedly. Unresolved names are not attributed."
+      },
+      "archiveSHA256": "510d58b1792dbaa2aafaa5d43d57257b090b31e87d4365f8540ed9b197f43482",
+      "etlBytes": 2215641088,
+      "csvMaterialized": false,
+      "lostEvents": 0,
+      "lostBuffers": 0,
+      "xperfWarningProviderIds": ["{e13c0d23-ccbc-4e12-931b-d9cc2eee27e4}"],
+      "xperfWarningsRetained": true
+    }
+  }
+}

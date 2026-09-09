@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "componentVersion": "0.0.0+cfa606fd4143.hb11",
+  "installedHostSha256": "9b790d02c399d1b47aa94cab1863dfe092fb3a89775714b00f01ccc3ca6141aa",
+  "installed": true,
+  "originalChildrenPreserved": 2,
+  "legacyAttachPassed": true,
+  "externalBeeAttachPassed": true,
+  "scmRestartPassed": true,
+  "removalAbortPassed": true,
+  "removedOnePreservedSurvivor": true,
+  "privateCacheOwnershipPassed": true,
+  "usageComplete": true,
+  "sharedSeedEntries": 1,
+  "guiStorageChecksPassed": true,
+  "guiRemainingFailures": [],
+  "status": {
+    "parentCount": 4,
+    "activeChildCount": 0,
+    "retainedChildCount": 2,
+    "pendingCount": 0,
+    "quarantineCount": 0,
+    "manualRecoveryRequired": false,
+    "gcBlocked": false
+  },
+  "retainedFixtureCount": 0,
+  "retainedFixtureChildAllocatedBytes": 0,
+  "physicalRebootPassed": true,
+  "installedGateComplete": true,
+  "releasePublished": false,
+  "previousWindowsBoot": "2026-09-08T17:21:08.5000000Z",
+  "checkedAt": "2026-09-09T06:07:11.585Z",
+  "registryPreservedBeforeRepair": true,
+  "registryUpdate": "Supported initProject updated both storageCommand paths; repairWorkspace refreshed connection records.",
+  "originalUserVhdxHashesPreservedBeforeRepair": true,
+  "originalWorkspaceLeaseAndParentIdentitiesPreserved": true,
+  "authoredFilesPreserved": true,
+  "authoredChangedFileCount": 21,
+  "userWorkspaces": [
+    {
+      "name": "combat",
+      "state": "ready",
+      "available": true,
+      "libraryConnected": true,
+      "dirty": true,
+      "changedFiles": 17
+    },
+    {
+      "name": "Room",
+      "state": "ready",
+      "available": true,
+      "libraryConnected": true,
+      "dirty": true,
+      "changedFiles": 4
+    }
+  ],
+  "guiDoctor": {
+    "pass": 27,
+    "warning": 0,
+    "fail": 0
+  },
+  "userProjectsReady": true,
+  "fixtureCleanupPassed": true,
+  "currentWindowsBoot": "2026-09-09T05:59:25.5000000Z",
+  "hostFreeBytes": 68898406400
+}

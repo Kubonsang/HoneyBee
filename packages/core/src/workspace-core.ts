@@ -286,14 +286,18 @@ export class HoneyBeeWorkspaceCore {
       .update(
         JSON.stringify({
           schemaVersion: 1,
-          kind: "honeybee-library-only-v1",
+          kind: "honeybee-external-bee-dag-v1",
           seedCommit,
           unityRelativePath: project.unityRelativePath.replaceAll("\\", "/"),
           refreshId: randomUUID(),
         }),
       )
       .digest("hex");
-    const build = await this.#storage.beginParent(project.storageCommand, parentId);
+    const build = await this.#storage.beginParent(
+      project.storageCommand,
+      parentId,
+      "external-bee-dag-v1",
+    );
     if (build.transactionId === undefined || build.stagingPath === undefined) {
       if (build.transactionId !== undefined) {
         await this.#storage
@@ -358,6 +362,7 @@ export class HoneyBeeWorkspaceCore {
       ...project,
       cache: {
         kind: "library-only-v1",
+        storageLayout: "external-bee-dag-v1",
         parentId: committed.parentId,
         seedCommit,
         preparedAt: now(),

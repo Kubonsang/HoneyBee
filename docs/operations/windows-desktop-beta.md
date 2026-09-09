@@ -1,14 +1,14 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 8 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
+HoneyBee Desktop 0.1.0 Beta 9 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
 same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
 work.
 
 ## First start
 
 Extract the complete archive and keep its `resources` directory beside the executable. The archive
-includes `STORAGE-SETUP.md` for the qualified hb9-to-hb10 service upgrade. It requires
-storage version `0.0.0+c238f283ded2.hb10`; extracting the ZIP does not update that service.
+includes `STORAGE-SETUP.md` for the qualified hb10-to-hb11 service upgrade. It requires
+storage version `0.0.0+cfa606fd4143.hb11`; extracting the ZIP does not update that service.
 Fresh installation and older migrations are not qualified by this release. For Desktop, use
 `resources\win32-x64\honeybee-workspace-storage-host.exe` in place of the CLI guide's
 `dist\honeybee-workspace-storage-host.exe`; the service/root/user and upgrade requirements are the
@@ -57,11 +57,17 @@ junction is never replaced or deleted automatically.
 
 ## Reboot recovery
 
-Beta 8 uses 1 MiB blocks for new child VHDX. Existing 2 MiB parents are reused and
-existing children keep their geometry. The Storage view measures Workspace usage
-on request, distinguishes shared parents from per-Workspace files and shows
-unknown/partial results explicitly. The change does not automatically shrink
-existing children or install the separate optional TestPlay shared-cache feature.
+Beta 9 prepares parents with a shared immutable Bee seed and creates a separate
+private Bee cache for each new Workspace. Refresh the parent cache before creating
+Workspaces to adopt this layout. Existing parents and children retain their layout;
+they do not shrink automatically. The Storage view separates child VHDX, private
+Bee, shared seed and other files, and keeps unknown/partial results explicit.
+The separate optional TestPlay shared-cache feature is not installed by HoneyBee.
+
+After extracting an upgrade to a new path, re-register existing projects with the
+new tools using the CLI `project init` command in the setup guide. This preserves
+the current parent and Workspaces. Preparing a new parent is a separate operation;
+close the source Unity Editor before doing so.
 
 The retained-attach ordering fix and physical Windows reboot gate are complete for Beta 4. After a
 reboot, a retained Workspace appears as `repair-required` until the user chooses **Repair**. Do not

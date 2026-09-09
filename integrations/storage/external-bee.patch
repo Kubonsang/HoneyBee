@@ -1,0 +1,1730 @@
+diff --git a/PROVENANCE.md b/PROVENANCE.md
+index 781fc14..7a60b9a 100644
+--- a/PROVENANCE.md
++++ b/PROVENANCE.md
+@@ -185,3 +185,14 @@ source-tree symlinks and special files remain rejected before cloning. The
+ checkpoint-derived `storage/clone_darwin.go` is unchanged. Native CI separately
+ requires two-child isolation, allocated-byte evidence, clean release, and
+ daemon restart recovery on APFS and reflink-enabled XFS.
++
++## HoneyBee external Bee overlay
++
++The local `external-bee-dag-v1` integration extends the parent key, native
++parent/child lifecycle, broker negotiation and private-cache accounting.
++The immutable VHDX and Bee seed are published by one bundle rename. New Bee
++implementation and tests are additive files, not checkpoint-derived source.
++The original 42-entry frozen manifest stays unchanged; the destination overlay
++now contains 21 entries, including the changed compatibility key. This local
++patch has not been published as an upstream revision. HoneyBee records its
++base commit and exact patch SHA-256 in its packaging overlay manifest.
+diff --git a/cmd/unity-workspace-storage/main.go b/cmd/unity-workspace-storage/main.go
+index 64105b8..5d930ba 100644
+--- a/cmd/unity-workspace-storage/main.go
++++ b/cmd/unity-workspace-storage/main.go
+@@ -135,11 +135,12 @@ func executeParentV2(ctx context.Context, args []string, service v2.Service) (st
+ 	case "begin":
+ 		flags := newFlagSet("parent begin")
+ 		key := flags.String("compatibility-key", "", "64-character producer compatibility digest")
++		layout := flags.String("layout", "", "optional parent cache layout")
+ 		requestID := flags.String("request-id", "", "optional idempotency request ID")
+ 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *key == "" {
+ 			return "parent-begin", nil, errors.Join(err, errors.New("parent begin requires --compatibility-key"))
+ 		}
+-		response, err := service.ParentBegin(ctx, v2.ParentBeginRequest{RequestID: *requestID, CompatibilityKey: *key})
++		response, err := service.ParentBegin(ctx, v2.ParentBeginRequest{RequestID: *requestID, CompatibilityKey: *key, Layout: *layout})
+ 		return "parent-begin", response, err
+ 	case "commit", "abort":
+ 		flags := newFlagSet("parent " + args[0])
+diff --git a/contract/v2/bee_adapter_test.go b/contract/v2/bee_adapter_test.go
+new file mode 100644
+index 0000000..688075a
+--- /dev/null
++++ b/contract/v2/bee_adapter_test.go
+@@ -0,0 +1,29 @@
++package v2
++
++import (
++	"context"
++	"github.com/Kubonsang/unity-workspace-storage/workspace"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++type beeClient func(context.Context, workspace.Request) (workspace.Response, error)
++
++func (f beeClient) Call(c context.Context, r workspace.Request) (workspace.Response, error) {
++	return f(c, r)
++}
++func TestExternalBeeRejectsOldBrokerBeforeBegin(t *testing.T) {
++	calls := 0
++	adapter := WindowsAdapter{RequestStateDir: t.TempDir(), Client: beeClient(func(_ context.Context, r workspace.Request) (workspace.Response, error) {
++		calls++
++		if r.Operation != workspace.OperationHello {
++			t.Fatal("parent began before layout negotiation")
++		}
++		return workspace.Response{OK: true, WorkspaceRoot: filepath.Join(t.TempDir(), "workspaces")}, nil
++	})}
++	response, err := adapter.Call(context.Background(), Request{SchemaVersion: 2, RequestID: "bee-old-broker", Operation: OperationParentBegin, CompatibilityKey: strings.Repeat("a", 64), Layout: workspace.ExternalBeeLayout})
++	if err != nil || response.OK || response.Error == nil || response.Error.Code != "unsupported-layout" || calls != 1 {
++		t.Fatalf("response=%+v err=%v calls=%d", response, err, calls)
++	}
++}
+diff --git a/contract/v2/types.go b/contract/v2/types.go
+index bc0ef61..7ca4397 100644
+--- a/contract/v2/types.go
++++ b/contract/v2/types.go
+@@ -98,6 +98,7 @@ type Status struct {
+ }
+ 
+ type Request struct {
++	Layout           string `json:"layout,omitempty"`
+ 	SchemaVersion    int    `json:"schemaVersion"`
+ 	Operation        string `json:"operation"`
+ 	RequestID        string `json:"requestId"`
+@@ -157,7 +158,7 @@ func (s Service) call(ctx context.Context, request Request) (Response, error) {
+ 	return response, nil
+ }
+ 
+-type ParentBeginRequest struct{ RequestID, CompatibilityKey string }
++type ParentBeginRequest struct{ RequestID, CompatibilityKey, Layout string }
+ type ParentCommitRequest struct{ RequestID, TransactionID string }
+ type ParentAbortRequest struct{ RequestID, TransactionID string }
+ type AcquireRequest struct {
+@@ -171,6 +172,7 @@ type ReleaseRequest struct{ RequestID, LeaseID string }
+ func (s Service) ParentBegin(ctx context.Context, input ParentBeginRequest) (Response, error) {
+ 	r := NewRequest(OperationParentBegin, input.RequestID)
+ 	r.CompatibilityKey = input.CompatibilityKey
++	r.Layout = input.Layout
+ 	return s.call(ctx, r)
+ }
+ func (s Service) ParentCommit(ctx context.Context, input ParentCommitRequest) (Response, error) {
+diff --git a/contract/v2/windows_adapter.go b/contract/v2/windows_adapter.go
+index 81c070f..e1259f7 100644
+--- a/contract/v2/windows_adapter.go
++++ b/contract/v2/windows_adapter.go
+@@ -100,6 +100,17 @@ func (a WindowsAdapter) beginParent(ctx context.Context, request Request) (Respo
+ 		}
+ 		return translated, translateErr
+ 	}
++	if request.Layout != "" {
++		supported := false
++		for _, layout := range helloResponse.ParentLayouts {
++			if layout == request.Layout {
++				supported = true
++			}
++		}
++		if request.Layout != workspace.ExternalBeeLayout || !supported {
++			return Response{SchemaVersion: SchemaVersion, RequestID: request.RequestID, Error: &Error{Code: "unsupported-layout", Operation: request.Operation, Message: "Broker does not support the requested parent layout; update the storage service."}}, nil
++		}
++	}
+ 	workspaceID := "schema2-parent-" + request.CompatibilityKey[:24]
+ 	workspacePath := filepath.Join(helloResponse.WorkspaceRoot, workspaceID)
+ 	if err := os.MkdirAll(workspacePath, 0700); err != nil {
+@@ -115,7 +126,7 @@ func (a WindowsAdapter) beginParent(ctx context.Context, request Request) (Respo
+ 	if legacy.ClientPID == 0 {
+ 		legacy.ClientPID = os.Getpid()
+ 	}
+-	legacy.ParentKey = &workspace.CompatibilityKey{SchemaVersion: workspace.ParentSchemaVersion, Digest: request.CompatibilityKey, Provider: workspace.Provider, Filesystem: "NTFS", VirtualBytes: workspace.DefaultVirtualBytes, BlockBytes: workspace.DefaultBlockBytes, SectorBytes: workspace.DefaultSectorBytes}
++	legacy.ParentKey = &workspace.CompatibilityKey{Layout: request.Layout, SchemaVersion: workspace.ParentSchemaVersion, Digest: request.CompatibilityKey, Provider: workspace.Provider, Filesystem: "NTFS", VirtualBytes: workspace.DefaultVirtualBytes, BlockBytes: workspace.DefaultBlockBytes, SectorBytes: workspace.DefaultSectorBytes}
+ 	legacy.Source = &workspace.SourceSnapshot{Digest: request.CompatibilityKey}
+ 	response, callErr := a.Client.Call(ctx, legacy)
+ 	return translateWindowsResponse(request, response, callErr)
+diff --git a/internal/workspaced/manager_unix.go b/internal/workspaced/manager_unix.go
+index b86d757..8717e02 100644
+--- a/internal/workspaced/manager_unix.go
++++ b/internal/workspaced/manager_unix.go
+@@ -211,6 +211,9 @@ func (m *Manager) handle(ctx context.Context, request v2.Request) v2.Response {
+ type failFunc func(string, error) v2.Response
+ 
+ func (m *Manager) parentBegin(request v2.Request, fail failFunc) v2.Response {
++	if request.Layout != "" {
++		return fail("unsupported-layout", errors.New("external cache layouts require the Windows broker"))
++	}
+ 	if !compatibility.MatchString(request.CompatibilityKey) {
+ 		return fail("invalid-compatibility-key", errors.New("compatibilityKey must be 64 lowercase hex characters"))
+ 	}
+diff --git a/provenance/post-rc-destination-sha256.tsv b/provenance/post-rc-destination-sha256.tsv
+index 9c7aad8..160b385 100644
+--- a/provenance/post-rc-destination-sha256.tsv
++++ b/provenance/post-rc-destination-sha256.tsv
+@@ -6,16 +6,17 @@ d9b2efea2272fb81f058ebdc4176c07d25e934db004920e4873b5341771e6010	storage/retaine
+ fc5fdfe3cb0753a319690301cb8220d0a61cf7b9d7c4f1d5688518c8d1dbeb02	storage/retained_recovery_windows_test.go
+ ba6d5c84d576c0d9dd94913b92c6d36c6d2d0211b5f91f0d6391364910245430	workspace/attach_recorded.go
+ bb07edd78c9a8f750bf402755ecd7aace42579197258d09d4b06a0780f49b527	workspace/attach_recorded_test.go
+-973cf354068e11a167b6d3b4af88991e4a76a25573348fddaa48107daddb3d9a	workspace/broker.go
++4320edfbacc760d1761da81b468bbf1ae2ad3c247b2f60c06a840a574ab41c66	workspace/broker.go
+ c3970f5b6f239f48f248e39ded9df63d0503365f950170f7aefef685f97133a0	workspace/broker_test.go
+ 1d8b858a4344bc66f16b8307008df589dee94b5fc0398d3df3a4bcf1fcccbff9	workspace/installed_user_access_integration_windows_test.go
+-d4c0b5abee83f45d405a2bd867a4a0ffedfaa9b4409b410f271a088dfde4f82f	workspace/native.go
++be8e9a98abf033a41dfe12c05e5a56666f0a6bfe979f61a95a935b5e4ae80b3d	workspace/key.go
++b99a5e83e6a12d52d1e42309c0d5061af98c2ddc92c0f4b2e20caff4a4e2cfc6	workspace/native.go
+ 8a4b5d8f42eff9e8fca5d2fab2c51981bffc5672910fb4c17eac94ae55be4e24	workspace/native_unsupported.go
+-52be82af2df284aa3061d0d6050191ff5dc8fb371afc70c2b5dacc1c9929a5e3	workspace/native_windows.go
++8d11a908461f33519c5df0132e1cb347108cc02a653c4ea8169c46688089189c	workspace/native_windows.go
+ e847fac674aedf034f8038c8ceaca0db9200073e4ebc44a6801496886e082aef	workspace/pipe_windows.go
+-8353fac09dc51ad30ca1555ce49c9bb2178a167889cf692a7a7a3bc77abbbdef	workspace/protocol.go
++41452b0a9d2d15e62b111a4eaecc1c914f439a7c92fdf971a1239ab7df49250b	workspace/protocol.go
+ c6ed6aecc865837e086c6899045a1bf6e0e0c7d6265d4557fcab6a4e1fb03ecc	workspace/removal.go
+ f7ec8b3776560370cd0ac2cb5371acd55b6b6c6791c113a3fe54dd3e4e34199e	workspace/service_unsupported.go
+ ba7c496f93720b36ec7e23809ad70637b22ec030f0d4d4172e24231b9275e3ce	workspace/service_windows.go
+-1ed6ec956386e16fb78d9feeaad9983acd73ad11a2f518baa5d02889df99de27	workspace/store.go
+-5dc7e4a38b25e5667564c0ee3b463023b16b9ac2fceed8e800e83cd580233879	workspace/types.go
++a21fc8001449bc5b95bb9ab94bc3970cac42b1721e2336c6f7da04b5e2985e26	workspace/store.go
++a86df810f6d7d63c3c4bc3b0acf4f9df1e3c2b4e8d4065c87c83c1480d3dc489	workspace/types.go
+diff --git a/scripts/verify-frozen-destination-parity.ps1 b/scripts/verify-frozen-destination-parity.ps1
+index 9e0e707..bc0a554 100644
+--- a/scripts/verify-frozen-destination-parity.ps1
++++ b/scripts/verify-frozen-destination-parity.ps1
+@@ -15,7 +15,7 @@ $overlayManifestPath = if ([string]::IsNullOrWhiteSpace($OverlayManifest)) {
+     [IO.Path]::GetFullPath($OverlayManifest)
+ }
+ $expectedFrozenFileCount = 42
+-$expectedOverlayFileCount = 20
++$expectedOverlayFileCount = 21
+ $failures = [Collections.Generic.List[string]]::new()
+ $checked = 0
+ $sha256 = [Security.Cryptography.SHA256]::Create()
+diff --git a/workspace/bee_commit.go b/workspace/bee_commit.go
+new file mode 100644
+index 0000000..b769743
+--- /dev/null
++++ b/workspace/bee_commit.go
+@@ -0,0 +1,52 @@
++package workspace
++
++import (
++	"errors"
++	"github.com/Kubonsang/unity-workspace-storage/internal/atomicfile"
++	"os"
++	"path/filepath"
++)
++
++// Publish the image, immutable seed and metadata by one directory rename.
++// Before publication a crash leaves the entire bundle in pending (recovery
++// quarantines it); after publication ResolveParent can see every component.
++func (s *Store) commitBeeParent(p *PendingParent, m ParentMetadata) (*ParentMetadata, error) {
++	dir := filepath.Dir(p.StagingPath)
++	final, err := s.paths.Parent(p.Key.Digest)
++	if err != nil {
++		return nil, err
++	}
++	if _, err = os.Lstat(final); !os.IsNotExist(err) {
++		return nil, errors.Join(err, ErrParentConflict)
++	}
++	image := filepath.Join(dir, "parent.vhdx")
++	if err = atomicfile.Rename(p.StagingPath, image); err != nil {
++		return nil, err
++	}
++	rollback := func(primary error) (*ParentMetadata, error) {
++		_ = os.Remove(filepath.Join(dir, "COMPLETE"))
++		_ = os.Remove(filepath.Join(dir, "metadata.json"))
++		_ = os.Chmod(image, 0600)
++		return nil, errors.Join(primary, os.Rename(image, p.StagingPath))
++	}
++	m.SchemaVersion = ParentSchemaVersion
++	m.Provider = Provider
++	m.VHDXPath = filepath.Join(final, "parent.vhdx")
++	m.Immutable = true
++	m.CreatedAt = s.now().UTC()
++	m.LastUsedAt = m.CreatedAt
++	if err = os.Chmod(image, 0400); err != nil {
++		return rollback(err)
++	}
++	if err = writeJSONDurable(filepath.Join(dir, "metadata.json"), m); err != nil {
++		return rollback(err)
++	}
++	if err = atomicfile.WriteExclusiveDurable(filepath.Join(dir, "COMPLETE"), []byte(completeContents), 0600); err != nil {
++		return rollback(err)
++	}
++	if err = atomicfile.Rename(dir, final); err != nil {
++		return rollback(err)
++	}
++	_ = os.Remove(filepath.Join(final, "pending.json"))
++	return &m, nil
++}
+diff --git a/workspace/bee_commit_windows_test.go b/workspace/bee_commit_windows_test.go
+new file mode 100644
+index 0000000..5c75f99
+--- /dev/null
++++ b/workspace/bee_commit_windows_test.go
+@@ -0,0 +1,92 @@
++//go:build windows
++
++package workspace
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestBeeParentPublishesTogetherAndChargesSeed(t *testing.T) {
++	store, err := NewStore(t.TempDir(), "S-1-5-21-test")
++	if err != nil {
++		t.Fatal(err)
++	}
++	key := CompatibilityKey{SchemaVersion: ParentSchemaVersion, Layout: ExternalBeeLayout, Digest: strings.Repeat("f", 64)}
++	p, err := store.BeginParent("S-1-5-21-test", key, SourceSnapshot{}, filepath.Join(store.paths.Root, "mount"), 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	os.WriteFile(p.StagingPath, make([]byte, 4097), 0600)
++	seed := filepath.Join(filepath.Dir(p.StagingPath), "bee-seed")
++	os.Mkdir(seed, 0700)
++	os.WriteFile(filepath.Join(seed, "cache"), make([]byte, 8193), 0600)
++	tree, err := openBeeTree(seed, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	hash, err := tree.digest()
++	logical, allocated, e := tree.usage()
++	tree.close()
++	if err != nil || e != nil {
++		t.Fatal(err, e)
++	}
++	disk, err := fileAllocatedBytes(p.StagingPath)
++	if err != nil {
++		t.Fatal(err)
++	}
++	m := ParentMetadata{CompatibilityKey: key, OwnershipToken: p.OwnershipToken, AllocatedBytes: disk, BeeSeed: &BeeSeed{hash, logical, allocated}}
++	committed, err := store.CommitParent(p, m)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if _, err = os.Stat(filepath.Dir(p.StagingPath)); !os.IsNotExist(err) {
++		t.Fatal("pending bundle remained")
++	}
++	result, err := store.ResolveParent(key)
++	if err != nil || result.Status != ParentStatusValid {
++		t.Fatal("published parent missing", err)
++	}
++	if err = verifyBeeSeed(*committed); err != nil {
++		t.Fatal(err)
++	}
++	total, err := allocatedVHDXBytes(store.paths.UserRoot)
++	if err != nil || total != disk+allocated {
++		t.Fatalf("seed excluded from quota total=%d want=%d err=%v", total, disk+allocated, err)
++	}
++	reclaimed, err := store.RemoveParentIfUnused(key.Digest, map[string]bool{})
++	if err != nil || reclaimed != total {
++		t.Fatal("GC accounting mismatch", reclaimed, total, err)
++	}
++}
++func TestBeePendingRecoveryPreservesWholeUnpublishedBundle(t *testing.T) {
++	store, err := NewStore(t.TempDir(), "S-1-5-21-test")
++	if err != nil {
++		t.Fatal(err)
++	}
++	key := CompatibilityKey{SchemaVersion: ParentSchemaVersion, Layout: ExternalBeeLayout, Digest: strings.Repeat("d", 64)}
++	p, err := store.BeginParent("S-1-5-21-test", key, SourceSnapshot{}, filepath.Join(store.paths.Root, "mount"), 0)
++	if err != nil {
++		t.Fatal(err)
++	}
++	dir := filepath.Dir(p.StagingPath)
++	os.WriteFile(filepath.Join(dir, "parent.vhdx"), []byte("image"), 0600)
++	os.Mkdir(filepath.Join(dir, "bee-seed"), 0700)
++	os.WriteFile(filepath.Join(dir, "bee-seed", "cache"), []byte("seed"), 0600)
++	_, quarantined, err := store.RecoverPending(time.Now().Add(time.Hour), time.Second, func(int) bool { return false })
++	if err != nil || quarantined != 1 {
++		t.Fatal("bundle recovery failed", quarantined, err)
++	}
++	for _, rel := range []string{"parent.vhdx", "bee-seed/cache"} {
++		if _, err = os.Stat(filepath.Join(store.paths.Quarantine, p.TransactionID+"-parent", filepath.FromSlash(rel))); err != nil {
++			t.Fatal(err)
++		}
++	}
++	result, err := store.ResolveParent(key)
++	if err != nil || result.Status != ParentStatusMissing {
++		t.Fatal("incomplete bundle published", err)
++	}
++}
+diff --git a/workspace/bee_integration_windows_test.go b/workspace/bee_integration_windows_test.go
+new file mode 100644
+index 0000000..e9611e2
+--- /dev/null
++++ b/workspace/bee_integration_windows_test.go
+@@ -0,0 +1,204 @@
++//go:build windows
++
++package workspace
++
++import (
++	"context"
++	"encoding/json"
++	"fmt"
++	"golang.org/x/sys/windows"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++)
++
++func TestExternalBeeNativeLifecycle(t *testing.T) {
++	root := os.Getenv("HONEYBEE_BEE_NATIVE_ROOT")
++	if root == "" {
++		t.Skip("explicit fresh owned root and elevation required")
++	}
++	if !filepath.IsAbs(root) {
++		t.Fatal("absolute root required")
++	}
++	if err := os.Mkdir(root, 0700); err != nil {
++		t.Fatal(err)
++	}
++	// Preserve any uncertain disk state on failure. No automatic recursive delete.
++	token, err := windows.OpenCurrentProcessToken()
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer token.Close()
++	user, err := token.GetTokenUser()
++	if err != nil {
++		t.Fatal(err)
++	}
++	sid := user.User.Sid.String()
++	work := filepath.Join(root, "workspaces")
++	if err = os.Mkdir(work, 0700); err != nil {
++		t.Fatal(err)
++	}
++	cfg := BrokerConfig{StoreRoot: filepath.Join(root, "store"), WorkspaceRoot: work, UserSID: sid}
++	broker, err := NewBroker(cfg, NewNative())
++	if err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
++	defer cancel()
++	seq := 0
++	call := func(r Request) Response {
++		seq++
++		r.SchemaVersion = ProtocolSchemaVersion
++		r.RequestID = fmt.Sprintf("bee-native-%d", seq)
++		v := broker.Handle(ctx, sid, r)
++		if !v.OK {
++			t.Fatalf("%s: %+v", r.Operation, v.Error)
++		}
++		return v
++	}
++	key := CompatibilityKey{Layout: ExternalBeeLayout, SchemaVersion: ParentSchemaVersion, Digest: strings.Repeat("b", 64), Provider: Provider, Filesystem: "NTFS", VirtualBytes: 1 << 30, BlockBytes: DefaultBlockBytes, SectorBytes: DefaultSectorBytes}
++	os.Mkdir(filepath.Join(work, "seed"), 0700)
++	build := call(Request{Operation: OperationBeginParentBuild, WorkspaceID: "seed", ParentKey: &key, Source: &SourceSnapshot{}, ClientPID: os.Getpid()})
++	mount := build.ParentBuild.MountPath
++	if err = os.Mkdir(filepath.Join(mount, "Bee"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	for name, value := range map[string]string{"Bee/TundraBuildState.state": "retain-state", "Bee/cache.bin": "warm-cache", "Bee/test.dag": "discard-graph", "LibraryVersion": "fixture"} {
++		if err = os.WriteFile(filepath.Join(mount, filepath.FromSlash(name)), []byte(value), 0600); err != nil {
++			t.Fatal(err)
++		}
++	}
++	parent := call(Request{Operation: OperationCommitParent, TransactionID: build.ParentBuild.TransactionID}).Parent
++	if parent.BeeSeed == nil || parent.BeeSeed.LogicalBytes <= 0 || parent.BeeSeed.AllocatedBytes < 0 {
++		t.Fatal("seed usage missing")
++	}
++	var leases []Lease
++	for _, id := range []string{"one", "two"} {
++		os.Mkdir(filepath.Join(work, id), 0700)
++		v := call(Request{Operation: OperationAcquire, WorkspaceID: id, RunID: id, ParentKey: &key, ClientPID: os.Getpid()})
++		leases = append(leases, *v.Lease)
++	}
++	if os.Getenv("HONEYBEE_BEE_USER_PROBE") == "1" {
++		journal, e := broker.store.ReadLease(leases[0].LeaseID)
++		if e != nil {
++			t.Fatal(e)
++		}
++		cache, e := beeRoot(*journal)
++		if e != nil {
++			t.Fatal(e)
++		}
++		payload, _ := json.Marshal(map[string]string{"cache": cache, "sid": sid})
++		if e = os.WriteFile(filepath.Join(root, "user-probe.json"), payload, 0600); e != nil {
++			t.Fatal(e)
++		}
++		deadline := time.Now().Add(3 * time.Minute)
++		for {
++			if _, e = os.Stat(filepath.Join(root, "user-probe-passed.json")); e == nil {
++				break
++			}
++			if time.Now().After(deadline) {
++				t.Fatal("normal user probe timed out")
++			}
++			time.Sleep(time.Second)
++		}
++		if data, e := os.ReadFile(filepath.Join(cache, "data", "normal-user.txt")); e != nil || string(data) != "normal-user-write" {
++			t.Fatal("normal user data missing", e)
++		}
++	}
++	for i, l := range leases {
++		target := filepath.Join(l.MountPath, "Bee", "cache.bin")
++		if data, e := os.ReadFile(target); e != nil || string(data) != "warm-cache" {
++			t.Fatalf("seed read %q %v", data, e)
++		}
++		if _, e := os.Stat(filepath.Join(l.MountPath, "Bee", "test.dag")); !os.IsNotExist(e) {
++			t.Fatal("DAG retained")
++		}
++		if e := os.WriteFile(target, []byte(fmt.Sprintf("private-%d", i)), 0600); e != nil {
++			t.Fatal(e)
++		}
++		call(Request{Operation: OperationRelease, LeaseID: l.LeaseID, RetainChild: true})
++	}
++	// Recreate the broker (service restart equivalent for persisted state).
++	broker, err = NewBroker(cfg, NewNative())
++	if err != nil {
++		t.Fatal(err)
++	}
++	for i, l := range leases {
++		id := []string{"one", "two"}[i]
++		v := call(Request{Operation: OperationAttachRetained, WorkspaceID: id, RunID: id, ClientPID: os.Getpid()})
++		leases[i] = *v.Lease
++		if data, e := os.ReadFile(filepath.Join(v.Lease.MountPath, "Bee", "cache.bin")); e != nil || string(data) != fmt.Sprintf("private-%d", i) {
++			t.Fatalf("reattach reseeded %q %v", data, e)
++		}
++		_ = l
++	}
++	probe, err := os.Open(filepath.Join(leases[0].MountPath, "Bee", "cache.bin"))
++	if err != nil {
++		t.Fatal(err)
++	}
++	seq++
++	busy := broker.Handle(ctx, sid, Request{SchemaVersion: ProtocolSchemaVersion, RequestID: fmt.Sprintf("bee-native-%d", seq), Operation: OperationPrepareRetainedRemoval, RunID: "one", WorkspaceID: "one", TransactionID: "remove-one"})
++	probe.Close()
++	if busy.OK || busy.Error.Code != "retained-in-use" {
++		t.Fatalf("busy cache accepted: %+v", busy)
++	}
++	call(Request{Operation: OperationPrepareRetainedRemoval, RunID: "one", WorkspaceID: "one", TransactionID: "remove-one"})
++	call(Request{Operation: OperationAbortRetainedRemoval, RunID: "one", TransactionID: "remove-one"})
++	if data, e := os.ReadFile(filepath.Join(leases[0].MountPath, "Bee", "cache.bin")); e != nil || string(data) != "private-0" {
++		t.Fatal("abort changed data", e)
++	}
++	for _, id := range []string{"one", "two"} {
++		call(Request{Operation: OperationPrepareRetainedRemoval, RunID: id, WorkspaceID: id, TransactionID: "commit-" + id})
++		if id == "one" {
++			// Simulate a late external-cache writer after reservation. The child
++			// is deleted, but the new cache entry prevents directory removal.
++			entry := broker.removals[id]
++			journal, e := broker.store.ReadLease(leases[0].LeaseID)
++			if e != nil {
++				t.Fatal(e)
++			}
++			cache, e := beeRoot(*journal)
++			if e != nil {
++				t.Fatal(e)
++			}
++			if e = os.WriteFile(filepath.Join(cache, "data", "late-writer"), []byte("late"), 0600); e != nil {
++				t.Fatal(e)
++			}
++			seq++
++			failed := broker.Handle(ctx, sid, Request{SchemaVersion: ProtocolSchemaVersion, RequestID: fmt.Sprintf("bee-native-%d", seq), Operation: OperationCommitRetainedRemoval, RunID: id, TransactionID: "commit-" + id})
++			if failed.OK {
++				t.Fatal("late cache entry did not interrupt removal")
++			}
++			if _, e = os.Stat(journal.ChildPath); !os.IsNotExist(e) {
++				t.Fatal("expected child deletion before injected cache failure")
++			}
++			_ = entry.reservation.Abort() // close handles as process exit would
++			// Retain the survivor before recreating the broker to avoid orphaning its attachment.
++			call(Request{Operation: OperationRelease, LeaseID: leases[1].LeaseID, RetainChild: true})
++			broker, e = NewBroker(cfg, NewNative())
++			if e != nil {
++				t.Fatal(e)
++			}
++			v := call(Request{Operation: OperationAttachRetained, RunID: "two", WorkspaceID: "two", ClientPID: os.Getpid()})
++			leases[1] = *v.Lease
++		}
++		call(Request{Operation: OperationCommitRetainedRemoval, RunID: id, TransactionID: "commit-" + id})
++		if id == "one" {
++			if data, e := os.ReadFile(filepath.Join(leases[1].MountPath, "Bee", "cache.bin")); e != nil || string(data) != "private-1" {
++				t.Fatal("survivor changed", e)
++			}
++		}
++	}
++	if _, err = broker.store.RemoveParentIfUnused(key.Digest, map[string]bool{}); err != nil {
++		t.Fatal(err)
++	}
++	status := call(Request{Operation: OperationStatus}).Status
++	if status.ParentCount != 0 || status.ActiveChildCount != 0 || status.RetainedChildCount != 0 {
++		t.Fatalf("residual: %+v", status)
++	}
++	if err = os.WriteFile(filepath.Join(root, "PASSED"), []byte("native parent, two private caches, restart, busy/abort/remove/survivor and GC passed\n"), 0600); err != nil {
++		t.Fatal(err)
++	}
++}
+diff --git a/workspace/bee_junction_windows.go b/workspace/bee_junction_windows.go
+new file mode 100644
+index 0000000..64b4158
+--- /dev/null
++++ b/workspace/bee_junction_windows.go
+@@ -0,0 +1,46 @@
++//go:build windows
++
++package workspace
++
++import (
++	"encoding/binary"
++	"errors"
++	"strings"
++	"unicode/utf16"
++
++	"golang.org/x/sys/windows"
++)
++
++// Query the leaf reparse buffer directly. EvalSymlinks cannot reliably resolve
++// directory volume mount ancestors on Windows and can report a false link loop.
++func beeJunctionTarget(path string) (string, error) {
++	p, err := windows.UTF16PtrFromString(path)
++	if err != nil {
++		return "", err
++	}
++	h, err := windows.CreateFile(p, 0, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
++	if err != nil {
++		return "", err
++	}
++	defer windows.CloseHandle(h)
++	buffer := make([]byte, 16*1024)
++	var n uint32
++	if err = windows.DeviceIoControl(h, 0x900a8, nil, 0, &buffer[0], uint32(len(buffer)), &n, nil); err != nil {
++		return "", err
++	}
++	if n < 16 || binary.LittleEndian.Uint32(buffer[:4]) != 0xa0000003 {
++		return "", errors.New("Bee is not a junction")
++	}
++	offset := int(binary.LittleEndian.Uint16(buffer[8:10]))
++	length := int(binary.LittleEndian.Uint16(buffer[10:12]))
++	if length%2 != 0 || 16+offset+length > int(n) {
++		return "", errors.New("invalid junction buffer")
++	}
++	data := buffer[16+offset : 16+offset+length]
++	chars := make([]uint16, len(data)/2)
++	for i := range chars {
++		chars[i] = binary.LittleEndian.Uint16(data[i*2 : i*2+2])
++	}
++	target := string(utf16.Decode(chars))
++	return strings.TrimPrefix(target, `\??\`), nil
++}
+diff --git a/workspace/bee_native_windows.go b/workspace/bee_native_windows.go
+new file mode 100644
+index 0000000..c4e4950
+--- /dev/null
++++ b/workspace/bee_native_windows.go
+@@ -0,0 +1,208 @@
++//go:build windows
++
++package workspace
++
++import (
++	"context"
++	"errors"
++	"fmt"
++	"os"
++	"os/exec"
++	"path/filepath"
++	"strings"
++
++	"github.com/Kubonsang/unity-workspace-storage/storage"
++)
++
++// Freeze the producer's volume before privileged copying. The seed is read
++// only from this read-only attachment; all traversed objects are pinned and
++// reparse/hard-link entries are rejected by openBeeTree.
++func (s *windowsParentSession) externalizeBee(ctx context.Context) (err error) {
++	if s.pending.Key.Layout != "" && s.pending.Key.Layout != ExternalBeeLayout {
++		return ErrInvalidInput
++	}
++	if s.pending.Key.Layout == "" || s.evidence.BeeSeed != nil {
++		return nil
++	}
++	seed := filepath.Join(filepath.Dir(s.pending.StagingPath), "bee-seed")
++	if _, e := os.Lstat(seed); !os.IsNotExist(e) {
++		return errors.Join(e, ErrOwnershipMismatch)
++	}
++	if err = s.attachment.Flush(ctx); err != nil {
++		return err
++	}
++	if err = s.attachment.Close(ctx); err != nil {
++		return err
++	}
++	s.closed = true
++	ro, err := storage.OpenAndAttach(s.pending.StagingPath, true)
++	if err != nil {
++		return err
++	}
++	if err = ro.MountExisting(ctx, s.pending.MountPath, true); err != nil {
++		return errors.Join(err, ro.Close(ctx))
++	}
++	tree, err := openBeeTree(filepath.Join(s.pending.MountPath, "Bee"), 1)
++	if err == nil {
++		if !strings.EqualFold(fmt.Sprintf("%08X", tree.nodes[0].volumeSerial), s.evidence.Volume.VolumeSerial) {
++			err = ErrOwnershipMismatch
++		} else {
++			err = tree.copyTo(seed, true)
++		}
++		err = errors.Join(err, tree.close())
++	}
++	err = errors.Join(err, ro.Close(ctx))
++	if err != nil {
++		return err
++	}
++	seedTree, err := openBeeTree(seed, 1)
++	if err != nil {
++		return err
++	}
++	digest, err := seedTree.digest()
++	logical, allocated, usageErr := seedTree.usage()
++	err = errors.Join(err, usageErr, seedTree.close())
++	if err != nil {
++		return err
++	}
++	// Reopen only the owned staging disk to remove the regular Bee source tree.
++	rw, err := storage.OpenAndAttach(s.pending.StagingPath, false)
++	if err != nil {
++		return err
++	}
++	s.attachment = rw
++	s.closed = false
++	if err = rw.MountExisting(ctx, s.pending.MountPath, false); err != nil {
++		return err
++	}
++	if err = removeBeeTree(filepath.Join(s.pending.MountPath, "Bee")); err != nil {
++		return err
++	}
++	if err = setBeeAccess(seed, s.pending.UserSID, false); err != nil {
++		return err
++	}
++	s.evidence.BeeSeed = &BeeSeed{SHA256: digest, LogicalBytes: logical, AllocatedBytes: allocated}
++	return nil
++}
++func verifyBeeSeed(parent ParentMetadata) error {
++	if parent.CompatibilityKey.Layout == "" {
++		if parent.BeeSeed != nil {
++			return ErrOwnershipMismatch
++		}
++		return nil
++	}
++	if parent.CompatibilityKey.Layout != ExternalBeeLayout || parent.BeeSeed == nil {
++		return ErrOwnershipMismatch
++	}
++	tree, err := openBeeTree(filepath.Join(filepath.Dir(parent.VHDXPath), "bee-seed"), 1)
++	if err != nil {
++		return err
++	}
++	defer tree.close()
++	hash, err := tree.digest()
++	logical, allocated, e := tree.usage()
++	if err != nil || e != nil {
++		return errors.Join(err, e)
++	}
++	if hash != parent.BeeSeed.SHA256 || logical != parent.BeeSeed.LogicalBytes || allocated != parent.BeeSeed.AllocatedBytes {
++		return ErrOwnershipMismatch
++	}
++	return nil
++}
++func validateBeeSeedForCommit(p *PendingParent, seed *BeeSeed) error {
++	return verifyBeeSeed(ParentMetadata{CompatibilityKey: p.Key, VHDXPath: p.StagingPath, BeeSeed: seed})
++}
++func createBeeCache(parent ParentMetadata, j LeaseJournal) error {
++	root, err := beeRoot(j)
++	if err != nil {
++		return err
++	}
++	if err = os.Mkdir(root, 0700); err != nil {
++		return err
++	}
++	// The broker-owned container and marker remain read-only to the client. Only
++	// data/ and its descendants allow Unity writes; data/ itself cannot be replaced.
++	if err = setBeeAccess(root, j.UserSID, false); err != nil {
++		return err
++	}
++	if err = writeJSONExclusive(filepath.Join(root, "owner.json"), beeIdentity(j)); err != nil {
++		return err
++	}
++	tree, err := openBeeTree(filepath.Join(filepath.Dir(parent.VHDXPath), "bee-seed"), 1)
++	if err != nil {
++		return err
++	}
++	defer tree.close()
++	if err = tree.copyTo(filepath.Join(root, "data"), false); err != nil {
++		return err
++	}
++	return setBeeAccess(filepath.Join(root, "data"), j.UserSID, true)
++}
++func validateBeeCache(j LeaseJournal) (string, error) {
++	root, err := beeRoot(j)
++	if err != nil {
++		return "", err
++	}
++	if err = validatePlatformNonReparse(root); err != nil {
++		return "", err
++	}
++	var owner beeOwner
++	if err = readJSON(filepath.Join(root, "owner.json"), &owner); err != nil {
++		return "", err
++	}
++	if owner != beeIdentity(j) {
++		return "", ErrOwnershipMismatch
++	}
++	data := filepath.Join(root, "data")
++	if err = validatePlatformNonReparse(data); err != nil {
++		return "", err
++	}
++	return data, nil
++}
++func setupBeeJunction(ctx context.Context, j LeaseJournal, create bool) error {
++	if j.Layout == "" {
++		return nil
++	}
++	target, err := validateBeeCache(j)
++	if err != nil {
++		return err
++	}
++	link := filepath.Join(j.MountPath, "Bee")
++	if create {
++		if _, err = os.Lstat(link); !os.IsNotExist(err) {
++			return errors.Join(err, ErrOwnershipMismatch)
++		}
++		cmd := exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", `$ErrorActionPreference='Stop'; New-Item -ItemType Junction -Path $env:HB_BEE_LINK -Target $env:HB_BEE_TARGET | Out-Null`)
++		cmd.Env = append(os.Environ(), "HB_BEE_LINK="+link, "HB_BEE_TARGET="+target)
++		if out, e := cmd.CombinedOutput(); e != nil {
++			return fmt.Errorf("create private Bee junction: %w: %s", e, out)
++		}
++	}
++	actual, err := beeJunctionTarget(link)
++	if err != nil || !strings.EqualFold(actual, target) {
++		return errors.Join(err, ErrOwnershipMismatch)
++	}
++	return nil
++}
++func (windowsNative) CleanupChildCache(_ context.Context, j LeaseJournal) error {
++	root, err := beeRoot(j)
++	if err != nil {
++		return err
++	}
++	if _, err = os.Lstat(root); os.IsNotExist(err) {
++		return nil
++	}
++	// A missing data directory is allowed only here, after child deletion, to
++	// resume a partially completed removal. The protected ownership marker is last.
++	var owner beeOwner
++	if err = validatePlatformNonReparse(root); err != nil {
++		return err
++	}
++	if err = readJSON(filepath.Join(root, "owner.json"), &owner); err != nil {
++		return err
++	}
++	if owner != beeIdentity(j) {
++		return ErrOwnershipMismatch
++	}
++	return removeBeeTree(root)
++}
+diff --git a/workspace/bee_tree_windows.go b/workspace/bee_tree_windows.go
+new file mode 100644
+index 0000000..f8dd222
+--- /dev/null
++++ b/workspace/bee_tree_windows.go
+@@ -0,0 +1,291 @@
++//go:build windows
++
++package workspace
++
++import (
++	"crypto/sha256"
++	"encoding/hex"
++	"errors"
++	"fmt"
++	"github.com/Kubonsang/unity-workspace-storage/storage"
++	"golang.org/x/sys/windows"
++	"io"
++	"os"
++	"path/filepath"
++	"sort"
++	"unsafe"
++)
++
++// Pin each ancestor before opening descendants. Open reparse points themselves
++// and reject them, and reject hard-linked files. A directory cannot be swapped
++// between validation and a privileged read/delete. Mode 2 reserves every file
++// exclusively before deletion; mode 0 measures without blocking normal writers.
++type beeNode struct {
++	path         string
++	file         *os.File
++	info         os.FileInfo
++	volumeSerial uint32
++}
++type beeTree struct{ nodes []beeNode }
++
++var beeStandardInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetFileInformationByHandleEx")
++
++func beeAllocated(n beeNode) (int64, error) {
++	var id windows.ByHandleFileInformation
++	if err := windows.GetFileInformationByHandle(windows.Handle(n.file.Fd()), &id); err != nil {
++		return 0, err
++	}
++	if id.FileAttributes&(windows.FILE_ATTRIBUTE_COMPRESSED|windows.FILE_ATTRIBUTE_SPARSE_FILE) != 0 {
++		usage, err := storage.FileUsageOf(n.path)
++		return usage.AllocatedBytes, err
++	}
++	var standard struct {
++		AllocationSize, EndOfFile int64
++		Links                     uint32
++		DeletePending, Directory  uint8
++		Padding                   [2]byte
++	}
++	ok, _, err := beeStandardInfo.Call(n.file.Fd(), 1, uintptr(unsafe.Pointer(&standard)), unsafe.Sizeof(standard))
++	if ok == 0 {
++		return 0, err
++	}
++	return standard.AllocationSize, nil
++}
++func beeFileAllocatedBytes(path string) (int64, error) {
++	t, err := openBeeTree(path, 0)
++	if err != nil {
++		return 0, err
++	}
++	defer t.close()
++	if len(t.nodes) != 1 || t.nodes[0].info.IsDir() {
++		return 0, ErrOwnershipMismatch
++	}
++	return beeAllocated(t.nodes[0])
++}
++
++func (t *beeTree) close() error {
++	var err error
++	for i := len(t.nodes) - 1; i >= 0; i-- {
++		if t.nodes[i].file != nil {
++			err = errors.Join(err, t.nodes[i].file.Close())
++			t.nodes[i].file = nil
++		}
++	}
++	return err
++}
++func openBeeTree(root string, mode int) (*beeTree, error) {
++	t := &beeTree{}
++	var visit func(string) error
++	visit = func(p string) error {
++		ptr, err := windows.UTF16PtrFromString(p)
++		if err != nil {
++			return err
++		}
++		access := uint32(windows.FILE_READ_ATTRIBUTES)
++		share := uint32(windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE)
++		if mode > 0 {
++			access |= windows.GENERIC_READ
++			share = windows.FILE_SHARE_READ
++		}
++		// A separate leaf probe determines type, then the pinned handle verifies it.
++		attrs, err := windows.GetFileAttributes(ptr)
++		if err != nil {
++			return err
++		}
++		if mode == 2 {
++			access |= windows.DELETE
++			share = 0
++		}
++		if attrs&windows.FILE_ATTRIBUTE_DIRECTORY != 0 {
++			access |= windows.FILE_LIST_DIRECTORY
++			share = windows.FILE_SHARE_READ | windows.FILE_SHARE_WRITE
++		}
++		h, err := windows.CreateFile(ptr, access, share, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
++		if err != nil {
++			return err
++		}
++		f := os.NewFile(uintptr(h), p)
++		var id windows.ByHandleFileInformation
++		if err = windows.GetFileInformationByHandle(h, &id); err != nil {
++			f.Close()
++			return err
++		}
++		if id.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 || (id.FileAttributes&windows.FILE_ATTRIBUTE_DIRECTORY == 0 && id.NumberOfLinks != 1) {
++			f.Close()
++			return ErrOwnershipMismatch
++		}
++		info, err := f.Stat()
++		if err != nil {
++			f.Close()
++			return err
++		}
++		if !info.IsDir() && !info.Mode().IsRegular() {
++			f.Close()
++			return ErrOwnershipMismatch
++		}
++		t.nodes = append(t.nodes, beeNode{p, f, info, id.VolumeSerialNumber})
++		if info.IsDir() {
++			entries, err := f.ReadDir(-1)
++			if err != nil {
++				return err
++			}
++			sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
++			// Keep the ownership marker until all cache data has been removed.
++			for _, e := range entries {
++				if e.Name() == "owner.json" {
++					if err = visit(filepath.Join(p, e.Name())); err != nil {
++						return err
++					}
++				}
++			}
++			for _, e := range entries {
++				if e.Name() != "owner.json" {
++					if err = visit(filepath.Join(p, e.Name())); err != nil {
++						return err
++					}
++				}
++			}
++		}
++		return nil
++	}
++	if err := visit(root); err != nil {
++		t.close()
++		return nil, err
++	}
++	return t, nil
++}
++func (t *beeTree) digest() (string, error) {
++	h := sha256.New()
++	root := t.nodes[0].path
++	for _, n := range t.nodes {
++		rel, err := filepath.Rel(root, n.path)
++		if err != nil {
++			return "", err
++		}
++		fmt.Fprintf(h, "%s\x00%t\x00%d\x00", filepath.ToSlash(rel), n.info.IsDir(), n.info.Size())
++		if !n.info.IsDir() {
++			if _, err = n.file.Seek(0, 0); err != nil {
++				return "", err
++			}
++			if _, err = io.Copy(h, n.file); err != nil {
++				return "", err
++			}
++		}
++	}
++	return hex.EncodeToString(h.Sum(nil)), nil
++}
++func (t *beeTree) usage() (logical, allocated int64, err error) {
++	for _, n := range t.nodes {
++		if !n.info.IsDir() {
++			bytes, e := beeAllocated(n)
++			if e != nil {
++				return 0, 0, e
++			}
++			logical += n.info.Size()
++			allocated += bytes
++		}
++	}
++	return
++}
++func (t *beeTree) copyTo(target string, omit bool) error {
++	root := t.nodes[0].path
++	for _, n := range t.nodes {
++		rel, err := filepath.Rel(root, n.path)
++		if err != nil {
++			return err
++		}
++		if omit && filepath.Dir(rel) == "." && omitBeeDAG(filepath.Base(rel)) {
++			if n.info.IsDir() {
++				return ErrOwnershipMismatch
++			}
++			continue
++		}
++		dst := filepath.Join(target, rel)
++		if n.info.IsDir() {
++			if err = os.Mkdir(dst, 0700); err != nil {
++				return err
++			}
++			continue
++		}
++		out, err := os.OpenFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
++		if err != nil {
++			return err
++		}
++		_, err = n.file.Seek(0, 0)
++		if err == nil {
++			_, err = io.Copy(out, n.file)
++		}
++		err = errors.Join(err, out.Sync(), out.Close())
++		if err != nil {
++			return err
++		}
++		if err = os.Chtimes(dst, n.info.ModTime(), n.info.ModTime()); err != nil {
++			return err
++		}
++	}
++	return nil
++}
++
++// Delete exactly the held objects, never resolve a child path again. New files
++// or open handles cause failure and leave the owning journal for retry.
++func (t *beeTree) remove() error {
++	for i := len(t.nodes) - 1; i >= 0; i-- {
++		n := &t.nodes[i]
++		if n.file == nil {
++			continue
++		}
++		flag := byte(1)
++		if err := windows.SetFileInformationByHandle(windows.Handle(n.file.Fd()), windows.FileDispositionInfo, &flag, uint32(unsafe.Sizeof(flag))); err != nil {
++			return err
++		}
++		if err := n.file.Close(); err != nil {
++			return err
++		}
++		n.file = nil
++	}
++	return nil
++}
++func beeUsage(root string) (int64, int64, error) {
++	t, e := openBeeTree(root, 0)
++	if e != nil {
++		return 0, 0, e
++	}
++	defer t.close()
++	return t.usage()
++}
++func removeBeeTree(root string) error {
++	t, e := openBeeTree(root, 2)
++	if os.IsNotExist(e) {
++		return nil
++	}
++	if e != nil {
++		return e
++	}
++	defer t.close()
++	return t.remove()
++}
++func setBeeAccess(path, sid string, writable bool) error {
++	parsed, err := windows.StringToSid(sid)
++	if err != nil {
++		return err
++	}
++	rights := "GRGX"
++	inherit := "OICI"
++	if writable {
++		rights = "0x1201bf"
++		inherit = ""
++	}
++	sddl := fmt.Sprintf("D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;%s;%s;;;%s)", inherit, rights, parsed.String())
++	if writable {
++		sddl += fmt.Sprintf("(A;OICIIO;FA;;;%s)", parsed.String())
++	}
++	sd, err := windows.SecurityDescriptorFromString(sddl)
++	if err != nil {
++		return err
++	}
++	acl, _, err := sd.DACL()
++	if err != nil {
++		return err
++	}
++	return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
++}
+diff --git a/workspace/bee_tree_windows_test.go b/workspace/bee_tree_windows_test.go
+new file mode 100644
+index 0000000..d4cd936
+--- /dev/null
++++ b/workspace/bee_tree_windows_test.go
+@@ -0,0 +1,90 @@
++//go:build windows
++
++package workspace
++
++import (
++	"os"
++	"path/filepath"
++	"testing"
++)
++
++func TestBeeTreeRejectsHardlinksAndReservesBusyFiles(t *testing.T) {
++	root := t.TempDir()
++	source := filepath.Join(root, "source")
++	os.Mkdir(source, 0700)
++	file := filepath.Join(source, "cache")
++	os.WriteFile(file, []byte("private"), 0600)
++	held, err := os.Open(file)
++	if err != nil {
++		t.Fatal(err)
++	}
++	if tree, e := openBeeTree(source, 2); e == nil {
++		tree.close()
++		t.Fatal("busy file reserved")
++	}
++	held.Close()
++	outside := filepath.Join(root, "alias")
++	if err = os.Link(file, outside); err != nil {
++		t.Fatal(err)
++	}
++	if tree, e := openBeeTree(source, 1); e == nil {
++		tree.close()
++		t.Fatal("hardlink read")
++	}
++	os.Remove(outside)
++	tree, err := openBeeTree(source, 2)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tree.close()
++	if err = tree.remove(); err != nil {
++		t.Fatal(err)
++	}
++	if _, err = os.Stat(source); !os.IsNotExist(err) {
++		t.Fatal("reserved tree remained")
++	}
++}
++func TestBeeSeedKeepsTundraAndRejectsChangedContent(t *testing.T) {
++	root := t.TempDir()
++	source := filepath.Join(root, "source")
++	os.Mkdir(source, 0700)
++	for _, name := range []string{"TundraBuildState.state", "TundraBuildState.state.map", "cache", "x.dag", "x-inputdata.json"} {
++		os.WriteFile(filepath.Join(source, name), []byte(name), 0600)
++	}
++	tree, err := openBeeTree(source, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	dst := filepath.Join(root, "bee-seed")
++	err = tree.copyTo(dst, true)
++	tree.close()
++	if err != nil {
++		t.Fatal(err)
++	}
++	for _, name := range []string{"TundraBuildState.state", "TundraBuildState.state.map", "cache"} {
++		if _, err = os.Stat(filepath.Join(dst, name)); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if _, err = os.Stat(filepath.Join(dst, "x.dag")); !os.IsNotExist(err) {
++		t.Fatal("DAG copied")
++	}
++	tree, err = openBeeTree(dst, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	hash, err := tree.digest()
++	logical, allocated, e := tree.usage()
++	tree.close()
++	if err != nil || e != nil {
++		t.Fatal(err, e)
++	}
++	parent := ParentMetadata{CompatibilityKey: CompatibilityKey{Layout: ExternalBeeLayout}, VHDXPath: filepath.Join(root, "parent.vhdx"), BeeSeed: &BeeSeed{hash, logical, allocated}}
++	if err = verifyBeeSeed(parent); err != nil {
++		t.Fatal(err)
++	}
++	os.WriteFile(filepath.Join(dst, "cache"), []byte("other"), 0600)
++	if err = verifyBeeSeed(parent); err == nil {
++		t.Fatal("modified seed accepted")
++	}
++}
+diff --git a/workspace/bee_unsupported.go b/workspace/bee_unsupported.go
+new file mode 100644
+index 0000000..9f61258
+--- /dev/null
++++ b/workspace/bee_unsupported.go
+@@ -0,0 +1,6 @@
++//go:build !windows
++
++package workspace
++
++func validateBeeSeedForCommit(*PendingParent, *BeeSeed) error { return ErrBrokerUnavailable }
++func beeFileAllocatedBytes(path string) (int64, error)        { return fileAllocatedBytes(path) }
+diff --git a/workspace/broker.go b/workspace/broker.go
+index b31514e..c21f05a 100644
+--- a/workspace/broker.go
++++ b/workspace/broker.go
+@@ -276,7 +276,7 @@ func (b *Broker) handleLocked(ctx context.Context, callerSID string, request Req
+ 	}
+ 	switch request.Operation {
+ 	case OperationHello:
+-		return Response{SchemaVersion: ProtocolSchemaVersion, RequestID: request.RequestID, OK: true, Provider: Provider, BrokerVersion: "v3", WorkspaceRoot: b.config.WorkspaceRoot, StoreRoot: b.config.StoreRoot}
++		return Response{SchemaVersion: ProtocolSchemaVersion, RequestID: request.RequestID, OK: true, Provider: Provider, BrokerVersion: "v3", ParentLayouts: []string{ExternalBeeLayout}, WorkspaceRoot: b.config.WorkspaceRoot, StoreRoot: b.config.StoreRoot}
+ 	case OperationBeginParentBuild:
+ 		return b.beginParent(ctx, request, fail)
+ 	case OperationCommitParent:
+@@ -357,7 +357,7 @@ func (b *Broker) attachRetained(ctx context.Context, request Request, fail failu
+ type failureBuilder func(string, string, string, error) Response
+ 
+ func (b *Broker) beginParent(ctx context.Context, request Request, fail failureBuilder) Response {
+-	if request.ParentKey == nil || request.Source == nil {
++	if request.ParentKey == nil || request.Source == nil || (request.ParentKey.Layout != "" && request.ParentKey.Layout != ExternalBeeLayout) {
+ 		return fail("invalid-request", "begin-parent", "", ErrInvalidInput)
+ 	}
+ 	resolved, err := b.store.ResolveParent(*request.ParentKey)
+@@ -425,8 +425,8 @@ func (b *Broker) commitParent(ctx context.Context, request Request, fail failure
+ 	metadata := ParentMetadata{
+ 		CompatibilityKey: pending.Key, SourceSnapshot: pending.Source, OwnershipToken: pending.OwnershipToken,
+ 		FileIdentity: evidence.FileIdentity, Volume: evidence.Volume,
+-		FileWriteTime: evidence.FileWriteTime,
+-		VirtualBytes:  pending.Key.VirtualBytes, BlockBytes: pending.Key.BlockBytes, SectorBytes: pending.Key.SectorBytes,
++		FileWriteTime: evidence.FileWriteTime, BeeSeed: evidence.BeeSeed,
++		VirtualBytes: pending.Key.VirtualBytes, BlockBytes: pending.Key.BlockBytes, SectorBytes: pending.Key.SectorBytes,
+ 		LogicalBytes: evidence.LogicalBytes, AllocatedBytes: evidence.AllocatedBytes, CommittedSHA256: evidence.SHA256,
+ 	}
+ 	committed, err := b.store.CommitParent(pending, metadata)
+@@ -473,7 +473,11 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+ 		return fail("parent-corrupt", "verify-parent", resolved.Path, verifyErr)
+ 	}
+ 	_ = b.store.TouchParent(*resolved.Metadata)
+-	if _, err := b.ensureCapacityWithLimits(1, false, request.StoreMaxAllocatedBytes, request.MinimumHostFreeBytes); err != nil {
++	workers := 1
++	if resolved.Metadata.BeeSeed != nil {
++		workers += int((resolved.Metadata.BeeSeed.AllocatedBytes + b.config.ChildReserveBytes - 1) / b.config.ChildReserveBytes)
++	}
++	if _, err := b.ensureCapacityWithLimits(workers, false, request.StoreMaxAllocatedBytes, request.MinimumHostFreeBytes); err != nil {
+ 		return fail("storage-capacity-unavailable", "admit-child", b.config.StoreRoot, err)
+ 	}
+ 	leaseID, err := randomID("lease")
+@@ -489,7 +493,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+ 	}
+ 	child, _ := b.store.paths.Child(leaseID)
+ 	token, _ := randomID("owner")
+-	journal := LeaseJournal{LeaseID: leaseID, RunID: request.RunID, UserSID: b.config.UserSID, OwnershipToken: token, ParentKey: request.ParentKey.Digest, ParentPath: resolved.Metadata.VHDXPath, ChildPath: child, WorkspaceID: request.WorkspaceID, WorkspacePath: workspace, MountPath: mount, State: "requested", BootSessionID: b.native.BootSessionID(), ClientPID: request.ClientPID, CreatedAt: b.now().UTC(), UpdatedAt: b.now().UTC()}
++	journal := LeaseJournal{Layout: resolved.Metadata.CompatibilityKey.Layout, LeaseID: leaseID, RunID: request.RunID, UserSID: b.config.UserSID, OwnershipToken: token, ParentKey: request.ParentKey.Digest, ParentPath: resolved.Metadata.VHDXPath, ChildPath: child, WorkspaceID: request.WorkspaceID, WorkspacePath: workspace, MountPath: mount, State: "requested", BootSessionID: b.native.BootSessionID(), ClientPID: request.ClientPID, CreatedAt: b.now().UTC(), UpdatedAt: b.now().UTC()}
+ 	if err := b.store.WriteLease(journal); err != nil {
+ 		return fail("journal-write-failed", "create-lease", child, err)
+ 	}
+@@ -509,7 +513,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+ 	}
+ 	session, metrics, err := b.native.AcquireChild(ctx, *resolved.Metadata, journal, transition)
+ 	if err != nil {
+-		if _, childErr := os.Lstat(child); os.IsNotExist(childErr) {
++		if _, childErr := os.Lstat(child); os.IsNotExist(childErr) && b.cleanupChildCache(ctx, journal) == nil {
+ 			_ = b.removeWorkspaceOwner(journal)
+ 			_ = b.store.RemoveLease(journal)
+ 		} else {
+@@ -818,6 +822,9 @@ func (b *Broker) removeWorkspaceOwner(journal LeaseJournal) error {
+ }
+ 
+ func (b *Broker) cleanupOwnedWorkspace(journal LeaseJournal) error {
++	if err := b.cleanupChildCache(context.Background(), journal); err != nil {
++		return err
++	}
+ 	if journal.WorkspaceID == "" || journal.WorkspacePath == "" {
+ 		return nil
+ 	}
+diff --git a/workspace/external_bee.go b/workspace/external_bee.go
+new file mode 100644
+index 0000000..4850dbb
+--- /dev/null
++++ b/workspace/external_bee.go
+@@ -0,0 +1,52 @@
++package workspace
++
++import (
++	"context"
++	"errors"
++	"os"
++	"path/filepath"
++	"strings"
++)
++
++type beeOwner struct {
++	Layout         string `json:"layout"`
++	LeaseID        string `json:"leaseId"`
++	ParentKey      string `json:"parentKey"`
++	OwnershipToken string `json:"ownershipToken"`
++}
++
++func beeRoot(j LeaseJournal) (string, error) {
++	if j.Layout != ExternalBeeLayout || !identifierPattern.MatchString(j.LeaseID) || !digestPattern.MatchString(j.ParentKey) || j.OwnershipToken == "" || !filepath.IsAbs(j.ChildPath) || filepath.Base(j.ChildPath) != j.LeaseID+".vhdx" || filepath.Base(filepath.Dir(j.ChildPath)) != "children" {
++		return "", ErrOwnershipMismatch
++	}
++	return strings.TrimSuffix(j.ChildPath, ".vhdx") + ".bee", nil
++}
++func beeIdentity(j LeaseJournal) beeOwner {
++	return beeOwner{ExternalBeeLayout, j.LeaseID, j.ParentKey, j.OwnershipToken}
++}
++func (b *Broker) cleanupChildCache(ctx context.Context, j LeaseJournal) error {
++	if j.Layout == "" {
++		return nil
++	}
++	if _, err := os.Lstat(j.ChildPath); !os.IsNotExist(err) {
++		return errors.Join(err, ErrOwnershipMismatch)
++	}
++	cleaner, ok := b.native.(interface {
++		CleanupChildCache(context.Context, LeaseJournal) error
++	})
++	if !ok {
++		return ErrBrokerUnavailable
++	}
++	return cleaner.CleanupChildCache(ctx, j)
++}
++func omitBeeDAG(name string) bool {
++	if strings.HasSuffix(name, "-inputdata.json") {
++		return true
++	}
++	for _, suffix := range []string{".dag", ".dag.json", ".dag.outputdata", ".dag.payloads", ".dag_derived", ".dag_fsmtime"} {
++		if strings.HasSuffix(name, suffix) {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/workspace/key.go b/workspace/key.go
+index b319a51..f9f9ff4 100644
+--- a/workspace/key.go
++++ b/workspace/key.go
+@@ -15,7 +15,10 @@ import (
+ 	"github.com/Kubonsang/unity-workspace-storage/internal/libraryimage"
+ )
+ 
++const ExternalBeeLayout = "external-bee-dag-v1"
++
+ type CompatibilityKey struct {
++	Layout              string           `json:"layout,omitempty"`
+ 	SchemaVersion       int              `json:"schemaVersion"`
+ 	Digest              string           `json:"digest"`
+ 	LibraryKey          libraryimage.Key `json:"libraryKey"`
+diff --git a/workspace/native.go b/workspace/native.go
+index dedd63f..d7fcdb1 100644
+--- a/workspace/native.go
++++ b/workspace/native.go
+@@ -6,6 +6,7 @@ import (
+ )
+ 
+ type ParentEvidence struct {
++	BeeSeed        *BeeSeed
+ 	FileIdentity   FileIdentity
+ 	Volume         VolumeIdentity
+ 	LogicalBytes   int64
+diff --git a/workspace/native_windows.go b/workspace/native_windows.go
+index f3a7997..9d6d9e2 100644
+--- a/workspace/native_windows.go
++++ b/workspace/native_windows.go
+@@ -73,6 +73,9 @@ func (native windowsNative) Available(ctx context.Context) error {
+ }
+ 
+ func (windowsNative) VerifyParent(_ context.Context, metadata ParentMetadata) error {
++	if err := verifyBeeSeed(metadata); err != nil {
++		return err
++	}
+ 	info, err := os.Lstat(metadata.VHDXPath)
+ 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+ 		return errors.Join(err, ErrOwnershipMismatch)
+@@ -113,7 +116,7 @@ type windowsParentSession struct {
+ func (s *windowsParentSession) Evidence() ParentEvidence { return s.evidence }
+ 
+ func (native windowsNative) BeginParent(ctx context.Context, pending *PendingParent) (ParentSession, error) {
+-	if pending == nil || pending.StagingPath == "" || pending.MountPath == "" {
++	if pending == nil || pending.StagingPath == "" || pending.MountPath == "" || (pending.Key.Layout != "" && pending.Key.Layout != ExternalBeeLayout) {
+ 		return nil, ErrInvalidInput
+ 	}
+ 	if err := os.MkdirAll(filepath.Dir(pending.StagingPath), 0700); err != nil {
+@@ -173,6 +176,9 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+ 	if s.closed {
+ 		return s.evidence, fmt.Errorf("parent session is closed")
+ 	}
++	if err := s.externalizeBee(ctx); err != nil {
++		return s.evidence, err
++	}
+ 	if err := s.attachment.Flush(ctx); err != nil {
+ 		return s.evidence, err
+ 	}
+@@ -232,7 +238,7 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+ 	if err != nil {
+ 		return s.evidence, err
+ 	}
+-	s.evidence = ParentEvidence{
++	s.evidence = ParentEvidence{BeeSeed: s.evidence.BeeSeed,
+ 		FileIdentity: FileIdentity{FileID: identity}, Volume: volume,
+ 		LogicalBytes: usage.LogicalBytes, AllocatedBytes: usage.AllocatedBytes, SHA256: digest, FileWriteTime: fileInfo.ModTime().UTC(),
+ 	}
+@@ -252,11 +258,15 @@ func (s *windowsParentSession) Abort(ctx context.Context) error {
+ 			err = nil
+ 		}
+ 	}
++	if err == nil && s.pending.Key.Layout == ExternalBeeLayout {
++		err = removeBeeTree(filepath.Join(filepath.Dir(s.pending.StagingPath), "bee-seed"))
++	}
+ 	_ = os.Remove(s.pending.MountPath)
+ 	return err
+ }
+ 
+ type windowsChildSession struct {
++	journal  LeaseJournal
+ 	lease    Lease
+ 	backend  storage.Lease
+ 	path     string
+@@ -271,31 +281,74 @@ func (s *windowsChildSession) Usage() (int64, error) {
+ }
+ 
+ func (s *windowsChildSession) PrepareRemoval(ctx context.Context) (ChildRemoval, error) {
++	var cache *beeTree
++	if s.journal.Layout != "" {
++		if err := setupBeeJunction(ctx, s.journal, false); err != nil {
++			return nil, err
++		}
++		root, err := beeRoot(s.journal)
++		if err != nil {
++			return nil, err
++		}
++		cache, err = openBeeTree(root, 2)
++		if err != nil {
++			return nil, errors.Join(ErrVolumeInUse, err)
++		}
++	}
++	failCache := func() {
++		if cache != nil {
++			_ = cache.close()
++		}
++	}
+ 	preparer, ok := s.backend.(storage.RemovalPreparer)
+ 	if !ok {
++		failCache()
+ 		return nil, fmt.Errorf("%w: storage lease does not support removal reservations", ErrBrokerUnavailable)
+ 	}
+ 	reservation, err := preparer.PrepareRemoval(ctx)
+ 	if err != nil {
++		failCache()
+ 		var storageErr *storage.Error
+ 		if errors.As(err, &storageErr) && storageErr.Code == storage.CodeVolumeInUse {
+ 			return nil, errors.Join(ErrVolumeInUse, err)
+ 		}
+ 		return nil, err
+ 	}
+-	return &windowsChildRemoval{backend: reservation, path: s.path}, nil
++	return &windowsChildRemoval{backend: reservation, path: s.path, cache: cache}, nil
+ }
+ 
+ type windowsChildRemoval struct {
+-	backend storage.RemovalReservation
+-	path    string
++	cache          *beeTree
++	childCommitted bool
++	backend        storage.RemovalReservation
++	path           string
+ }
+ 
+-func (removal *windowsChildRemoval) Abort() error { return removal.backend.Abort() }
++func (removal *windowsChildRemoval) Abort() error {
++	var err error
++	if removal.cache != nil {
++		err = removal.cache.close()
++	}
++	return errors.Join(err, removal.backend.Abort())
++}
+ 
+ func (removal *windowsChildRemoval) Commit(ctx context.Context) (Metrics, error) {
+ 	started := time.Now()
+-	raw, err := removal.backend.Commit(ctx, nil)
++	var raw storage.Metrics
++	var err error
++	if !removal.childCommitted {
++		raw, err = removal.backend.Commit(ctx, nil)
++		if err == nil {
++			removal.childCommitted = true
++		}
++	}
++	if err == nil && removal.cache != nil {
++		err = removal.cache.remove()
++		if err == nil {
++			err = removal.cache.close()
++			removal.cache = nil
++		}
++	}
+ 	metrics := Metrics{CleanupState: CleanupReleased, ChildReleaseMs: time.Since(started).Milliseconds()}
+ 	if raw.ReleaseWallClockMs != nil {
+ 		metrics.ChildReleaseMs = *raw.ReleaseWallClockMs
+@@ -313,6 +366,14 @@ func (removal *windowsChildRemoval) Commit(ctx context.Context) (Metrics, error)
+ }
+ 
+ func (s *windowsChildSession) Release(ctx context.Context, deleteChild bool) (Metrics, error) {
++	if deleteChild && s.journal.Layout != "" {
++		r, e := s.PrepareRemoval(ctx)
++		if e != nil {
++			return Metrics{}, e
++		}
++		defer r.Abort()
++		return r.Commit(ctx)
++	}
+ 	started := time.Now()
+ 	metrics := Metrics{}
+ 	_, err := s.backend.Release(ctx, deleteChild, nil)
+@@ -337,6 +398,14 @@ func (s *windowsChildSession) Release(ctx context.Context, deleteChild bool) (Me
+ }
+ 
+ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetadata, journal LeaseJournal, transition func(string, string, string) error) (ChildSession, Metrics, error) {
++	if parent.CompatibilityKey.Layout != journal.Layout {
++		return nil, Metrics{}, ErrOwnershipMismatch
++	}
++	if journal.Layout != "" {
++		if err := createBeeCache(parent, journal); err != nil {
++			return nil, Metrics{}, err
++		}
++	}
+ 	progress := func(value storage.Progress) error {
+ 		if transition == nil {
+ 			return nil
+@@ -366,13 +435,17 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
+ 	if err != nil {
+ 		return nil, metrics, err
+ 	}
++	if err := setupBeeJunction(ctx, journal, true); err != nil {
++		_, cleanup := lease.Release(ctx, true, nil)
++		return nil, metrics, errors.Join(err, cleanup)
++	}
+ 	info := lease.Info()
+ 	identity, identityErr := storage.FileIdentity(info.ChildPath)
+ 	if identityErr != nil {
+ 		_, _ = lease.Release(context.Background(), true, nil)
+ 		return nil, metrics, identityErr
+ 	}
+-	return &windowsChildSession{lease: Lease{
++	return &windowsChildSession{journal: journal, lease: Lease{
+ 		LeaseID: journal.LeaseID, RunID: journal.RunID, ParentKey: journal.ParentKey,
+ 		MountPath: journal.MountPath, State: "ready", CreatedAt: journal.CreatedAt,
+ 		PhysicalPath: info.PhysicalPath, VolumeGUID: info.VolumeGUIDPath,
+@@ -380,6 +453,14 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
+ }
+ 
+ func (native windowsNative) AttachChild(ctx context.Context, parent ParentMetadata, journal LeaseJournal, transition func(string, string, string) error) (ChildSession, Metrics, error) {
++	if parent.CompatibilityKey.Layout != journal.Layout {
++		return nil, Metrics{}, ErrOwnershipMismatch
++	}
++	if journal.Layout != "" {
++		if _, err := validateBeeCache(journal); err != nil {
++			return nil, Metrics{}, err
++		}
++	}
+ 	identity, err := storage.FileIdentity(journal.ChildPath)
+ 	if err != nil {
+ 		return nil, Metrics{}, err
+@@ -418,8 +499,12 @@ func (native windowsNative) AttachChild(ctx context.Context, parent ParentMetada
+ 	if err != nil {
+ 		return nil, metrics, err
+ 	}
++	if err := setupBeeJunction(ctx, journal, false); err != nil {
++		_, cleanup := lease.Release(ctx, false, nil)
++		return nil, metrics, errors.Join(err, cleanup)
++	}
+ 	info := lease.Info()
+-	return &windowsChildSession{lease: Lease{LeaseID: journal.LeaseID, RunID: journal.RunID, ParentKey: journal.ParentKey, MountPath: journal.MountPath, State: "ready", CreatedAt: journal.CreatedAt, Retained: true, PhysicalPath: info.PhysicalPath, VolumeGUID: info.VolumeGUIDPath}, backend: lease, path: journal.ChildPath, identity: actual}, metrics, nil
++	return &windowsChildSession{journal: journal, lease: Lease{LeaseID: journal.LeaseID, RunID: journal.RunID, ParentKey: journal.ParentKey, MountPath: journal.MountPath, State: "ready", CreatedAt: journal.CreatedAt, Retained: true, PhysicalPath: info.PhysicalPath, VolumeGUID: info.VolumeGUIDPath}, backend: lease, path: journal.ChildPath, identity: actual}, metrics, nil
+ }
+ 
+ func (windowsNative) HostFreeBytes(path string) (int64, error) {
+diff --git a/workspace/protocol.go b/workspace/protocol.go
+index 4c6cbd1..e2ff56c 100644
+--- a/workspace/protocol.go
++++ b/workspace/protocol.go
+@@ -92,6 +92,7 @@ type Metrics struct {
+ }
+ 
+ type Response struct {
++	ParentLayouts []string        `json:"parentLayouts,omitempty"`
+ 	SchemaVersion int             `json:"schemaVersion"`
+ 	RequestID     string          `json:"requestId"`
+ 	OK            bool            `json:"ok"`
+diff --git a/workspace/store.go b/workspace/store.go
+index 139d006..99f95a1 100644
+--- a/workspace/store.go
++++ b/workspace/store.go
+@@ -89,6 +89,12 @@ func (s *Store) ResolveParent(key CompatibilityKey) (ParentResolution, error) {
+ 	if metadata.SchemaVersion != ParentSchemaVersion || metadata.Provider != Provider || metadata.CompatibilityKey.Digest != key.Digest || !metadata.Immutable || filepath.Clean(metadata.VHDXPath) != filepath.Clean(parentPath) {
+ 		return ParentResolution{Status: ParentStatusCorrupt, Path: parentPath, Metadata: &metadata, Reason: "parent metadata identity mismatch"}, nil
+ 	}
++	if metadata.CompatibilityKey.Layout != "" && metadata.CompatibilityKey.Layout != ExternalBeeLayout {
++		return ParentResolution{Status: ParentStatusCorrupt, Path: parentPath, Reason: "unsupported parent layout"}, nil
++	}
++	if (metadata.CompatibilityKey.Layout == ExternalBeeLayout) != (metadata.BeeSeed != nil) || (key.Layout != "" && key.Layout != metadata.CompatibilityKey.Layout) {
++		return ParentResolution{Status: ParentStatusCorrupt, Path: parentPath, Reason: "parent layout mismatch"}, nil
++	}
+ 	if err := validateRegular(parentPath); err != nil {
+ 		return ParentResolution{Status: ParentStatusCorrupt, Path: parentPath, Metadata: &metadata, Reason: err.Error()}, nil
+ 	}
+@@ -155,7 +161,7 @@ func (s *Store) RecoverPending(now time.Time, grace time.Duration, processAlive
+ 			continue
+ 		}
+ 		dir := filepath.Dir(pending.StagingPath)
+-		if _, statErr := os.Stat(pending.StagingPath); os.IsNotExist(statErr) {
++		if _, statErr := os.Stat(pending.StagingPath); os.IsNotExist(statErr) && pending.Key.Layout == "" {
+ 			if removeErr := os.Remove(filepath.Join(dir, "pending.json")); removeErr != nil {
+ 				return preserved, quarantined, removeErr
+ 			}
+@@ -204,6 +210,18 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
+ 	if err != nil || actual.TransactionID != pending.TransactionID || actual.OwnershipToken != pending.OwnershipToken {
+ 		return nil, ErrOwnershipMismatch
+ 	}
++	if metadata.CompatibilityKey.Layout != pending.Key.Layout || (pending.Key.Layout == ExternalBeeLayout) != (metadata.BeeSeed != nil) {
++		return nil, ErrOwnershipMismatch
++	}
++	if pending.Key.Layout == ExternalBeeLayout {
++		if metadata.BeeSeed.SHA256 == "" || metadata.BeeSeed.AllocatedBytes < 0 {
++			return nil, ErrOwnershipMismatch
++		}
++		if err := validateBeeSeedForCommit(pending, metadata.BeeSeed); err != nil {
++			return nil, err
++		}
++		return s.commitBeeParent(pending, metadata)
++	}
+ 	parentDir, _ := s.paths.Parent(pending.Key.Digest)
+ 	if err := os.Mkdir(parentDir, 0700); err != nil {
+ 		return nil, err
+@@ -221,9 +239,7 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
+ 		_ = os.Chmod(finalPath, 0600)
+ 		_ = os.Remove(filepath.Join(parentDir, "COMPLETE"))
+ 		_ = os.Remove(filepath.Join(parentDir, "metadata.json"))
+-		renameErr := os.Rename(finalPath, pending.StagingPath)
+-		removeErr := os.Remove(parentDir)
+-		return errors.Join(primary, renameErr, removeErr)
++		return errors.Join(primary, os.Rename(finalPath, pending.StagingPath), os.Remove(parentDir))
+ 	}
+ 	if err := os.Chmod(finalPath, 0400); err != nil {
+ 		return nil, rollback(err)
+@@ -675,10 +691,23 @@ func allocatedVHDXBytes(root string) (int64, error) {
+ 		if walkErr != nil {
+ 			return walkErr
+ 		}
+-		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".vhdx") {
++		if entry.Type()&os.ModeSymlink != 0 {
++			return ErrOwnershipMismatch
++		}
++		cacheFile := false
++		for _, part := range strings.Split(filepath.ToSlash(path), "/") {
++			if part == "bee-seed" || strings.HasSuffix(part, ".bee") {
++				cacheFile = true
++			}
++		}
++		if entry.IsDir() || (!cacheFile && !strings.EqualFold(filepath.Ext(entry.Name()), ".vhdx")) {
+ 			return nil
+ 		}
+-		allocated, err := fileAllocatedBytes(path)
++		measure := fileAllocatedBytes
++		if cacheFile {
++			measure = beeFileAllocatedBytes
++		}
++		allocated, err := measure(path)
+ 		if err != nil {
+ 			return err
+ 		}
+@@ -720,6 +749,9 @@ func (s *Store) RemoveParentIfUnused(key string, active map[string]bool) (int64,
+ 		return 0, errors.Join(err, ErrOwnershipMismatch)
+ 	}
+ 	allocated := resolution.Metadata.AllocatedBytes
++	if resolution.Metadata.BeeSeed != nil {
++		allocated += resolution.Metadata.BeeSeed.AllocatedBytes
++	}
+ 	if err := os.RemoveAll(dir); err != nil {
+ 		return 0, err
+ 	}
+diff --git a/workspace/types.go b/workspace/types.go
+index f110474..03b36a1 100644
+--- a/workspace/types.go
++++ b/workspace/types.go
+@@ -99,7 +99,14 @@ type VolumeIdentity struct {
+ 	ClusterBytes  int64  `json:"clusterBytes"`
+ }
+ 
++type BeeSeed struct {
++	SHA256         string `json:"sha256"`
++	LogicalBytes   int64  `json:"logicalBytes"`
++	AllocatedBytes int64  `json:"allocatedBytes"`
++}
++
+ type ParentMetadata struct {
++	BeeSeed          *BeeSeed         `json:"beeSeed,omitempty"`
+ 	SchemaVersion    int              `json:"schemaVersion"`
+ 	Provider         string           `json:"provider"`
+ 	CompatibilityKey CompatibilityKey `json:"compatibilityKey"`
+@@ -121,6 +128,7 @@ type ParentMetadata struct {
+ }
+ 
+ type LeaseJournal struct {
++	Layout         string       `json:"layout,omitempty"`
+ 	SchemaVersion  int          `json:"schemaVersion"`
+ 	LeaseID        string       `json:"leaseId"`
+ 	RunID          string       `json:"runId"`

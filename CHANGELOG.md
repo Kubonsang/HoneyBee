@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.1.0-beta.9 - 2026-09-09
+
+- Prepare new Library parents with an immutable Bee seed and give each Workspace
+  an independent external Bee cache, managed by the hb11 storage broker.
+- Retain compiled Bee artifacts and Tundra state while regenerating allowlisted
+  DAG/input files; reattachment preserves each Workspace's modified cache.
+- Include private Bee and shared seed allocation in usage, quota and lifecycle
+  cleanup. Existing parents and Workspaces keep their current layout.
+- Measure 357.56 MB median child and 510.98 MB combined cache in the GNF startup
+  campaign: 55.83% and 36.88% lower respectively. This does not meet the historical
+  350 MB child median gate or guarantee a 300 MB total Workspace.
+- Validate actual GNF broker integration with 364 passing tests, plus an installed
+  hb10-to-hb11 upgrade, SCM restart and physical reboot. Repair two dirty user
+  Workspaces while preserving all 21 changed files and Git HEAD/index contents.
+- Reject stale storage compatibility metadata in Desktop bundles before packaging.
+  Record the exact storage base revision and overlay SHA-256 in built tools.
+- Update development/test dependencies to Vitest 4.1.11, addressing
+  GHSA-82fw-gwwq-j7x9 reported by the release dependency audit.
+
 ## 0.1.0-beta.8 - 2026-09-08
 
 - Create new Windows child VHDX with 1 MiB payload blocks, reusing existing
