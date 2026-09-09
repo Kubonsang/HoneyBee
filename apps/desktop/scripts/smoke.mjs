@@ -62,6 +62,7 @@ const child = spawn(
   },
 );
 
+const childClosed = new Promise((resolve) => child.once("close", resolve));
 let diagnosticOutput = "";
 const collectDiagnostic = (chunk) => {
   diagnosticOutput = (diagnosticOutput + chunk.toString("utf8")).slice(-8192);
@@ -91,14 +92,22 @@ try {
   }
   process.stdout.write("Desktop IPC/UI smoke passed.\n");
 } finally {
-  if (child.pid !== undefined) {
+  if (child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
     if (process.platform === "win32") {
-      await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"]).catch(
-        () => undefined,
-      );
+      await execFileAsync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+      }).catch(() => undefined);
     } else if (child.exitCode === null) {
       child.kill("SIGKILL");
     }
   }
-  await rm(userData, { recursive: true, force: true });
+  await Promise.race([
+    childClosed,
+    delay(5_000, undefined, { ref: false }).then(() => {
+      throw new Error("Desktop smoke process did not close before cleanup.");
+    }),
+  ]);
+  // Chromium may release its profile handles just after the parent process closes.
+  // Keep cleanup bounded and still fail if the profile remains locked.
+  await rm(userData, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 }

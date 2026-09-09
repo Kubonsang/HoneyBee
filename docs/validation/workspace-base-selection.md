@@ -78,3 +78,7 @@ The first GitHub Windows run exposed a pre-existing benchmark fixture issue with
 The failure was reproduced locally with an actual short path. Canonicalizing the ordinary host
 fixture directory fixes the test while retaining exact junction-target and content assertions;
 production storage code and payloads are unchanged.
+The subsequent CI run passed source and CLI checks plus Desktop UI assertions, then hit a transient
+Chromium `DIPS` profile lock during smoke cleanup. The harness now waits for process closure and
+retries locked-file cleanup with a bounded limit, retaining failure on an unreleased lock. Updated
+packaged Desktop and PTY smoke tests passed locally.
