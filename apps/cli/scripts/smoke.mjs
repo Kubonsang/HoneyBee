@@ -40,6 +40,7 @@ await Promise.all([
   assertOnlyJavaScript(path.join(bundleRoot, "node_modules", "@honeybee", "core", "dist"), [
     "git-status.js",
     "index.js",
+    "workspace-bases.js",
     "workspace-core.js",
     "workspace-doctor.js",
     "workspace-registry.js",

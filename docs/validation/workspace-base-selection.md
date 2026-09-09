@@ -71,3 +71,6 @@ unchanged. Every file changed for starting-point selection passes the formatter.
 Release follow-up: `pnpm verify` passed in an isolated Beta 11 checkout containing the intended
 release files and no personal documents: 23 Vitest files / 95 tests, Go storage-host tests and all
 remaining quality gates. `pnpm audit --audit-level=low` reported no known vulnerabilities.
+`pnpm package:release` also passed: packaged CLI smoke, Desktop IPC/UI smoke, and packaged
+interactive PTY smoke. Packaging verified the unchanged hb12 payload hashes. The CLI package's
+explicit JavaScript inventory now includes the new `workspace-bases.js` module.
