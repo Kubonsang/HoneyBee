@@ -1,8 +1,13 @@
 # HoneyBee Windows Desktop Beta
 
-HoneyBee Desktop 0.1.0 Beta 10 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
+HoneyBee Desktop 0.1.0 Beta 11 is a Workspace Workbench prerelease for Windows 11 x64. It uses the
 same registry and Workspace Core as the CLI. It does not schedule Agents or perform Git integration
 work.
+
+When creating a Workspace, choose a starting branch or tag and select a commit by its message,
+author, and date. Older commits are paged in groups of 50. The default is the source project's
+current commit; the selected commit stays fixed even if the branch later moves. Remote branches
+show locally available history without fetching. Direct entry is available under Advanced.
 
 ## First start
 

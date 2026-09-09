@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.11 - 2026-09-10
+
+- Choose a Workspace starting commit from local branches, tags, and locally available remote
+  branches using commit messages, authors, and dates. Direct SHA entry remains optional.
+- Page older history, pin the selected commit, and handle failed or stale queries without
+  accidentally creating from a different branch tip.
+- Keep starting-point queries read-only and bounded; reuse shared Git objects and the prepared
+  Library parent without fetching, cloning, or rebuilding the cache.
+- Measure 191 ms first-query p95 and 4.88 ms median additional creation time in a paired Core/Git
+  fixture. Physical VHDX allocation and Unity import times were not remeasured for this feature.
+- Retain Beta 10's hb12 storage payload and compatibility. Existing hb12 installations need no
+  service replacement for this release.
+
 ## 0.1.0-beta.10 - 2026-09-09
 
 - Compress newly seeded private Bee data with native NTFS compression in hb12.

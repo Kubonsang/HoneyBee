@@ -162,6 +162,63 @@ export const DesktopWorkspaceCreateRequestV1Schema = z
   .strict();
 export type DesktopWorkspaceCreateRequestV1 = z.infer<typeof DesktopWorkspaceCreateRequestV1Schema>;
 
+const CommitIdSchema = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u);
+export const DesktopBaseCommitV1Schema = z
+  .object({
+    commit: CommitIdSchema,
+    subject: z.string(),
+    author: z.string(),
+    authoredAt: z.string(),
+  })
+  .strict();
+export type DesktopBaseCommitV1 = z.infer<typeof DesktopBaseCommitV1Schema>;
+export const DesktopBaseRefsRequestV1Schema = z
+  .object({
+    projectId: z.string().min(1),
+    offset: z.number().int().min(0).max(100_000).default(0),
+  })
+  .strict();
+export const DesktopBaseResolveRequestV1Schema = z
+  .object({
+    projectId: z.string().min(1),
+    reference: z
+      .string()
+      .min(1)
+      .max(255)
+      .regex(/^[^\0\r\n]+$/u),
+  })
+  .strict();
+export const DesktopBaseHistoryRequestV1Schema = DesktopBaseResolveRequestV1Schema.extend({
+  offset: z.number().int().min(0).max(100_000).default(0),
+}).strict();
+export const DesktopBaseRefsV1Schema = z
+  .object({
+    head: DesktopBaseCommitV1Schema,
+    currentBranch: z.string().nullable(),
+    refs: z
+      .array(
+        z
+          .object({
+            reference: z.string(),
+            label: z.string(),
+            kind: z.enum(["branch", "remote", "tag"]),
+          })
+          .strict(),
+      )
+      .max(100),
+    nextOffset: z.number().int().min(0).max(100_000).nullable(),
+  })
+  .strict();
+export type DesktopBaseRefsV1 = z.infer<typeof DesktopBaseRefsV1Schema>;
+export const DesktopBaseHistoryV1Schema = z
+  .object({
+    tip: CommitIdSchema,
+    commits: z.array(DesktopBaseCommitV1Schema).max(50),
+    nextOffset: z.number().int().min(0).max(100_000).nullable(),
+  })
+  .strict();
+export type DesktopBaseHistoryV1 = z.infer<typeof DesktopBaseHistoryV1Schema>;
+
 export const DesktopProjectPathRequestV1Schema = z.object({ path: z.string().min(1) }).strict();
 export const DesktopProjectSetupRequestV1Schema = z
   .object({
@@ -283,6 +340,9 @@ export const DesktopPtySnapshotV1Schema = z
 export type DesktopPtySnapshotV1 = z.infer<typeof DesktopPtySnapshotV1Schema>;
 
 export const DesktopIpcChannels = {
+  workspaceBaseRefs: "desktop.workspace.base-refs.v1",
+  workspaceBaseHistory: "desktop.workspace.base-history.v1",
+  workspaceBaseResolve: "desktop.workspace.base-resolve.v1",
   workspaceUsage: "desktop.workspace.usage.v1",
   projects: "desktop.projects.v2",
   projectCandidates: "desktop.project-candidates.v2",
@@ -322,6 +382,15 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  workspaceBaseRefs(
+    request: z.input<typeof DesktopBaseRefsRequestV1Schema>,
+  ): Promise<DesktopBaseRefsV1>;
+  workspaceBaseHistory(
+    request: z.input<typeof DesktopBaseHistoryRequestV1Schema>,
+  ): Promise<DesktopBaseHistoryV1>;
+  resolveWorkspaceBase(
+    request: z.input<typeof DesktopBaseResolveRequestV1Schema>,
+  ): Promise<DesktopBaseCommitV1>;
   workspaceUsage(request: DesktopWorkspaceRequestV1): Promise<DesktopWorkspaceUsageV1>;
   projects(): Promise<readonly DesktopProjectV2[]>;
   projectCandidates(): Promise<readonly DesktopProjectCandidateV1[]>;

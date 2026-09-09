@@ -17,6 +17,11 @@ import os from "node:os";
 import path from "node:path";
 
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
+import {
+  listWorkspaceBaseRefs,
+  listWorkspaceBaseHistory,
+  resolveWorkspaceBase,
+} from "./workspace-bases.js";
 import { measureWorkspaceUsage, type WorkspaceUsageReportV1 } from "./workspace-usage.js";
 import { WindowsWorkspaceStorage } from "./workspace-storage.js";
 import { runWorkspaceDoctor, type WorkspaceDoctorOptions } from "./workspace-doctor.js";
@@ -137,6 +142,22 @@ export class HoneyBeeWorkspaceCore {
 
   public get registryPath(): string {
     return this.#registry.path;
+  }
+
+  public async workspaceBaseRefs(projectReference: string, offset = 0) {
+    return listWorkspaceBaseRefs((await this.#project(projectReference)).repositoryRoot, offset);
+  }
+
+  public async workspaceBaseHistory(projectReference: string, reference: string, offset = 0) {
+    return listWorkspaceBaseHistory(
+      (await this.#project(projectReference)).repositoryRoot,
+      reference,
+      offset,
+    );
+  }
+
+  public async resolveWorkspaceBase(projectReference: string, reference: string) {
+    return resolveWorkspaceBase((await this.#project(projectReference)).repositoryRoot, reference);
   }
 
   public async workspaceUsage(
@@ -1176,7 +1197,7 @@ export class HoneyBeeWorkspaceCore {
   }
 
   async #commit(cwd: string, reference: string): Promise<string> {
-    return this.#git(cwd, ["rev-parse", "--verify", `${reference}^{commit}`]);
+    return this.#git(cwd, ["rev-parse", "--verify", "--end-of-options", `${reference}^{commit}`]);
   }
 
   async #refExists(cwd: string, reference: string): Promise<boolean> {

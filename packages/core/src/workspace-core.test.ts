@@ -303,6 +303,96 @@ afterEach(async () => {
   );
 });
 
+describe("Workspace starting commits", { timeout: 30_000 }, () => {
+  it("selects a historical commit and reuses the parent after the source branch moves", async () => {
+    const { core, project, source, storage } = await fixture();
+    const initial = await core.resolveWorkspaceBase(project.projectId, "HEAD");
+    await git(source, "tag", "old-release", initial.commit);
+    await git(
+      source,
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.invalid",
+      "tag",
+      "-a",
+      "annotated-release",
+      "-m",
+      "release",
+      initial.commit,
+    );
+    await writeFile(path.join(source, "Assets", "Player.cs"), "class NewPlayer {}\n");
+    await git(source, "add", ".");
+    await git(
+      source,
+      "-c",
+      "user.name=민수",
+      "-c",
+      "user.email=test@example.invalid",
+      "commit",
+      "-m",
+      "새 캐릭터 추가",
+    );
+    await git(source, "update-ref", "refs/remotes/origin/main", "HEAD");
+    const refs = await core.workspaceBaseRefs(project.projectId);
+    expect(refs.currentBranch).toBe("main");
+    expect(refs.head.subject).toBe("새 캐릭터 추가");
+    expect(refs.refs).toEqual(
+      expect.arrayContaining([
+        { reference: "refs/heads/main", label: "main", kind: "branch" },
+        { reference: "refs/remotes/origin/main", label: "origin/main", kind: "remote" },
+        { reference: "refs/tags/old-release", label: "old-release", kind: "tag" },
+      ]),
+    );
+    const history = await core.workspaceBaseHistory(project.projectId, "refs/heads/main");
+    expect(history.commits.map((item) => item.commit)).toEqual([refs.head.commit, initial.commit]);
+    expect((await core.resolveWorkspaceBase(project.projectId, "annotated-release")).commit).toBe(
+      initial.commit,
+    );
+    expect(
+      (await core.resolveWorkspaceBase(project.projectId, "refs/remotes/origin/main")).commit,
+    ).toBe(refs.head.commit);
+    const beginParent = vi.spyOn(storage, "beginParent");
+    const acquire = vi.spyOn(storage, "acquire");
+    const workspace = await core.createWorkspace({
+      project: project.projectId,
+      name: "historical",
+      branch: "feature/historical",
+      base: initial.commit,
+    });
+    expect(workspace.baseCommit).toBe(initial.commit);
+    expect(workspace.git).toMatchObject({ head: initial.commit, dirty: false });
+    expect(await readFile(path.join(workspace.workspacePath, "Assets", "Player.cs"), "utf8")).toBe(
+      "class Player {}\n",
+    );
+    expect(await git(source, "rev-parse", "HEAD")).toBe(refs.head.commit);
+    expect(workspace.parentId).toBe((await core.cacheStatus(project.projectId)).cache?.parentId);
+    expect(beginParent).not.toHaveBeenCalled();
+    expect(acquire).toHaveBeenCalledTimes(1);
+    await core.removeWorkspace(workspace.workspaceId);
+  });
+
+  it("rejects invalid and non-commit bases before creating storage or worktrees", async () => {
+    const { core, project, source, storage, workspaceRoot } = await fixture();
+    const before = await git(source, "worktree", "list", "--porcelain");
+    const acquire = vi.spyOn(storage, "acquire");
+    for (const base of ["missing-reference", "--help", "HEAD:Assets/Player.cs", "HEAD^{tree}"]) {
+      await expect(core.resolveWorkspaceBase(project.projectId, base)).rejects.toBeInstanceOf(
+        WorkspaceCoreError,
+      );
+      await expect(
+        core.createWorkspace({ name: "invalid", branch: "feature/invalid", base }),
+      ).rejects.toBeInstanceOf(WorkspaceCoreError);
+    }
+    expect(await git(source, "worktree", "list", "--porcelain")).toBe(before);
+    expect(await core.listWorkspaces()).toEqual([]);
+    await expect(stat(path.join(workspaceRoot, "invalid"))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(acquire).not.toHaveBeenCalled();
+  });
+});
+
 describe("HoneyBeeWorkspaceCore", () => {
   it("preserves the first unstaged status column and quoted Unicode paths", async () => {
     const { core } = await fixture();

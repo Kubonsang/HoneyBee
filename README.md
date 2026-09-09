@@ -25,14 +25,14 @@ codex
 
 ## Status
 
-The current prerelease is [Beta 10](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.10).
-It applies NTFS compression to the private Bee cache of newly created Workspaces.
+The current prerelease is [Beta 11](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.11).
+It adds visual starting-commit selection and retains Beta 10's NTFS compression for private Bee caches.
 In the paired GNF study, combined child plus Bee allocation fell from 483.80 MB to
 392.31 MB (18.91% less), with measured timing regressions within 10%. Authored/Git
 files and shared parents are additional costs. Existing Workspaces do not shrink
 automatically; existing external-Bee parent seeds can be reused.
 
-Beta 10 requires storage component `0.0.0+cfa606fd4143.hb12`. The hb11-to-hb12
+Beta 11 requires the same storage component `0.0.0+cfa606fd4143.hb12`. The hb11-to-hb12
 upgrade, service restart and physical reboot checks passed; see the
 [product validation record](docs/validation/bee-compression-product.md), including
 the interrupted-install recovery and preservation scope. Fresh service installation
@@ -104,6 +104,17 @@ Desktop is a small view over the same Workspace Core. It contains:
 - an interactive PowerShell terminal rooted in the selected Workspace;
 - create/attach, repair, and safe remove actions;
 - explicit one-click CMD, PowerShell, VS Code, and exact-version Unity launches.
+
+When creating a Workspace, choose a **Starting point** from local branches, tags, or locally
+available remote branches, then select a commit by its message, author, and date. Older history is
+paged in groups of 50. The default is the source project's current commit. The selected commit is
+pinned when displayed, so later branch updates do not change the Workspace's starting point.
+Direct branch/tag/commit entry remains available under **Advanced**; CLI `--base` is unchanged.
+
+Starting-point queries do not fetch, clone, write a history index, or rebuild the Library parent.
+Remote branches show their last locally synced state. Workspaces continue to share Git objects and
+the existing Library parent; authored-file checkout and Unity reimport costs still depend on the
+selected content. See the [selection validation report](docs/validation/workspace-base-selection.md).
 
 It has no Agent Manager, Run/DAG, approval, verified-patch, publish, or merge surface. The sandboxed
 renderer receives only strict versioned DTOs through the preload bridge; filesystem, Git, storage,

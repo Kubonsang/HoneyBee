@@ -2,6 +2,9 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 
 import {
+  DesktopBaseCommitV1Schema,
+  DesktopBaseRefsV1Schema,
+  DesktopBaseHistoryV1Schema,
   DesktopCloneResultV1Schema,
   DesktopDoctorReportV1Schema,
   DesktopGitDiffV1Schema,
@@ -24,6 +27,12 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  workspaceBaseRefs: (request) =>
+    invoke(DesktopIpcChannels.workspaceBaseRefs, DesktopBaseRefsV1Schema, request),
+  workspaceBaseHistory: (request) =>
+    invoke(DesktopIpcChannels.workspaceBaseHistory, DesktopBaseHistoryV1Schema, request),
+  resolveWorkspaceBase: (request) =>
+    invoke(DesktopIpcChannels.workspaceBaseResolve, DesktopBaseCommitV1Schema, request),
   workspaceUsage: (request) =>
     invoke(DesktopIpcChannels.workspaceUsage, DesktopWorkspaceUsageV1Schema, request),
   projects: () => invoke(DesktopIpcChannels.projects, DesktopProjectV2Schema.array()),

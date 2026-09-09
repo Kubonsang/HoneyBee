@@ -1,0 +1,249 @@
+{
+  "measuredAt": "2026-09-09T15:19:42.311Z",
+  "baselineRevision": "543378fefd30959876bef48b153b9e6155826b92",
+  "platform": "win32 10.0.26200",
+  "node": "v24.13.1",
+  "storage": "directory-backed test adapter; physical VHDX and Unity not measured",
+  "fixture": {
+    "commits": 101,
+    "trackedFiles": 4,
+    "libraryBytes": 32768
+  },
+  "queryTimes": [
+    172.23440000000028, 169.02250000000004, 180.11599999999999, 185.0063999999993,
+    178.2435999999998, 185.21609999999964, 189.4946, 168.316499999999, 170.22860000000037,
+    177.51790000000074, 191.14220000000023, 189.15240000000085, 191.55459999999948,
+    183.35959999999977, 184.9380000000001, 176.71629999999823, 176.53409999999894,
+    168.9462999999996, 177.0607999999993, 176.87610000000132
+  ],
+  "queryP95Ms": 191.14220000000023,
+  "queryWrites": false,
+  "baselineMedianMs": 3190.736000000001,
+  "currentMedianMs": 3195.613800000003,
+  "createAllowanceMs": 159.53680000000006,
+  "queryGatePassed": true,
+  "createGatePassed": true,
+  "identicalStorageCalls": true,
+  "pairs": [
+    {
+      "baseline": {
+        "elapsedMs": 2483.4781999999977,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 2361.6764000000003,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 2370.002400000001,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 2387.4604,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 2445.1898,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 2771.553100000001,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3044.4680000000008,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 2883.3366000000024,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3288.6471999999994,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3223.9089999999997,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3181.9634000000005,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3283.6483000000007,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3385.1691000000064,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3304.519500000002,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3199.508600000001,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3167.318600000006,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3429.2114,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3433.2771000000066,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    },
+    {
+      "baseline": {
+        "elapsedMs": 3307.9779999999882,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      },
+      "current": {
+        "elapsedMs": 3401.9762000000046,
+        "calls": {
+          "beginParent": 0,
+          "commitParent": 0,
+          "acquire": 1,
+          "retain": 1,
+          "attachRetained": 1
+        }
+      }
+    }
+  ]
+}

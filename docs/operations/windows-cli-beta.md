@@ -1,6 +1,6 @@
 # HoneyBee Windows CLI Beta
 
-HoneyBee 0.1.0 Beta 10 is an unsigned Windows 11 x64 prerelease. It requires Node.js 24 or
+HoneyBee 0.1.0 Beta 11 is an unsigned Windows 11 x64 prerelease. It requires Node.js 24 or
 newer, Git for Windows, and storage component `0.0.0+cfa606fd4143.hb12`.
 HoneyBee does not install or upgrade the Windows service automatically. This
 release qualifies an existing hb11-to-hb12 upgrade; fresh installation and older

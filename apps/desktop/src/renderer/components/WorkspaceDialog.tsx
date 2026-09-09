@@ -1,7 +1,8 @@
 import { GitBranch, X } from "@phosphor-icons/react";
 import { useState } from "react";
 
-import type { DesktopWorkspaceCreateRequestV1 } from "../../shared/ipc.js";
+import type { DesktopBaseCommitV1, DesktopWorkspaceCreateRequestV1 } from "../../shared/ipc.js";
+import { WorkspaceBasePicker } from "./WorkspaceBasePicker.js";
 import type { MessageKey } from "../i18n.js";
 
 export function WorkspaceDialog({
@@ -19,15 +20,16 @@ export function WorkspaceDialog({
 }) {
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
-  const [base, setBase] = useState("");
+  const [base, setBase] = useState<DesktopBaseCommitV1>();
   const [attach, setAttach] = useState(false);
   const submit = (): void => {
-    if (name.trim() === "" || branch.trim() === "") return;
+    if (busy || name.trim() === "" || branch.trim() === "" || (!attach && base === undefined))
+      return;
     onCreate({
       projectId,
       name: name.trim(),
       branch: branch.trim(),
-      ...(base.trim() === "" || attach ? {} : { base: base.trim() }),
+      ...(base === undefined || attach ? {} : { base: base.commit }),
       existingBranch: attach,
     });
   };
@@ -40,7 +42,7 @@ export function WorkspaceDialog({
       }}
     >
       <section
-        className="modal"
+        className="modal workspace-create-modal"
         role="dialog"
         aria-modal="true"
         aria-labelledby="workspace-dialog-title"
@@ -80,20 +82,16 @@ export function WorkspaceDialog({
           </div>
         </label>
         {!attach && (
-          <label className="field">
-            <span>{t("base")}</span>
-            <input
-              value={base}
-              placeholder="main"
-              onChange={(event) => setBase(event.target.value)}
-            />
-          </label>
+          <WorkspaceBasePicker key={projectId} projectId={projectId} onChange={setBase} t={t} />
         )}
         <label className="check-label">
           <input
             type="checkbox"
             checked={attach}
-            onChange={(event) => setAttach(event.target.checked)}
+            onChange={(event) => {
+              setBase(undefined);
+              setAttach(event.target.checked);
+            }}
           />
           {t("attach")}
         </label>
@@ -103,7 +101,9 @@ export function WorkspaceDialog({
           </button>
           <button
             className="primary"
-            disabled={busy || name.trim() === "" || branch.trim() === ""}
+            disabled={
+              busy || name.trim() === "" || branch.trim() === "" || (!attach && base === undefined)
+            }
             onClick={submit}
           >
             {attach ? t("attach") : t("create")}
