@@ -81,4 +81,23 @@ const result = await execFileAsync("cmd.exe", ["/d", "/c", ".\\honeybee.cmd --ve
 if (result.stdout.trim() !== cliPackage.version) {
   throw new Error(`Packaged CLI version mismatch: ${result.stdout.trim()}`);
 }
+if (
+  (await readFile(path.join(appRoot, "dist/cli.js"), "utf8")).includes("acquireInstalledActivity")
+)
+  await writeFile(
+    path.join(bundleRoot, "activity-client.json"),
+    JSON.stringify({ schemaVersion: 1, protocol: 1 }) + "\n",
+  );
+if (
+  (
+    await readFile(
+      path.join(bundleRoot, "node_modules/@honeybee/core/dist/installed-activity.js"),
+      "utf8",
+    )
+  ).includes("assertCombinedAdmission")
+)
+  await writeFile(
+    path.join(bundleRoot, "combined-client.json"),
+    JSON.stringify({ schemaVersion: 1, combinedAdmission: 1 }) + "\n",
+  );
 process.stdout.write(`${bundleRoot}\n`);

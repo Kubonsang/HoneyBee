@@ -1,11 +1,15 @@
+import { parseStorageServiceEvidence } from "./workspace-service-evidence.js";
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { access, lstat, mkdir, readFile, rmdir } from "node:fs/promises";
 import path from "node:path";
 
+import { storageToolPair } from "./workspace-tool-resolution.js";
+
 import {
   WorkspaceCoreError,
   type StorageDiagnosticV1,
+  type StorageCommand,
   type StorageLease,
   type StorageParentBuild,
   type StorageRemovalPreparation,
@@ -87,10 +91,14 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
   return response;
 };
 
-const run = (command: string, args: readonly string[], input?: string): Promise<JsonObject> =>
+const run = (
+  command: StorageCommand,
+  args: readonly string[],
+  input?: string,
+): Promise<JsonObject> =>
   new Promise((resolve, reject) => {
     const child = execFile(
-      command,
+      storageToolPair(command).clientCommand,
       [...args],
       {
         encoding: "utf8",
@@ -133,7 +141,7 @@ const run = (command: string, args: readonly string[], input?: string): Promise<
 
 export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   public async beginParent(
-    command: string,
+    command: StorageCommand,
     compatibilityKey: string,
     layout?: "external-bee-dag-v1",
   ): Promise<StorageParentBuild> {
@@ -166,7 +174,10 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     };
   }
 
-  public async commitParent(command: string, transactionId: string): Promise<StorageParentBuild> {
+  public async commitParent(
+    command: StorageCommand,
+    transactionId: string,
+  ): Promise<StorageParentBuild> {
     const response = await run(command, [
       "parent",
       "commit",
@@ -184,7 +195,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     };
   }
 
-  public async abortParent(command: string, transactionId: string): Promise<void> {
+  public async abortParent(command: StorageCommand, transactionId: string): Promise<void> {
     await run(command, [
       "parent",
       "abort",
@@ -196,7 +207,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async acquire(
-    command: string,
+    command: StorageCommand,
     input: Readonly<{
       consumerId: string;
       workspaceId: string;
@@ -236,7 +247,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     }
   }
 
-  public async retain(command: string, leaseId: string): Promise<void> {
+  public async retain(command: StorageCommand, leaseId: string): Promise<void> {
     await this.#control(command, {
       schemaVersion: 3,
       operation: "release",
@@ -247,7 +258,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async attachRetained(
-    command: string,
+    command: StorageCommand,
     consumerId: string,
     workspaceId: string,
   ): Promise<StorageLease> {
@@ -262,7 +273,10 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
-  public async heartbeat(command: string, leaseId: string): Promise<StorageLease | undefined> {
+  public async heartbeat(
+    command: StorageCommand,
+    leaseId: string,
+  ): Promise<StorageLease | undefined> {
     try {
       const lease = this.#lease(
         await this.#control(command, {
@@ -291,7 +305,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async prepareRetainedRemoval(
-    command: string,
+    command: StorageCommand,
     consumerId: string,
     workspaceId: string,
     transactionId: string,
@@ -310,7 +324,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async commitRetainedRemoval(
-    command: string,
+    command: StorageCommand,
     consumerId: string,
     transactionId: string,
   ): Promise<StorageRemovalPreparation> {
@@ -327,7 +341,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async abortRetainedRemoval(
-    command: string,
+    command: StorageCommand,
     consumerId: string,
     transactionId: string,
   ): Promise<StorageRemovalPreparation> {
@@ -343,7 +357,17 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     );
   }
 
-  public async diagnose(command: string): Promise<StorageDiagnosticV1> {
+  public async serviceEvidence(command: StorageCommand) {
+    const response = await run(await this.#controlCommand(command), ["service-evidence"]);
+    if (response.schemaVersion !== 1)
+      throw new WorkspaceCoreError(
+        "storage.invalid-evidence",
+        "Unsupported service evidence envelope.",
+      );
+    return parseStorageServiceEvidence(response.evidence);
+  }
+
+  public async diagnose(command: StorageCommand): Promise<StorageDiagnosticV1> {
     const response = await run(await this.#controlCommand(command), ["diagnose"]);
     const diagnostic = object(response.diagnostic, "diagnostic");
     return {
@@ -367,7 +391,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   }
 
   public async status(
-    command: string,
+    command: StorageCommand,
   ): Promise<Readonly<{ parentCount: number; manualRecoveryRequired: boolean }>> {
     const response = await run(command, [
       "workspace",
@@ -378,12 +402,20 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
       `hb-status-${randomUUID()}`,
     ]);
     const status = object(response.status, "status");
+    if (
+      typeof status.parentCount !== "number" ||
+      !Number.isSafeInteger(status.parentCount) ||
+      status.parentCount < 0 ||
+      typeof status.manualRecoveryRequired !== "boolean"
+    ) {
+      throw new WorkspaceCoreError(
+        "storage.invalid-response",
+        "Storage status is incomplete or invalid.",
+      );
+    }
     return {
-      parentCount:
-        typeof status.parentCount === "number" && Number.isSafeInteger(status.parentCount)
-          ? status.parentCount
-          : 0,
-      manualRecoveryRequired: status.manualRecoveryRequired === true,
+      parentCount: status.parentCount,
+      manualRecoveryRequired: status.manualRecoveryRequired,
     };
   }
 
@@ -471,17 +503,13 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     return workspacePath;
   }
 
-  async #control(command: string, request: JsonObject): Promise<JsonObject> {
+  async #control(command: StorageCommand, request: JsonObject): Promise<JsonObject> {
     const controlCommand = await this.#controlCommand(command);
     return run(controlCommand, ["control"], JSON.stringify(request));
   }
 
-  async #controlCommand(command: string): Promise<string> {
-    const explicit = process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL;
-    const controlCommand =
-      explicit === undefined
-        ? path.join(path.dirname(path.resolve(command)), "honeybee-workspace-storage-host.exe")
-        : path.resolve(explicit);
+  async #controlCommand(command: StorageCommand): Promise<string> {
+    const controlCommand = storageToolPair(command).controlCommand;
     try {
       await access(controlCommand);
     } catch (error) {

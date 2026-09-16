@@ -111,6 +111,19 @@ const parseProject = (value: unknown): ProjectRecordV2 => {
     throw new WorkspaceCoreError("registry.invalid", "A project record is invalid.");
   }
   const cache = parseCache(value.cache);
+  let storageBinding: ProjectRecordV2["storageBinding"];
+  if (value.storageBinding !== undefined) {
+    if (!isRecord(value.storageBinding) || value.storageBinding.kind !== "managed-v1") {
+      throw new WorkspaceCoreError("registry.invalid", "Project storage binding is invalid.");
+    }
+    storageBinding = {
+      kind: "managed-v1",
+      installationRoot: absolutePath(
+        value.storageBinding.installationRoot,
+        "project.storageBinding.installationRoot",
+      ),
+    };
+  }
   return {
     schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
     projectId: string(value.projectId, "project.projectId"),
@@ -120,6 +133,7 @@ const parseProject = (value: unknown): ProjectRecordV2 => {
     unityRelativePath: typeof value.unityRelativePath === "string" ? value.unityRelativePath : "",
     workspaceRoot: absolutePath(value.workspaceRoot, "project.workspaceRoot"),
     storageCommand: absolutePath(value.storageCommand, "project.storageCommand"),
+    ...(storageBinding === undefined ? {} : { storageBinding }),
     createdAt: timestamp(value.createdAt, "project.createdAt"),
     ...(cache === undefined ? {} : { cache }),
   };
@@ -466,15 +480,16 @@ export class WorkspaceRegistryStore {
   }
 
   public async update(
-    change: (current: WorkspaceRegistryV2) => WorkspaceRegistryV2,
+    change: (current: WorkspaceRegistryV2) => WorkspaceRegistryV2 | Promise<WorkspaceRegistryV2>,
   ): Promise<WorkspaceRegistryV2> {
     const deadline = Date.now() + REGISTRY_LOCK_TIMEOUT_MS;
     for (;;) {
       try {
         const lease = await this.#lock.acquire();
         try {
-          const next = change(await this.read());
-          await this.#write(next);
+          const current = await this.read();
+          const next = await change(current);
+          if (next !== current) await this.#write(next);
           return next;
         } finally {
           await lease.release();
@@ -504,6 +519,55 @@ export class WorkspaceRegistryStore {
         project,
       ],
     }));
+  }
+
+  public async adoptStorageBinding(
+    projectId: string,
+    expectedProjectDigest: string,
+    installationRoot: string,
+  ): Promise<string> {
+    let backupPath = "";
+    await this.update(async (current) => {
+      const project = current.projects.find((item) => item.projectId === projectId);
+      if (
+        project === undefined ||
+        createHash("sha256").update(JSON.stringify(project)).digest("hex") !== expectedProjectDigest
+      ) {
+        throw new WorkspaceCoreError(
+          "project.adoption-stale",
+          "Project changed since storage adoption was planned; inspect it again.",
+        );
+      }
+      if (project.storageBinding !== undefined)
+        throw new WorkspaceCoreError(
+          "project.already-bound",
+          "Project already has a managed storage binding.",
+        );
+      const bytes = await readFile(this.#registryPath).catch((error: unknown) => {
+        if (errorCode(error) !== "ENOENT") throw error;
+        return readFile(this.#legacyPath);
+      });
+      backupPath = path.join(
+        path.dirname(this.#registryPath),
+        `workspace-registry-before-adoption-${randomUUID()}.json`,
+      );
+      const backup = await open(backupPath, "wx");
+      try {
+        await backup.writeFile(bytes);
+        await backup.sync();
+      } finally {
+        await backup.close();
+      }
+      return {
+        ...current,
+        projects: current.projects.map((item) =>
+          item.projectId === projectId
+            ? { ...item, storageBinding: { kind: "managed-v1" as const, installationRoot } }
+            : item,
+        ),
+      };
+    });
+    return backupPath;
   }
 
   public async putWorkspace(workspace: WorkspaceRecordV2): Promise<void> {

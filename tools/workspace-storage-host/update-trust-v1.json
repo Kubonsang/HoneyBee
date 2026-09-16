@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "channel": "beta",
+  "bootstrapperVersion": "1.0.0",
+  "publicKeys": [
+    "-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEANCmMXzGxsHRnmdyDXzRkbDeH3tVWhw6WMx+HDq4rAAU=\n-----END PUBLIC KEY-----\n"
+  ]
+}

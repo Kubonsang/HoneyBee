@@ -16,7 +16,18 @@ import {
 import os from "node:os";
 import path from "node:path";
 
+import {
+  WorkspaceToolResolver,
+  validateStorageTools,
+  type StorageToolResolutionOptions,
+} from "./workspace-tool-resolution.js";
+
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
+import {
+  planStorageAdoption,
+  requireCompatibleStorage,
+  type StorageAdoptionPlan,
+} from "./workspace-storage-adoption.js";
 import {
   listWorkspaceBaseRefs,
   listWorkspaceBaseHistory,
@@ -111,6 +122,7 @@ export interface HoneyBeeWorkspaceCoreOptions {
   readonly usageCommand?: string;
   readonly dataRoot?: string;
   readonly storage?: WorkspaceStoragePort;
+  readonly storageTools?: StorageToolResolutionOptions;
 }
 
 export interface ProjectInitInput {
@@ -132,12 +144,14 @@ export class HoneyBeeWorkspaceCore {
   readonly #usageCommand: string | undefined;
   readonly #registry: WorkspaceRegistryStore;
   readonly #storage: WorkspaceStoragePort;
+  readonly #tools: WorkspaceToolResolver;
 
   public constructor(options: HoneyBeeWorkspaceCoreOptions = {}) {
     this.#usageCommand = options.usageCommand;
     const dataRoot = path.resolve(options.dataRoot ?? defaultDataRoot());
     this.#registry = new WorkspaceRegistryStore(dataRoot);
     this.#storage = options.storage ?? new WindowsWorkspaceStorage();
+    this.#tools = new WorkspaceToolResolver(options.storageTools);
   }
 
   public get registryPath(): string {
@@ -232,6 +246,15 @@ export class HoneyBeeWorkspaceCore {
     const existing = registry.projects.find(
       (project) => pathKey(project.unityProjectPath) === pathKey(unityProjectPath),
     );
+    if (existing?.storageBinding !== undefined) {
+      const selected = this.#tools.resolveProject(existing);
+      if (pathKey(storageCommand) !== pathKey(selected.clientCommand)) {
+        throw new WorkspaceCoreError(
+          "project.storage-binding-conflict",
+          "A managed project cannot be re-registered with a different storage tool path.",
+        );
+      }
+    }
     const record: ProjectRecordV2 = {
       schemaVersion: WORKSPACE_REGISTRY_SCHEMA_VERSION,
       projectId: existing?.projectId ?? randomUUID(),
@@ -243,7 +266,28 @@ export class HoneyBeeWorkspaceCore {
       storageCommand,
       createdAt: existing?.createdAt ?? now(),
       ...(existing?.cache === undefined ? {} : { cache: existing.cache }),
+      ...(existing?.storageBinding === undefined
+        ? {}
+        : { storageBinding: existing.storageBinding }),
     };
+    const managed = this.#tools.resolve();
+    if (
+      existing === undefined &&
+      this.#tools.installationRoot !== undefined &&
+      managed !== undefined &&
+      pathKey(storageCommand) === pathKey(managed.clientCommand)
+    ) {
+      await validateStorageTools(managed);
+      const bound = {
+        ...record,
+        storageBinding: {
+          kind: "managed-v1" as const,
+          installationRoot: this.#tools.installationRoot,
+        },
+      };
+      await this.#registry.putProject(bound);
+      return bound;
+    }
     await this.#registry.putProject(record);
     return record;
   }
@@ -252,14 +296,44 @@ export class HoneyBeeWorkspaceCore {
     return (await this.#registry.read()).projects;
   }
 
+  public async planProjectStorageAdoption(projectReference: string): Promise<StorageAdoptionPlan> {
+    return planStorageAdoption(await this.#project(projectReference), this.#tools, this.#storage);
+  }
+
+  public async adoptProjectStorage(projectReference: string, expectedProjectDigest: string) {
+    const plan = await this.planProjectStorageAdoption(projectReference);
+    if (plan.projectDigest !== expectedProjectDigest)
+      throw new WorkspaceCoreError(
+        "project.adoption-stale",
+        "Project changed since adoption was planned.",
+      );
+    if (plan.status === "already-adopted") return { ...plan, backupPath: null };
+    if (plan.status !== "ready")
+      throw new WorkspaceCoreError(
+        "project.adoption-blocked",
+        plan.reason ?? "Storage adoption is blocked.",
+      );
+    const backupPath = await this.#registry.adoptStorageBinding(
+      plan.projectId,
+      plan.projectDigest,
+      plan.installationRoot,
+    );
+    return { ...plan, status: "adopted" as const, backupPath };
+  }
+
   public async doctor(options: WorkspaceDoctorOptions = {}) {
-    return runWorkspaceDoctor(this.#registry, this.#storage, options, (workspace) =>
-      this.#view(workspace),
+    return runWorkspaceDoctor(
+      this.#registry,
+      this.#storage,
+      options,
+      (workspace) => this.#view(workspace),
+      this.#tools,
     );
   }
 
   public async prepareCache(projectReference?: string): Promise<ProjectRecordV2> {
     const project = await this.#project(projectReference);
+    const storageTools = await this.#resolveStorageTools(project);
     const library = path.join(project.unityProjectPath, "Library");
     if (await this.#exists(path.join(project.unityProjectPath, "Temp", "UnityLockfile"))) {
       throw new WorkspaceCoreError(
@@ -314,15 +388,11 @@ export class HoneyBeeWorkspaceCore {
         }),
       )
       .digest("hex");
-    const build = await this.#storage.beginParent(
-      project.storageCommand,
-      parentId,
-      "external-bee-dag-v1",
-    );
+    const build = await this.#storage.beginParent(storageTools, parentId, "external-bee-dag-v1");
     if (build.transactionId === undefined || build.stagingPath === undefined) {
       if (build.transactionId !== undefined) {
         await this.#storage
-          .abortParent(project.storageCommand, build.transactionId)
+          .abortParent(storageTools, build.transactionId)
           .catch((abortError: unknown) => {
             throw new WorkspaceCoreError(
               "storage.operation-failed",
@@ -346,10 +416,10 @@ export class HoneyBeeWorkspaceCore {
           preserveTimestamps: true,
         });
       }
-      committed = await this.#storage.commitParent(project.storageCommand, build.transactionId);
+      committed = await this.#storage.commitParent(storageTools, build.transactionId);
     } catch (error) {
       const abortError = await this.#storage
-        .abortParent(project.storageCommand, build.transactionId)
+        .abortParent(storageTools, build.transactionId)
         .then(() => undefined)
         .catch((candidate: unknown) => candidate);
       if (abortError !== undefined) {
@@ -402,6 +472,7 @@ export class HoneyBeeWorkspaceCore {
 
   public async createWorkspace(input: WorkspaceCreateInput): Promise<WorkspaceViewV1> {
     const project = await this.#project(input.project);
+    const storageTools = await this.#resolveStorageTools(project);
     if (project.cache === undefined) {
       throw new WorkspaceCoreError(
         "cache.not-prepared",
@@ -465,7 +536,7 @@ export class HoneyBeeWorkspaceCore {
     await this.#git(project.repositoryRoot, worktreeArgs);
     let record: WorkspaceRecordV2 | undefined;
     try {
-      const lease = await this.#storage.acquire(project.storageCommand, {
+      const lease = await this.#storage.acquire(storageTools, {
         consumerId,
         workspaceId: storageWorkspaceId,
         parentId: project.cache.parentId,
@@ -494,9 +565,9 @@ export class HoneyBeeWorkspaceCore {
       await this.#registry.putWorkspace(record);
       const workspaceLibrary = path.join(workspacePath, project.unityRelativePath, "Library");
       await symlink(lease.mountPath, workspaceLibrary, "junction");
-      await this.#storage.retain(project.storageCommand, lease.leaseId);
+      await this.#storage.retain(storageTools, lease.leaseId);
       const attached = await this.#storage.attachRetained(
-        project.storageCommand,
+        storageTools,
         consumerId,
         storageWorkspaceId,
       );
@@ -544,7 +615,7 @@ export class HoneyBeeWorkspaceCore {
           .putWorkspace({ ...record, state: "cleanup-pending", updatedAt: now() })
           .catch((cleanupError: unknown) => cleanupErrors.push(cleanupError));
         await this.#storage
-          .retain(project.storageCommand, record.leaseId)
+          .retain(storageTools, record.leaseId)
           .catch((cleanupError: unknown) => cleanupErrors.push(cleanupError));
         try {
           await this.removeWorkspace(record.workspaceId, project.projectId);
@@ -594,6 +665,7 @@ export class HoneyBeeWorkspaceCore {
   ): Promise<WorkspaceViewV1> {
     let record = await this.#workspace(reference, projectReference);
     const project = await this.#project(record.projectId);
+    const storageTools = await this.#resolveStorageTools(project);
     if (record.state === "removing" || record.state === "cleanup-pending") {
       throw new WorkspaceCoreError(
         "workspace.cleanup-pending",
@@ -641,11 +713,11 @@ export class HoneyBeeWorkspaceCore {
     }
     // A readable stale mount may resolve to another child after reboot.
     // Only the broker's live lease can establish that this child is attached.
-    const active = await this.#storage.heartbeat?.(project.storageCommand, record.leaseId);
+    const active = await this.#storage.heartbeat?.(storageTools, record.leaseId);
     const lease =
       active ??
       (await this.#storage.attachRetained(
-        project.storageCommand,
+        storageTools,
         record.consumerId,
         record.storageWorkspaceId,
       ));
@@ -687,6 +759,7 @@ export class HoneyBeeWorkspaceCore {
       };
     }
     const project = await this.#project(record.projectId);
+    const storageTools = await this.#resolveStorageTools(project);
     const resumed = record.state === "removing" || record.state === "cleanup-pending";
     let cleanupStarted = resumed;
     let removalPrepared = false;
@@ -753,7 +826,7 @@ export class HoneyBeeWorkspaceCore {
       let preparationState: "prepared" | "committed" | undefined;
       try {
         const preparation = await this.#storage.prepareRetainedRemoval(
-          project.storageCommand,
+          storageTools,
           record.consumerId,
           record.storageWorkspaceId,
           removalTransactionId,
@@ -802,7 +875,7 @@ export class HoneyBeeWorkspaceCore {
         if (removalPrepared) {
           try {
             await this.#storage.abortRetainedRemoval(
-              project.storageCommand,
+              storageTools,
               record.consumerId,
               removalTransactionId,
             );
@@ -844,7 +917,7 @@ export class HoneyBeeWorkspaceCore {
       if (!storageAlreadyRemoved && preparationState !== "committed") {
         removalCommitStarted = true;
         await this.#storage.commitRetainedRemoval(
-          project.storageCommand,
+          storageTools,
           record.consumerId,
           removalTransactionId,
         );
@@ -863,7 +936,7 @@ export class HoneyBeeWorkspaceCore {
       if (removalPrepared && !removalCommitStarted) {
         try {
           await this.#storage.abortRetainedRemoval(
-            project.storageCommand,
+            storageTools,
             record.consumerId,
             removalTransactionId,
           );
@@ -996,6 +1069,13 @@ export class HoneyBeeWorkspaceCore {
     }
   }
 
+  async #resolveStorageTools(project: ProjectRecordV2) {
+    const tools = this.#tools.resolveProject(project);
+    await validateStorageTools(tools);
+    if (project.storageBinding !== undefined) await requireCompatibleStorage(this.#storage, tools);
+    return tools;
+  }
+
   async #view(record: WorkspaceRecordV2): Promise<WorkspaceViewV1> {
     if (!(await this.#exists(record.workspacePath))) {
       return {
@@ -1033,7 +1113,8 @@ export class HoneyBeeWorkspaceCore {
       libraryConnected = await this.#libraryJunctionMatches(workspaceLibrary, record.mountPath);
       if (libraryConnected && this.#storage.heartbeat !== undefined) {
         try {
-          const active = await this.#storage.heartbeat(project.storageCommand, record.leaseId);
+          const storageTools = await this.#resolveStorageTools(project);
+          const active = await this.#storage.heartbeat(storageTools, record.leaseId);
           libraryConnected =
             active?.leaseId === record.leaseId &&
             pathKey(active.mountPath) === pathKey(record.mountPath);

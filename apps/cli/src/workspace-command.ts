@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 
 import {
   HoneyBeeWorkspaceCore,
+  readInstalledStorage,
+  storageToolPair,
   WorkspaceCoreError,
   type ProjectRecordV2,
   type WorkspaceViewV1,
@@ -30,6 +32,7 @@ Unity parallel Workspace provider for Windows.
 Usage:
   honeybee project init <unity-project> --workspace-root <path> [--json]
   honeybee project list [--json]
+  honeybee project adopt-tools <project-id> [--apply] [--json]
   honeybee cache prepare [--project <id>] [--json]
   honeybee cache status [--project <id>] [--json]
   honeybee workspace create <name> --branch <new-branch> [--base <ref>] [--project <id>] [--json]
@@ -146,6 +149,8 @@ const resolveStorageCommand = async (
     if (requireControl) await assertControlCommand(resolved);
     return resolved;
   }
+  const installed = await installedTools();
+  if (installed?.managed !== undefined) return installed.managed.clientCommand;
   const moduleDirectory = path.dirname(fileURLToPath(import.meta.url));
   const candidates = [
     path.join(moduleDirectory, "unity-workspace-storage.exe"),
@@ -198,9 +203,7 @@ const resolveStorageCommand = async (
 };
 
 const assertControlCommand = async (storageCommand: string): Promise<void> => {
-  const controlCommand =
-    process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL ??
-    path.join(path.dirname(storageCommand), "honeybee-workspace-storage-host.exe");
+  const controlCommand = storageToolPair(storageCommand).controlCommand;
   try {
     await access(controlCommand);
   } catch (error) {
@@ -244,16 +247,40 @@ const storageManifest = async (
   }
 };
 
-const coreFor = (args: readonly string[]): HoneyBeeWorkspaceCore =>
-  new HoneyBeeWorkspaceCore({
+const installedTools = () =>
+  readInstalledStorage(path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../.."));
+const coreFor = async (args: readonly string[]): Promise<HoneyBeeWorkspaceCore> => {
+  const storageTools = await installedTools();
+  return new HoneyBeeWorkspaceCore({
+    ...(storageTools === undefined ? {} : { storageTools }),
     ...(option(args, "--data-root") === undefined
       ? {}
       : { dataRoot: path.resolve(option(args, "--data-root") as string) }),
   });
+};
 
 const executeProject = async (args: readonly string[]): Promise<void> => {
-  const core = coreFor(args);
+  const core = await coreFor(args);
   const json = jsonEnabled(args);
+  if (args[1] === "adopt-tools") {
+    const project = required(args[2], "project-id");
+    const plan = await core.planProjectStorageAdoption(project);
+    const result = ownArguments(args).includes("--apply")
+      ? await core.adoptProjectStorage(project, plan.projectDigest)
+      : plan;
+    write(
+      json
+        ? {
+            schemaVersion: CLI_JSON_SCHEMA_VERSION,
+            ok: result.status !== "blocked",
+            adoption: result,
+          }
+        : JSON.stringify(result, null, 2),
+      json,
+    );
+    if (result.status === "blocked") process.exitCode = 1;
+    return;
+  }
   if (args[1] === "init") {
     const label = option(args, "--label");
     const project = await core.initProject({
@@ -283,11 +310,14 @@ const executeProject = async (args: readonly string[]): Promise<void> => {
     );
     return;
   }
-  throw new WorkspaceCoreError("cli.unknown-command", "Use project init or project list.");
+  throw new WorkspaceCoreError(
+    "cli.unknown-command",
+    "Use project init, project list or project adopt-tools.",
+  );
 };
 
 const executeCache = async (args: readonly string[]): Promise<void> => {
-  const core = coreFor(args);
+  const core = await coreFor(args);
   const json = jsonEnabled(args);
   const projectReference = option(args, "--project");
   if (args[1] === "prepare") {
@@ -316,7 +346,7 @@ const executeCache = async (args: readonly string[]): Promise<void> => {
 };
 
 const executeWorkspace = async (args: readonly string[]): Promise<void> => {
-  const core = coreFor(args);
+  const core = await coreFor(args);
   const json = jsonEnabled(args);
   const command = args[1];
   const project = option(args, "--project");
@@ -445,7 +475,7 @@ const executeWorkspace = async (args: readonly string[]): Promise<void> => {
 };
 
 const executeDoctor = async (args: readonly string[]): Promise<void> => {
-  const core = coreFor(args);
+  const core = await coreFor(args);
   const json = jsonEnabled(args);
   const storageCommand = await resolveStorageCommand(args, false).catch(() => undefined);
   const manifest = storageCommand === undefined ? undefined : await storageManifest(storageCommand);

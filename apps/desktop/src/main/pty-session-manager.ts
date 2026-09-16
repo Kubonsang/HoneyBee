@@ -96,6 +96,7 @@ export class DesktopPtySessionManager {
     cwd: string,
     columns: number,
     rows: number,
+    noProfile = false,
   ): DesktopPtySessionV1 {
     if (this.#quitting) throw new DesktopMainError("desktop.quitting", "HoneyBee is closing.");
     if (this.#removing.has(JSON.stringify([projectId, workspaceId]))) {
@@ -117,7 +118,7 @@ export class DesktopPtySessionManager {
     }
     const terminal = spawn(
       path.win32.join(windowsRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe"),
-      ["-NoLogo"],
+      ["-NoLogo", ...(noProfile ? ["-NoProfile"] : [])],
       {
         name: "xterm-256color",
         cols: columns,

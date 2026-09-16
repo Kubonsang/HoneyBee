@@ -44,6 +44,38 @@ jobs:
         run: |
           pnpm --filter honeybee-desktop package:smoke 2>&1 | Tee-Object -FilePath artifacts/quality/desktop-package.log
           exit $LASTEXITCODE
+      - name: Verify stable Launcher and CLI shim
+        shell: pwsh
+        run: |
+          pnpm build:launcher
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm smoke:launcher 2>&1 | Tee-Object -FilePath artifacts/quality/launcher-smoke.log
+          exit $LASTEXITCODE
+      - name: Verify assembled installation
+        shell: pwsh
+        run: |
+          pnpm prepare:installation-runtime
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installationRoot = node scripts/installation/assemble.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/installation/smoke.mjs $installationRoot 2>&1 | Tee-Object -FilePath artifacts/quality/installation-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $appVersion = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          node scripts/update/smoke-prepare.mjs (Join-Path $installationRoot "versions/$appVersion") 2>&1 | Tee-Object -FilePath artifacts/quality/update-prepare-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Compress-Archive -LiteralPath $installationRoot -DestinationPath artifacts/quality/HoneyBee-installation-preview-win32-x64.zip
+          # Development preview compiler; production signing/toolchain qualification is separate.
+          New-Item -ItemType Directory -Force output/nsis-preview | Out-Null
+          Invoke-WebRequest -Uri 'https://github.com/electron-userland/electron-builder-binaries/releases/download/nsis-3.0.4.1/nsis-3.0.4.1.7z' -OutFile output/nsis-preview/compiler.7z
+          if ((Get-FileHash output/nsis-preview/compiler.7z -Algorithm SHA256).Hash.ToLowerInvariant() -ne '9877df902530f96357d13a7a31ae2b9df67f48b11ffc9a1700a7c961574ec5fa') { throw 'NSIS preview compiler digest mismatch' }
+          tar -xf output/nsis-preview/compiler.7z -C output/nsis-preview
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:HONEYBEE_MAKENSIS = Join-Path (Get-Location) 'output/nsis-preview/Bin/makensis.exe'
+          $setupPath = node scripts/installation/build-setup.mjs $installationRoot
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node scripts/installation/smoke-setup.mjs $setupPath 2>&1 | Tee-Object -FilePath artifacts/quality/setup-smoke.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath $setupPath -Destination artifacts/quality/HoneyBeeSetup-preview.exe
       - name: Archive tested packages
         shell: pwsh
         env:
@@ -51,7 +83,7 @@ jobs:
         run: |
           Compress-Archive -LiteralPath apps/cli/release/HoneyBee-cli-win32-x64 -DestinationPath artifacts/quality/HoneyBee-cli-win32-x64.zip
           Compress-Archive -LiteralPath apps/desktop/release/HoneyBee-win32-x64 -DestinationPath artifacts/quality/HoneyBee-win32-x64.zip
-          Get-FileHash artifacts/quality/*.zip -Algorithm SHA256 | ForEach-Object {
+          Get-FileHash artifacts/quality/*.zip, artifacts/quality/*.exe -Algorithm SHA256 | ForEach-Object {
             '{0}  {1}' -f $_.Hash.ToLowerInvariant(), (Split-Path -Leaf $_.Path)
           } | Set-Content -Encoding utf8 artifacts/quality/SHA256SUMS.txt
           git rev-parse HEAD | Set-Content -Encoding utf8 artifacts/quality/source-commit.txt

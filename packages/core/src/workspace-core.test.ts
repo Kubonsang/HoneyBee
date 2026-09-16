@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cp,
   mkdir,
@@ -19,7 +20,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HoneyBeeWorkspaceCore } from "./workspace-core.js";
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
-import type { StorageLease, StorageParentBuild, WorkspaceStoragePort } from "./workspace-types.js";
+import type {
+  StorageCommand,
+  StorageLease,
+  StorageParentBuild,
+  WorkspaceStoragePort,
+} from "./workspace-types.js";
 import { WorkspaceCoreError } from "./workspace-types.js";
 
 const execFileAsync = promisify(execFile);
@@ -64,7 +70,7 @@ class FakeStorage implements WorkspaceStoragePort {
     this.#root = root;
   }
 
-  public async beginParent(_command: string, key: string): Promise<StorageParentBuild> {
+  public async beginParent(_command: StorageCommand, key: string): Promise<StorageParentBuild> {
     const transactionId = `transaction-${key.slice(0, 12)}`;
     const stagingPath = path.join(this.#root, "parents", transactionId);
     await mkdir(stagingPath, { recursive: true });
@@ -76,7 +82,10 @@ class FakeStorage implements WorkspaceStoragePort {
     return { transactionId, stagingPath };
   }
 
-  public async commitParent(_command: string, transactionId: string): Promise<StorageParentBuild> {
+  public async commitParent(
+    _command: StorageCommand,
+    transactionId: string,
+  ): Promise<StorageParentBuild> {
     if (this.failNextCommitParent) {
       this.failNextCommitParent = false;
       throw new WorkspaceCoreError("storage.operation-failed", "simulated parent commit failure");
@@ -87,7 +96,7 @@ class FakeStorage implements WorkspaceStoragePort {
     return { parentId: transaction.key, allocatedBytes: 4096 };
   }
 
-  public async abortParent(_command: string, transactionId: string): Promise<void> {
+  public async abortParent(_command: StorageCommand, transactionId: string): Promise<void> {
     const transaction = this.#transactions.get(transactionId);
     if (transaction !== undefined) await rm(transaction.path, { recursive: true, force: true });
     this.#transactions.delete(transactionId);
@@ -95,7 +104,7 @@ class FakeStorage implements WorkspaceStoragePort {
   }
 
   public async acquire(
-    _command: string,
+    _command: StorageCommand,
     input: Readonly<{
       consumerId: string;
       workspaceId: string;
@@ -125,7 +134,7 @@ class FakeStorage implements WorkspaceStoragePort {
     return lease;
   }
 
-  public async retain(_command: string, _leaseId: string): Promise<void> {
+  public async retain(_command: StorageCommand, _leaseId: string): Promise<void> {
     if (this.failNextRetain) {
       this.failNextRetain = false;
       throw new WorkspaceCoreError("storage.operation-failed", "simulated retain failure");
@@ -133,7 +142,7 @@ class FakeStorage implements WorkspaceStoragePort {
   }
 
   public async attachRetained(
-    _command: string,
+    _command: StorageCommand,
     consumerId: string,
     _workspaceId: string,
   ): Promise<StorageLease> {
@@ -147,13 +156,16 @@ class FakeStorage implements WorkspaceStoragePort {
     return lease;
   }
 
-  public async heartbeat(_command: string, leaseId: string): Promise<StorageLease | undefined> {
+  public async heartbeat(
+    _command: StorageCommand,
+    leaseId: string,
+  ): Promise<StorageLease | undefined> {
     if (this.inactiveLeaseIds.has(leaseId)) return undefined;
     return [...this.#leases.values()].find((lease) => lease.leaseId === leaseId);
   }
 
   public async prepareRetainedRemoval(
-    _command: string,
+    _command: StorageCommand,
     consumerId: string,
     _workspaceId: string,
     transactionId: string,
@@ -193,7 +205,11 @@ class FakeStorage implements WorkspaceStoragePort {
     };
   }
 
-  public async commitRetainedRemoval(_command: string, consumerId: string, transactionId: string) {
+  public async commitRetainedRemoval(
+    _command: StorageCommand,
+    consumerId: string,
+    transactionId: string,
+  ) {
     this.removalEvents.push(`commit:${consumerId}:${transactionId}`);
     if (this.failNextRemove) {
       this.failNextRemove = false;
@@ -228,7 +244,11 @@ class FakeStorage implements WorkspaceStoragePort {
     };
   }
 
-  public async abortRetainedRemoval(_command: string, consumerId: string, transactionId: string) {
+  public async abortRetainedRemoval(
+    _command: StorageCommand,
+    consumerId: string,
+    transactionId: string,
+  ) {
     this.removalEvents.push(`abort:${consumerId}:${transactionId}`);
     if (this.failNextAbort) {
       this.failNextAbort = false;
@@ -301,6 +321,152 @@ afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 5 })),
   );
+});
+
+describe("Resolved storage tools", { timeout: 30_000 }, () => {
+  it("keeps a managed project usable with another version's tools without registry rewrites", async () => {
+    const { root, core, storage, project, source, workspaceRoot } = await fixture();
+    const installationRoot = path.join(root, "installed");
+    const registered = await core.cacheStatus(project.projectId);
+    await new WorkspaceRegistryStore(path.join(root, "registry")).putProject({
+      ...registered,
+      storageCommand: path.join(root, "gone/client.exe"),
+      storageBinding: { kind: "managed-v1", installationRoot },
+    });
+    Object.assign(storage, {
+      diagnose: async () => ({
+        serviceExists: true,
+        serviceState: "running",
+        receiptExists: true,
+        receiptValid: true,
+        executableExists: true,
+        executableDigestMatches: true,
+        userMatches: true,
+        workspaceRootAccessible: true,
+        componentVersion: "test",
+      }),
+      status: async () => ({ parentCount: 1, manualRecoveryRequired: false }),
+    });
+    const makeCore = async (version: string) => {
+      const tools = path.join(installationRoot, "versions", version, "tools");
+      await mkdir(tools, { recursive: true });
+      const clientCommand = path.join(tools, "client.exe"),
+        controlCommand = path.join(tools, "host.exe");
+      await writeFile(clientCommand, "client");
+      await writeFile(controlCommand, "host");
+      return new HoneyBeeWorkspaceCore({
+        dataRoot: path.join(root, "registry"),
+        storage,
+        storageTools: {
+          installationRoot,
+          managed: {
+            clientCommand,
+            controlCommand,
+            expectedComponentVersion: "test",
+            expectedClientSha256: createHash("sha256").update("client").digest("hex"),
+            expectedControlSha256: createHash("sha256").update("host").digest("hex"),
+          },
+        },
+      });
+    };
+    const first = await makeCore("0.1.0");
+    const workspace = await first.createWorkspace({ name: "managed", branch: "feature/managed" });
+    const before = await readFile(core.registryPath, "utf8");
+    const next = await makeCore("0.1.1");
+    expect((await next.workspaceStatus(workspace.workspaceId)).available).toBe(true);
+    expect(await readFile(core.registryPath, "utf8")).toBe(before);
+    await expect(
+      next.initProject({
+        unityProjectPath: source,
+        workspaceRoot,
+        storageCommand: process.execPath,
+      }),
+    ).rejects.toMatchObject({ code: "project.storage-binding-conflict" });
+    expect(await readFile(core.registryPath, "utf8")).toBe(before);
+    await next.removeWorkspace(workspace.workspaceId);
+  });
+
+  it("uses a new pair for retained repair and creation without re-registering the project", async () => {
+    const { root, core, project, storage } = await fixture();
+    const workspace = await core.createWorkspace({ name: "retained", branch: "feature/retained" });
+    const registry = new WorkspaceRegistryStore(path.join(root, "registry"));
+    const registered = await core.cacheStatus(project.projectId);
+    await registry.putProject({
+      ...registered,
+      storageCommand: path.join(root, "removed-zip", "client.exe"),
+    });
+    const before = await readFile(core.registryPath, "utf8");
+    const clientCommand = path.join(root, "new-client.exe");
+    const controlCommand = path.join(root, "new-control.exe");
+    await writeFile(clientCommand, "client");
+    await writeFile(controlCommand, "control");
+    const next = new HoneyBeeWorkspaceCore({
+      dataRoot: path.join(root, "registry"),
+      storage,
+      storageTools: { explicit: { clientCommand, controlCommand } },
+    });
+    const heartbeat = vi.spyOn(storage, "heartbeat");
+    expect((await next.workspaceStatus(workspace.workspaceId)).available).toBe(true);
+    expect(await readFile(core.registryPath, "utf8")).toBe(before);
+    const dirtyFile = path.join(workspace.workspacePath, "Assets", "Player.cs");
+    await writeFile(dirtyFile, "authored changes\n");
+    storage.inactiveLeaseIds.add(workspace.leaseId);
+    const attach = vi.spyOn(storage, "attachRetained");
+    const pair = { provenance: "explicit", clientCommand, controlCommand };
+    expect((await next.repairWorkspace(workspace.workspaceId)).available).toBe(true);
+    expect(await readFile(dirtyFile, "utf8")).toBe("authored changes\n");
+    expect(attach).toHaveBeenCalledWith(pair, workspace.consumerId, workspace.storageWorkspaceId);
+    for (const [command] of heartbeat.mock.calls) expect(command).toEqual(pair);
+    const acquire = vi.spyOn(storage, "acquire");
+    const created = await next.createWorkspace({ name: "next", branch: "feature/next" });
+    expect(acquire).toHaveBeenCalledWith(
+      pair,
+      expect.objectContaining({ parentId: workspace.parentId }),
+    );
+    expect((await next.listProjects())[0]).toEqual({
+      ...registered,
+      storageCommand: path.join(root, "removed-zip", "client.exe"),
+    });
+    expect((await next.listProjects())[0]?.projectId).toBe(project.projectId);
+    const prepareRemoval = vi.spyOn(storage, "prepareRetainedRemoval");
+    await next.removeWorkspace(created.workspaceId);
+    expect(prepareRemoval).toHaveBeenCalledWith(
+      pair,
+      created.consumerId,
+      created.storageWorkspaceId,
+      expect.any(String),
+    );
+  });
+
+  it("rejects invalid managed tools before changing the registry or Git worktrees", async () => {
+    const { root, core, storage, source } = await fixture();
+    const before = await readFile(core.registryPath, "utf8");
+    const gitBefore = await git(source, "worktree", "list", "--porcelain");
+    const acquire = vi.spyOn(storage, "acquire");
+    const beginParent = vi.spyOn(storage, "beginParent");
+    const next = new HoneyBeeWorkspaceCore({
+      dataRoot: path.join(root, "registry"),
+      storage,
+      storageTools: {
+        managed: {
+          clientCommand: process.execPath,
+          controlCommand: process.execPath,
+          expectedComponentVersion: "test",
+          expectedClientSha256: "0".repeat(64),
+          expectedControlSha256: "0".repeat(64),
+        },
+        explicit: { clientCommand: process.execPath, controlCommand: process.execPath },
+      },
+    });
+    await expect(
+      next.createWorkspace({ name: "blocked", branch: "feature/blocked" }),
+    ).rejects.toMatchObject({ code: "storage.package-integrity" });
+    await expect(next.prepareCache()).rejects.toMatchObject({ code: "storage.package-integrity" });
+    expect(acquire).not.toHaveBeenCalled();
+    expect(beginParent).not.toHaveBeenCalled();
+    expect(await readFile(core.registryPath, "utf8")).toBe(before);
+    expect(await git(source, "worktree", "list", "--porcelain")).toBe(gitBefore);
+  });
 });
 
 describe("Workspace starting commits", { timeout: 30_000 }, () => {

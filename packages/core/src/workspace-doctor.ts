@@ -4,6 +4,8 @@ import { constants } from "node:fs";
 import { access, lstat, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { WorkspaceToolResolver, validateStorageTools } from "./workspace-tool-resolution.js";
+
 import { promisify } from "node:util";
 
 import type { WorkspaceRegistryStore } from "./workspace-registry.js";
@@ -41,11 +43,32 @@ const check = (
   options: Pick<DoctorCheckV1, "subject" | "remediation"> = {},
 ): DoctorCheckV1 => ({ code, status, message, ...options });
 
+/** Shared prerequisite probe for Doctor and setup. Does not modify user state. */
+export const checkGitExecutable = async (): Promise<DoctorCheckV1> => {
+  try {
+    const result = await execFileAsync("git.exe", ["--version"], {
+      encoding: "utf8",
+      timeout: 15_000,
+      windowsHide: true,
+    });
+    if (!/^git version \d+\.\d+/u.test(result.stdout.trim()))
+      throw new Error("Unexpected Git version response");
+    return check("git.executable", "pass", result.stdout.trim());
+  } catch {
+    return check("git.executable", "fail", "git.exe is not installed or cannot run.", {
+      remediation: [
+        "Install Git for Windows and ensure git.exe is on PATH. Close Setup and start it again after installation.",
+      ],
+    });
+  }
+};
+
 export const runWorkspaceDoctor = async (
   registry: WorkspaceRegistryStore,
   storage: WorkspaceStoragePort,
   options: WorkspaceDoctorOptions,
   viewWorkspace: (record: WorkspaceRecordV2) => Promise<WorkspaceViewV1>,
+  resolver = new WorkspaceToolResolver(),
 ): Promise<DoctorReportV1> => {
   const checks: DoctorCheckV1[] = [];
   const release = os.release();
@@ -67,20 +90,7 @@ export const runWorkspaceDoctor = async (
           remediation: ["Install Node.js 24, then run honeybee doctor again."],
         }),
   );
-  try {
-    const result = await execFileAsync("git.exe", ["--version"], {
-      encoding: "utf8",
-      timeout: 15_000,
-      windowsHide: true,
-    });
-    checks.push(check("git.executable", "pass", result.stdout.trim()));
-  } catch {
-    checks.push(
-      check("git.executable", "fail", "git.exe is not installed or cannot run.", {
-        remediation: ["Install Git for Windows and ensure git.exe is on PATH."],
-      }),
-    );
-  }
+  checks.push(await checkGitExecutable());
 
   let value;
   try {
@@ -99,18 +109,64 @@ export const runWorkspaceDoctor = async (
     return report(checks);
   }
 
-  const storageCommand = options.storageCommand ?? value.projects[0]?.storageCommand;
+  const selected = resolver.resolve(options.storageCommand ?? value.projects[0]?.storageCommand);
+  const storageCommand = selected?.clientCommand;
+  if (selected !== undefined) {
+    try {
+      await validateStorageTools(selected);
+    } catch (error) {
+      checks.push(
+        check(
+          "storage.package-integrity",
+          "fail",
+          error instanceof Error ? error.message : "Selected storage tools are invalid.",
+        ),
+      );
+      return report(checks);
+    }
+  }
+  for (const field of [
+    "expectedComponentVersion",
+    "expectedClientSha256",
+    "expectedControlSha256",
+  ] as const) {
+    if (
+      selected?.[field] !== undefined &&
+      options[field] !== undefined &&
+      selected[field] !== options[field]
+    ) {
+      checks.push(
+        check(
+          "storage.selection-conflict",
+          "fail",
+          "Selected storage identity conflicts with the required package identity.",
+        ),
+      );
+      return report(checks);
+    }
+  }
+  // A selection can supply missing expectations, never relax caller requirements.
+  options = {
+    ...options,
+    ...(selected?.expectedComponentVersion === undefined
+      ? {}
+      : { expectedComponentVersion: selected.expectedComponentVersion }),
+    ...(selected?.expectedClientSha256 === undefined
+      ? {}
+      : { expectedClientSha256: selected.expectedClientSha256 }),
+    ...(selected?.expectedControlSha256 === undefined
+      ? {}
+      : { expectedControlSha256: selected.expectedControlSha256 }),
+  };
   let controlCommand: string | undefined;
-  if (storageCommand === undefined) {
+  if (selected === undefined || storageCommand === undefined) {
     checks.push(
       check("storage.command", "fail", "The packaged workspace-storage executable was not found.", {
         remediation: ["Extract the complete HoneyBee CLI ZIP and run honeybee doctor again."],
       }),
     );
   } else {
-    controlCommand =
-      process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL ??
-      path.join(path.dirname(storageCommand), "honeybee-workspace-storage-host.exe");
+    controlCommand = selected.controlCommand;
     const clientExists = await exists(storageCommand);
     checks.push(
       clientExists
@@ -168,12 +224,13 @@ export const runWorkspaceDoctor = async (
   }
 
   if (
+    selected !== undefined &&
     storageCommand !== undefined &&
     controlCommand !== undefined &&
     storage.diagnose !== undefined
   ) {
     try {
-      const diagnostic = await storage.diagnose(storageCommand);
+      const diagnostic = await storage.diagnose(selected);
       checks.push(
         diagnostic.serviceExists && diagnostic.serviceState === "running"
           ? check("storage.service", "pass", "UnityWorkspaceStorage service is running.")
@@ -238,7 +295,7 @@ export const runWorkspaceDoctor = async (
         storage.status !== undefined
       ) {
         try {
-          const status = await storage.status(storageCommand);
+          const status = await storage.status(selected);
           checks.push(
             status.manualRecoveryRequired
               ? check(
@@ -284,11 +341,23 @@ export const runWorkspaceDoctor = async (
   );
   for (const project of value.projects) {
     const subject = `${project.label} (${project.projectId})`;
-    const projectControl =
-      process.env.HONEYBEE_WORKSPACE_STORAGE_CONTROL ??
-      path.join(path.dirname(project.storageCommand), "honeybee-workspace-storage-host.exe");
+    let projectTools;
+    try {
+      projectTools = resolver.resolveProject(project);
+    } catch (error) {
+      checks.push(
+        check(
+          "project.storage-binding",
+          "fail",
+          error instanceof Error ? error.message : "Invalid project binding",
+          { subject },
+        ),
+      );
+      continue;
+    }
+    const projectControl = projectTools.controlCommand;
     const [projectClientExists, projectControlExists] = await Promise.all([
-      exists(project.storageCommand),
+      exists(projectTools.clientCommand),
       exists(projectControl),
     ]);
     let projectToolsMatch = projectClientExists && projectControlExists;
@@ -298,7 +367,7 @@ export const runWorkspaceDoctor = async (
       options.expectedControlSha256 !== undefined
     ) {
       const [clientDigest, controlDigest] = await Promise.all([
-        digest(project.storageCommand),
+        digest(projectTools.clientCommand),
         digest(projectControl),
       ]);
       projectToolsMatch =

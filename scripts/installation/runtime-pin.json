@@ -1,0 +1,7 @@
+{
+  "version": "24.13.1",
+  "source": "https://nodejs.org/dist/v24.13.1/node-v24.13.1-win-x64.zip",
+  "archiveSha256": "fba577c4bb87df04d54dd87bbdaa5a2272f1f99a2acbf9152e1a91b8b5f0b279",
+  "nodeSha256": "e3be0545990c90995d7bf3a7af5d64af1f2e0fc1bbd9b79c27f7abc1e9676e50",
+  "licenseSha256": "6ad66e33e9da5d54a89223e899894490e689d0ce157d1538d71ee1a3f7f8ea0c"
+}

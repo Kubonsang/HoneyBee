@@ -1,8 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HoneyBeeWorkspaceCore } from "./workspace-core.js";
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
@@ -73,6 +74,57 @@ afterEach(async () => {
 });
 
 describe("Workspace doctor", () => {
+  it("validates and diagnoses the selected pair instead of stale project paths", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "honeybee-doctor-selected-"));
+    roots.push(root);
+    const dataRoot = path.join(root, "registry");
+    const registry = new WorkspaceRegistryStore(dataRoot);
+    await registry.putProject({
+      schemaVersion: 2,
+      projectId: "old",
+      label: "old",
+      unityProjectPath: root,
+      repositoryRoot: root,
+      unityRelativePath: "",
+      workspaceRoot: root,
+      storageCommand: path.join(root, "removed-zip", "client.exe"),
+      createdAt: "2026-09-10T00:00:00.000Z",
+    });
+    const before = await readFile(registry.path, "utf8");
+    const clientCommand = await tools(root);
+    const controlCommand = path.join(root, "separate-control.exe");
+    await writeFile(controlCommand, "host");
+    const managed = {
+      clientCommand,
+      controlCommand,
+      expectedComponentVersion: "test",
+      expectedClientSha256: createHash("sha256").update("test").digest("hex"),
+      expectedControlSha256: createHash("sha256").update("host").digest("hex"),
+    };
+    const storage = new DoctorStorage();
+    const diagnose = vi.spyOn(storage, "diagnose");
+    const core = new HoneyBeeWorkspaceCore({ dataRoot, storage, storageTools: { managed } });
+    const report = await core.doctor();
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ code: "project.storage-tools", status: "pass" }),
+    );
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.package-integrity", status: "pass" }),
+    );
+    expect(diagnose).toHaveBeenCalledWith({ ...managed, provenance: "managed" });
+    diagnose.mockClear();
+    const conflict = await core.doctor({ expectedComponentVersion: "another-package" });
+    expect(conflict.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.selection-conflict", status: "fail" }),
+    );
+    expect(diagnose).not.toHaveBeenCalled();
+    await writeFile(controlCommand, "tampered");
+    const invalid = await core.doctor();
+    expect(invalid.ready).toBe(false);
+    expect(diagnose).not.toHaveBeenCalled();
+    expect(await readFile(registry.path, "utf8")).toBe(before);
+  });
+
   it("blocks a different installed component version without changing the registry", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-doctor-version-"));
     roots.push(root);

@@ -339,7 +339,40 @@ export const DesktopPtySnapshotV1Schema = z
   .strict();
 export type DesktopPtySnapshotV1 = z.infer<typeof DesktopPtySnapshotV1Schema>;
 
+export const DesktopUpdateStatusV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    state: z.enum([
+      "Idle",
+      "Checking",
+      "Available",
+      "UpToDate",
+      "Unavailable",
+      "Failed",
+      "Downloading",
+      "Downloaded",
+      "Preparing",
+      "Prepared",
+      "Applying",
+      "Updated",
+      "RolledBack",
+      "Unresolved",
+      "UpdateCancelled",
+    ]),
+    version: z.string().nullable(),
+    mandatory: z.boolean(),
+    received: z.number().int().nonnegative().optional(),
+    total: z.number().int().positive().optional(),
+  })
+  .strict();
+export type DesktopUpdateStatusV1 = z.infer<typeof DesktopUpdateStatusV1Schema>;
+
 export const DesktopIpcChannels = {
+  updateStatus: "desktop.update.status.v1",
+  updateCheck: "desktop.update.check.v1",
+  updateCancel: "desktop.update.cancel.v1",
+  updateDownload: "desktop.update.download.v1",
+  updateApply: "desktop.update.apply.v1",
   workspaceBaseRefs: "desktop.workspace.base-refs.v1",
   workspaceBaseHistory: "desktop.workspace.base-history.v1",
   workspaceBaseResolve: "desktop.workspace.base-resolve.v1",
@@ -382,6 +415,11 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  updateStatus(): Promise<DesktopUpdateStatusV1>;
+  checkUpdate(): Promise<DesktopUpdateStatusV1>;
+  cancelUpdateCheck(): Promise<DesktopUpdateStatusV1>;
+  downloadUpdate(): Promise<DesktopUpdateStatusV1>;
+  applyUpdate(): Promise<DesktopUpdateStatusV1>;
   workspaceBaseRefs(
     request: z.input<typeof DesktopBaseRefsRequestV1Schema>,
   ): Promise<DesktopBaseRefsV1>;

@@ -13,6 +13,32 @@
   --blue: #2997ff;
   --red: #ef6a61;
 }
+.update-check {
+  position: relative;
+  -webkit-app-region: no-drag;
+}
+.update-check-panel {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 100;
+  width: 320px;
+  padding: 16px;
+  color: #ededed;
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px #0008;
+}
+.update-check-panel p {
+  margin: 0 0 12px;
+}
+.update-check-panel button {
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
 * {
   box-sizing: border-box;
 }

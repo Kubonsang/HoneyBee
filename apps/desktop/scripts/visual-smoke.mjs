@@ -61,6 +61,7 @@ for (const name of [
   "06-language-toggle.png",
   "07-changes-review.png",
   "08-storage-usage.png",
+  "09-update-check.png",
 ])
   await access(path.join(output, name));
 process.stdout.write(`Desktop visual fixture passed: ${output}\n`);

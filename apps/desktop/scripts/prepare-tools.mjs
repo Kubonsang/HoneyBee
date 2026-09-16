@@ -6,15 +6,33 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import assert from "node:assert/strict";
 
 const execFileAsync = promisify(execFile);
 const workspaceStorageCommit = "cfa606fd4143a13b2d229f9d1e24e48ae0ddb8fa";
-const workspaceStorageVersion = "0.0.0+cfa606fd4143.hb12";
+const qualificationBaseline = process.argv[2] === "--qualification-baseline";
+assert(
+  process.argv.length === 2 || (process.argv.length === 3 && qualificationBaseline),
+  "Unknown tool build option",
+);
+const productionStorageVersion = "0.0.0+cfa606fd4143.hb13";
+const workspaceStorageVersion =
+  productionStorageVersion + (qualificationBaseline ? ".qa-baseline" : "");
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
 const hostRoot = path.join(repositoryRoot, "tools", "workspace-storage-host");
-const outputRoot = path.join(appRoot, ".tools", "win32-x64");
+assert.deepEqual(
+  await readFile(path.join(hostRoot, "update-trust-v1.json")),
+  await readFile(path.join(appRoot, "resources/update-trust-v1.json")),
+  "Desktop and privileged service release trust must agree before building",
+);
+const outputRoot = path.join(
+  appRoot,
+  ".tools",
+  ...(qualificationBaseline ? ["qa-baseline"] : []),
+  "win32-x64",
+);
 const clientOutput = path.join(outputRoot, "unity-workspace-storage.exe");
 const hostOutput = path.join(outputRoot, "honeybee-workspace-storage-host.exe");
 const usageOutput = path.join(outputRoot, "honeybee-usage.exe");
@@ -66,7 +84,7 @@ try {
   const patch = path.join(overlayRoot, "external-bee.patch");
   if (
     overlay.baseCommit !== workspaceStorageCommit ||
-    overlay.componentVersion !== workspaceStorageVersion ||
+    overlay.componentVersion !== productionStorageVersion ||
     (await sha256(patch)) !== overlay.sha256
   ) {
     throw new Error("External Bee storage overlay identity mismatch.");
@@ -111,7 +129,18 @@ try {
     );
     await run(
       "go",
-      ["build", "-buildvcs=false", "-trimpath", "-ldflags=-buildid=", "-o", hostOutput, "."],
+      [
+        "build",
+        "-buildvcs=false",
+        "-trimpath",
+        qualificationBaseline
+          ? "-ldflags=-buildid=HoneyBee-qualification-baseline-v1"
+          : "-ldflags=-buildid=",
+        ...(qualificationBaseline ? ["-tags=honeybee_qualification"] : []),
+        "-o",
+        hostOutput,
+        ".",
+      ],
       {
         cwd: hostRoot,
         env: { ...buildEnvironment, GOWORK: workFile },
@@ -147,6 +176,13 @@ try {
         workspaceStorageVersion,
         workspaceStorageCommit,
         workspaceStorageOverlaySHA256: overlay.sha256,
+        ...(qualificationBaseline
+          ? {
+              qualificationOnly: true,
+              qualificationBuild: "managed-maintenance-checkpoints-v1",
+              historicalRelease: false,
+            }
+          : {}),
         files: {
           "honeybee-usage.exe": {
             byteLength: (await stat(usageOutput)).size,

@@ -121,6 +121,12 @@ describe("Workspace CLI", () => {
       projects: [{ projectId: project.projectId, unityProjectPath: await realpath(source) }],
     });
     expect(listed.stdout).not.toContain("storageCommand");
+    const adoption = await runCli(
+      ["project", "adopt-tools", project.projectId, "--data-root", dataRoot, "--json"],
+      root,
+    );
+    expect(adoption.exitCode).toBe(1);
+    expect(JSON.parse(adoption.stderr)).toMatchObject({ code: "installation.required" });
 
     const cache = await runCli(["cache", "status", "--data-root", dataRoot, "--json"], root);
     expect(JSON.parse(cache.stdout)).toMatchObject({

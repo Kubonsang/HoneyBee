@@ -63,6 +63,17 @@ type storageDiagnostic struct {
 }
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "service-update-elevated" {
+		if err := runServiceUpdateElevated(os.Stdin, os.Stdout); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, err)
+			var typed hostError
+			if errors.As(err, &typed) {
+				os.Exit(typed.exitCode)
+			}
+			os.Exit(1)
+		}
+		return
+	}
 	result, err := execute(os.Args[1:])
 	if err != nil {
 		code := "workspace-storage.install-failed"
@@ -84,10 +95,40 @@ func main() {
 }
 
 func execute(args []string) (any, error) {
+	if result, handled, err := qualificationCommand(args); handled {
+		return result, err
+	}
 	if len(args) == 0 {
 		return nil, errors.New("usage: install|broker-run|control|diagnose|version")
 	}
 	switch args[0] {
+	case "service-update-session":
+		flags := flag.NewFlagSet("service-update-session", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		nonce := flags.String("pipe", "", "session nonce")
+		parent := flags.Uint("parent-pid", 0, "initiating process")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || !migrationDigest(*nonce) || *parent == 0 || uint64(*parent) > 0xffffffff {
+			return nil, errors.New("invalid service update session")
+		}
+		return nil, runServiceUpdateSession(*nonce, uint32(*parent))
+	case "service-update-command":
+		if len(args) != 1 {
+			return nil, errors.New("service update input must use the bounded request protocol")
+		}
+		request, err := decodeServiceUpdateRequest(os.Stdin)
+		if err != nil {
+			return nil, err
+		}
+		return executeServiceUpdateRequest(context.Background(), request)
+	case "service-recovery-run":
+		flags := flag.NewFlagSet("service-recovery-run", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		transaction := flags.String("transaction", "", "protected transaction SHA-256")
+		pin := flags.String("context-sha256", "", "protected context SHA-256")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || !migrationDigest(*transaction) || !migrationDigest(*pin) {
+			return nil, errors.New("invalid service recovery arguments")
+		}
+		return nil, runServiceRecoveryWorker(*transaction, *pin)
 	case "version":
 		return map[string]any{"schemaVersion": 1, "ok": true, "component": "honeybee-workspace-storage-host"}, nil
 	case "broker-run":
@@ -97,7 +138,7 @@ func execute(args []string) (any, error) {
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || !filepath.IsAbs(*configPath) {
 			return nil, errors.New("broker-run requires --service-config")
 		}
-		return nil, workspace.RunWindowsService(*configPath)
+		return nil, runManagedBrokerService(*configPath)
 	case "control":
 		if len(args) != 1 {
 			return nil, errors.New("control accepts one JSON request on stdin")
@@ -119,6 +160,12 @@ func execute(args []string) (any, error) {
 			return nil, callErr
 		}
 		return response, nil
+	case "service-evidence":
+		evidence, err := runServiceEvidence(args[1:])
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"schemaVersion": 1, "ok": true, "evidence": evidence}, nil
 	case "diagnose":
 		if len(args) != 1 {
 			return nil, errors.New("diagnose accepts no arguments")
@@ -128,6 +175,20 @@ func execute(args []string) (any, error) {
 			"ok":            true,
 			"diagnostic":    diagnoseStorage(),
 		}, nil
+	case "install-capabilities":
+		if len(args) != 1 {
+			return nil, errors.New("install-capabilities accepts no arguments")
+		}
+		return map[string]any{"schemaVersion": 1, "freshInstallElevation": 1, "serviceUpdateSession": 1}, nil
+	case "install-elevated":
+		flags := flag.NewFlagSet("install-elevated", flag.ContinueOnError)
+		flags.SetOutput(io.Discard)
+		root := flags.String("workspace-root", "", "absolute workspace root")
+		version := flags.String("component-version", "", "approved component version")
+		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
+			return nil, errors.New("invalid elevated install arguments")
+		}
+		return installElevated(*root, *version)
 	case "install":
 		flags := flag.NewFlagSet("install", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)
@@ -135,10 +196,14 @@ func execute(args []string) (any, error) {
 		userSID := flags.String("user-sid", "", "installed user SID")
 		componentVersion := flags.String("component-version", "", "pinned component version")
 		replace := flags.Bool("replace", false, "replace the existing HoneyBee service binary")
+		freshOnly := flags.Bool("fresh-only", false, "refuse any existing service; never replace")
 		if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 {
 			return nil, errors.New("invalid install arguments")
 		}
-		return install(*workspaceRoot, *userSID, *componentVersion, *replace)
+		if *freshOnly && *replace {
+			return nil, errors.New("fresh-only cannot be combined with replace")
+		}
+		return install(*workspaceRoot, *userSID, *componentVersion, *replace, *freshOnly)
 	default:
 		return nil, fmt.Errorf("unknown command %q", args[0])
 	}
@@ -239,7 +304,7 @@ func serviceStateName(state svc.State) string {
 	}
 }
 
-func install(workspaceRootValue, userSID, componentVersion string, replace bool) (any, error) {
+func install(workspaceRootValue, userSID, componentVersion string, replace, freshOnly bool) (any, error) {
 	if !workspace.IsElevated() {
 		return nil, errors.New("workspace storage installation requires elevation")
 	}
@@ -263,25 +328,6 @@ func install(workspaceRootValue, userSID, componentVersion string, replace bool)
 	configPath := filepath.Join(storeRoot, "broker-config.json")
 	installedExecutable := filepath.Join(storeRoot, "broker", "unity-workspace-storage-host.exe")
 	receiptPath := filepath.Join(storeRoot, "install-receipt.json")
-	storeGuard, err := secureDirectoryTree(storeRoot)
-	if err != nil {
-		return nil, err
-	}
-	defer storeGuard.close()
-	workspaceGuard, err := secureDirectoryTree(workspaceRoot)
-	if err != nil {
-		return nil, err
-	}
-	defer workspaceGuard.close()
-	if err := applyACL(storeGuard.final, userSID, false); err != nil {
-		return nil, err
-	}
-	if err := applyACL(workspaceGuard.final, userSID, true); err != nil {
-		return nil, err
-	}
-	if err := reconcileReceiptFile(receiptPath); err != nil {
-		return nil, err
-	}
 	source, err := os.Executable()
 	if err != nil {
 		return nil, err
@@ -308,11 +354,52 @@ func install(workspaceRootValue, userSID, componentVersion string, replace bool)
 		return nil, err
 	}
 	defer manager.Disconnect()
-	if existing, openErr := manager.OpenService(workspace.WindowsServiceName); openErr == nil {
+	existing, openErr := manager.OpenService(workspace.WindowsServiceName)
+	if existing != nil {
 		defer existing.Close()
-		if _, receiptErr := os.Stat(receiptPath); os.IsNotExist(receiptErr) {
-			return nil, serviceWithoutReceiptError()
+	}
+	if err := requireFreshService(openErr, freshOnly); err != nil {
+		return nil, err
+	}
+	if err := inspectInstallAdmission(receiptPath, receipt, openErr, replace); err != nil {
+		return nil, err
+	}
+	if existing != nil {
+		config, err := existing.Config()
+		if err != nil {
+			return nil, err
 		}
+		if !strings.EqualFold(config.ServiceStartName, "LocalSystem") {
+			return nil, errors.New("storage service account differs from LocalSystem")
+		}
+		if err := verifyServiceCommand(config.BinaryPathName, receipt); err != nil {
+			return nil, err
+		}
+	}
+	storeGuard, err := secureDirectoryTree(storeRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer storeGuard.close()
+	workspaceGuard, err := secureDirectoryTree(workspaceRoot)
+	if err != nil {
+		return nil, err
+	}
+	defer workspaceGuard.close()
+	// Recheck mutable file evidence after directory handles are pinned.
+	if err := inspectInstallAdmission(receiptPath, receipt, openErr, replace); err != nil {
+		return nil, err
+	}
+	if err := applyACL(storeGuard.final, userSID, false); err != nil {
+		return nil, err
+	}
+	if err := applyACL(workspaceGuard.final, userSID, true); err != nil {
+		return nil, err
+	}
+	if err := reconcileReceiptFile(receiptPath); err != nil {
+		return nil, err
+	}
+	if existing != nil {
 		return verifyExisting(receiptPath, receipt, existing, replace)
 	}
 
@@ -339,16 +426,7 @@ func install(workspaceRootValue, userSID, componentVersion string, replace bool)
 	if err := copyOrVerify(source, installedExecutable); err != nil {
 		return nil, err
 	}
-	config := workspace.ServiceConfig{
-		SchemaVersion:     workspace.ServiceConfigSchemaVersion,
-		StoreRoot:         storeRoot,
-		WorkspaceRoot:     workspaceRoot,
-		UserSID:           userSID,
-		QuotaBytes:        workspace.DefaultQuotaBytes,
-		HostFloorBytes:    workspace.DefaultHostFloor,
-		ChildReserveBytes: workspace.DefaultChildReserve,
-		PipeName:          workspace.DefaultPipeName,
-	}
+	config := expectedServiceConfig(receipt)
 	if err := ensureServiceConfig(configPath, config); err != nil {
 		return nil, err
 	}
@@ -673,11 +751,19 @@ func loadReceipt(target string) (installReceipt, error) {
 	if err != nil {
 		return installReceipt{}, err
 	}
+	return decodeReceipt(data)
+}
+
+func decodeReceipt(data []byte) (installReceipt, error) {
 	var receipt installReceipt
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&receipt); err != nil {
 		return installReceipt{}, err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return installReceipt{}, errors.New("receipt contains trailing JSON")
 	}
 	if receipt.SchemaVersion != receiptSchema ||
 		receipt.ServiceName != workspace.WindowsServiceName ||

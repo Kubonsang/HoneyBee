@@ -150,6 +150,19 @@ const paths = await packager({
 });
 
 if (paths.length !== 1) throw new Error("Expected exactly one packaged Desktop path.");
+if (
+  mainBundle.includes("honeybee-update-validation") &&
+  mainBundle.includes("assertCombinedAdmission")
+)
+  await writeFile(
+    path.join(paths[0], "combined-client.json"),
+    JSON.stringify({ schemaVersion: 1, combinedAdmission: 1, isolatedDesktopValidation: 1 }) + "\n",
+  );
+if (mainBundle.includes("acquireInstalledActivity"))
+  await writeFile(
+    path.join(paths[0], "activity-client.json"),
+    JSON.stringify({ schemaVersion: 1, protocol: 1 }) + "\n",
+  );
 await cp(
   path.join(repositoryRoot, "docs", "operations", "windows-desktop-beta.md"),
   path.join(paths[0], "README.md"),

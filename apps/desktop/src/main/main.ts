@@ -1,9 +1,29 @@
 import { access, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdirSync, lstatSync, realpathSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import assert from "node:assert/strict";
+import { discoverRelease } from "../../../../scripts/update/release-discovery.mjs";
+import { stageAuthenticatedRelease } from "../../../../scripts/update/authenticated-release.mjs";
+import { DesktopUpdateCheck } from "./update-check.js";
+import { readUpdateOutcome } from "../../../../scripts/update/update-outcome.mjs";
+import {
+  dispatchPreparation,
+  dispatchActivation,
+} from "../../../../scripts/update/dispatch-preparation.mjs";
+import updateTrust from "../../resources/update-trust-v1.json" with { type: "json" };
+import { setTimeout as delay } from "node:timers/promises";
 
-import { HoneyBeeWorkspaceCore, type ProjectRecordV2, type WorkspaceViewV1 } from "@honeybee/core";
+import {
+  HoneyBeeWorkspaceCore,
+  readInstalledStorage,
+  acquireInstalledActivity,
+  type InstalledActivityLease,
+  type ProjectRecordV2,
+  type WorkspaceViewV1,
+} from "@honeybee/core";
 import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
 
 import {
@@ -45,14 +65,70 @@ import {
   readUnityVersion,
 } from "./project-onboarding.js";
 import { DesktopPtySessionManager } from "./pty-session-manager.js";
+import { DesktopActivityDrain } from "./activity-drain.js";
+import { openDesktopUpdateSession } from "./update-session.js";
+import { DesktopUpdateShutdown } from "./update-shutdown.js";
 
-const core = new HoneyBeeWorkspaceCore({
+const validationArguments = process.argv.filter((value) =>
+  value.startsWith("--honeybee-update-validation="),
+);
+assert(validationArguments.length <= 1, "Duplicate update validation request");
+const updateValidationId = validationArguments[0]?.slice("--honeybee-update-validation=".length);
+if (updateValidationId !== undefined) {
+  assert(/^[a-f0-9]{64}$/u.test(updateValidationId), "Invalid update validation identity");
+  // A candidate must not read/write the ordinary Desktop profile while being
+  // evaluated. This is a restricted launch mode, not update authorization.
+  // Replayed dispatches share Electron's single-instance lock, even before the
+  // first process has published its update session descriptor.
+  const profileIdentity = createHash("sha256")
+    .update(JSON.stringify([process.execPath.toLowerCase(), updateValidationId]))
+    .digest("hex");
+  const profile = path.join(tmpdir(), `honeybee-update-validation-${profileIdentity}`);
+  mkdirSync(profile, { recursive: true });
+  assert(lstatSync(profile).isDirectory() && !lstatSync(profile).isSymbolicLink());
+  assert.equal(realpathSync(profile).toLowerCase(), path.resolve(profile).toLowerCase());
+  app.setPath("userData", profile);
+}
+let validationRendererReady = false;
+
+let installedStorageCommand: string | undefined;
+let core = new HoneyBeeWorkspaceCore({
   usageCommand: app.isPackaged
     ? path.join(process.resourcesPath, "win32-x64", "honeybee-usage.exe")
     : path.join(app.getAppPath(), ".tools", "win32-x64", "honeybee-usage.exe"),
 });
 const ptySessions = new DesktopPtySessionManager();
+let activityLease: InstalledActivityLease | undefined;
+let updateSession: Awaited<ReturnType<typeof openDesktopUpdateSession>> | undefined;
+const activityDrain = new DesktopActivityDrain(() =>
+  setImmediate(() => {
+    if (!activityDrain.isClosing) return;
+    if (updateShutdown.pending) updateShutdown.drained();
+    else app.quit();
+  }),
+);
+const updateShutdown = new DesktopUpdateShutdown(activityDrain, () => confirmTerminalQuit());
+const activityHandle: typeof ipcMain.handle = (channel, listener) => {
+  ipcMain.handle(channel, async (event, ...args: unknown[]) => {
+    if (updateValidationId !== undefined)
+      return {
+        ok: false as const,
+        error: {
+          code: "update.validation-mode",
+          message: "HoneyBee is validating an update.",
+          remediation: [],
+        },
+      };
+    activityLease?.assertHeld();
+    return activityDrain.run(() => listener(event, ...args));
+  });
+};
 const smokeMode = process.env.HONEYBEE_DESKTOP_SMOKE === "desktop-smoke-v2";
+const sessionSmokeMode = smokeMode && process.env.HONEYBEE_DESKTOP_SESSION_SMOKE === "session-v1";
+const lifecycleSmokeMode =
+  smokeMode && process.env.HONEYBEE_DESKTOP_LIFECYCLE_SMOKE === "lifecycle-v1";
+let lifecycleConsent = false;
+let lifecyclePrompts = 0;
 const captureDirectory = process.env.HONEYBEE_DESKTOP_CAPTURE_DIR;
 const captureMode = captureDirectory !== undefined;
 const fixtureMode = smokeMode || captureMode;
@@ -155,9 +231,10 @@ const writeSmokeStage = async (stage: string): Promise<void> => {
 };
 
 const packagedStoragePath = (): string =>
-  app.isPackaged
+  installedStorageCommand ??
+  (app.isPackaged
     ? path.join(process.resourcesPath, "win32-x64", "unity-workspace-storage.exe")
-    : path.join(app.getAppPath(), ".tools", "win32-x64", "unity-workspace-storage.exe");
+    : path.join(app.getAppPath(), ".tools", "win32-x64", "unity-workspace-storage.exe"));
 const desktopDoctor = () => {
   const approved = compatibility.workspaceStorage[0];
   return core.doctor({
@@ -230,8 +307,66 @@ const handler =
     }
   };
 
+const updateCheck = new DesktopUpdateCheck({
+  restore: async () =>
+    app.isPackaged && !fixtureMode
+      ? readUpdateOutcome(path.resolve(process.resourcesPath, "../../../.."))
+      : undefined,
+  trustedPublicKeys: updateTrust.schemaVersion === 1 ? updateTrust.publicKeys : [],
+  source: async () => {
+    if (!app.isPackaged || fixtureMode) return undefined;
+    const releaseRoot = path.resolve(process.resourcesPath, "../..");
+    const storage = await readInstalledStorage(releaseRoot);
+    const component = storage?.managed?.expectedComponentVersion;
+    if (component === undefined) return undefined;
+    assert(updateTrust.channel === "beta" || updateTrust.channel === "stable");
+    return {
+      currentVersion: path.basename(releaseRoot),
+      bootstrapperVersion: updateTrust.bootstrapperVersion,
+      channel: updateTrust.channel,
+      storageComponentVersion: component,
+    };
+  },
+  discover: discoverRelease,
+  stage: stageAuthenticatedRelease,
+  prepare: dispatchPreparation,
+  apply: async (preparation) => {
+    assert(updateSession, "Managed Desktop update session required");
+    return dispatchActivation({
+      installationRoot: path.resolve(process.resourcesPath, "../../../.."),
+      preparation,
+      desktopDescriptor: updateSession.descriptor,
+    });
+  },
+  installationRoot: () => path.resolve(process.resourcesPath, "../../../.."),
+  recordError: (error) =>
+    process.stderr.write(
+      `Update check failed: ${error instanceof Error ? error.message : "unknown error"}\n`,
+    ),
+});
 const registerIpc = (): void => {
-  ipcMain.handle(
+  for (const [channel, action] of [
+    [DesktopIpcChannels.updateStatus, () => updateCheck.refresh()],
+    [DesktopIpcChannels.updateCheck, () => updateCheck.check()],
+    [DesktopIpcChannels.updateCancel, () => updateCheck.cancel()],
+    [DesktopIpcChannels.updateDownload, () => updateCheck.download()],
+    [DesktopIpcChannels.updateApply, () => updateCheck.apply()],
+  ] as const) {
+    activityHandle(
+      channel,
+      handler((value, event) => {
+        const window = mainWindow;
+        assert(window !== undefined && event.sender === window.webContents);
+        assert(
+          event.senderFrame === window.webContents.mainFrame,
+          "Update request must originate in the main frame",
+        );
+        assert(value === undefined, "Update requests accept no external configuration");
+        return action();
+      }),
+    );
+  }
+  activityHandle(
     DesktopIpcChannels.projects,
     handler(async () => {
       if (fixtureMode)
@@ -245,7 +380,7 @@ const registerIpc = (): void => {
       );
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectCandidates,
     handler(async () => {
       if (fixtureMode)
@@ -286,7 +421,7 @@ const registerIpc = (): void => {
       return discoverProjectCandidates(await core.listProjects(), hubFile);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectInspect,
     handler(async (value) => {
       const request = DesktopProjectPathRequestV1Schema.parse(value);
@@ -323,7 +458,7 @@ const registerIpc = (): void => {
       return inspectUnityProject(request.path, await core.listProjects());
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectPickFolder,
     handler(async (value) => {
       const request = DesktopFolderPickerRequestV1Schema.parse(value);
@@ -359,7 +494,7 @@ const registerIpc = (): void => {
         : selected;
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectClone,
     handler(async (value) => {
       const request = DesktopCloneRequestV1Schema.parse(value);
@@ -372,7 +507,7 @@ const registerIpc = (): void => {
       return cloneUnityProject(request.url, request.destination);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectSetup,
     handler(async (value) => {
       const request = DesktopProjectSetupRequestV1Schema.parse(value);
@@ -411,7 +546,7 @@ const registerIpc = (): void => {
       return projectView(await core.prepareCache(project.projectId));
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.cachePrepare,
     handler(async (value) => {
       const request = DesktopProjectRequestV1Schema.parse(value);
@@ -419,7 +554,7 @@ const registerIpc = (): void => {
       return projectView(await core.prepareCache(request.projectId));
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.doctor,
     handler(async () =>
       fixtureMode
@@ -448,7 +583,7 @@ const registerIpc = (): void => {
         : desktopDoctor(),
     ),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaces,
     handler(async (value) => {
       const request = DesktopProjectRequestV1Schema.parse(value);
@@ -461,7 +596,7 @@ const registerIpc = (): void => {
         .map(workspaceView);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceUsage,
     handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
@@ -512,7 +647,7 @@ const registerIpc = (): void => {
       return core.workspaceUsage(request.workspaceId, request.projectId);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceBaseRefs,
     handler(async (value) => {
       const request = DesktopBaseRefsRequestV1Schema.parse(value);
@@ -538,7 +673,7 @@ const registerIpc = (): void => {
       );
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceBaseHistory,
     handler(async (value) => {
       const request = DesktopBaseHistoryRequestV1Schema.parse(value);
@@ -561,7 +696,7 @@ const registerIpc = (): void => {
       );
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceBaseResolve,
     handler(async (value) => {
       const request = DesktopBaseResolveRequestV1Schema.parse(value);
@@ -576,7 +711,7 @@ const registerIpc = (): void => {
       );
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceCreate,
     handler(async (value) => {
       const request = DesktopWorkspaceCreateRequestV1Schema.parse(value);
@@ -616,7 +751,7 @@ const registerIpc = (): void => {
       return workspaceView(workspace);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceRepair,
     handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
@@ -634,7 +769,7 @@ const registerIpc = (): void => {
       return workspaceView(await core.repairWorkspace(request.workspaceId, request.projectId));
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.workspaceRemove,
     handler(async (value) => {
       const request = DesktopWorkspaceRequestV1Schema.parse(value);
@@ -650,7 +785,7 @@ const registerIpc = (): void => {
       return true;
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.externalLaunch,
     handler(async (value) => {
       const request = DesktopExternalLaunchRequestV1Schema.parse(value);
@@ -678,7 +813,7 @@ const registerIpc = (): void => {
       return true;
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.projectUnityLaunch,
     handler(async (value) => {
       const request = DesktopProjectUnityLaunchRequestV1Schema.parse(value);
@@ -687,7 +822,7 @@ const registerIpc = (): void => {
       return true;
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.windowAction,
     handler((value, event) => {
       const request = DesktopWindowActionRequestV1Schema.parse(value);
@@ -705,7 +840,7 @@ const registerIpc = (): void => {
       return true;
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.gitDiff,
     handler(async (value) => {
       const request = DesktopGitDiffRequestV1Schema.parse(value);
@@ -729,7 +864,7 @@ const registerIpc = (): void => {
       return readDiff(await workspaceFor(request.projectId, request.workspaceId), request.path);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptyCreate,
     handler(async (value) => {
       const request = DesktopPtyCreateRequestV1Schema.parse(value);
@@ -768,32 +903,32 @@ const registerIpc = (): void => {
       );
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptyList,
     handler(() => ptySessions.list()),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptySnapshot,
     handler((value) => {
       const request = DesktopPtySnapshotRequestV1Schema.parse(value);
       return ptySessions.snapshot(request.sessionId, request.afterCursor);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptyWrite,
     handler((value) => {
       const request = DesktopPtyWriteRequestV1Schema.parse(value);
       return ptySessions.write(request.sessionId, request.data);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptyResize,
     handler((value) => {
       const request = DesktopPtyResizeRequestV1Schema.parse(value);
       return ptySessions.resize(request.sessionId, request.columns, request.rows);
     }),
   );
-  ipcMain.handle(
+  activityHandle(
     DesktopIpcChannels.ptyClose,
     handler((value) => {
       const request = DesktopPtySessionRequestV1Schema.parse(value);
@@ -879,6 +1014,17 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await capture("05-project-home");
   await click(".locale-button");
   await capture("06-language-toggle");
+  await window.webContents.executeJavaScript(
+    "document.querySelector('.update-check > button').click()",
+  );
+  await waitFor(".update-check-panel");
+  assert.equal(
+    await window.webContents.executeJavaScript(
+      "window.honeybee.updateStatus().then(value => value.state)",
+    ),
+    "Unavailable",
+  );
+  await capture("09-update-check");
 };
 
 const createWindow = async (): Promise<void> => {
@@ -904,13 +1050,71 @@ const createWindow = async (): Promise<void> => {
   });
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
   mainWindow.on("close", (event) => {
-    if (!confirmTerminalQuit()) event.preventDefault();
+    if (!requestDesktopQuit()) event.preventDefault();
   });
   mainWindow.webContents.on("will-navigate", (event) => event.preventDefault());
-  if (!fixtureMode) mainWindow.once("ready-to-show", () => mainWindow?.show());
+  if (!fixtureMode && updateValidationId === undefined)
+    mainWindow.once("ready-to-show", () => mainWindow?.show());
   await writeSmokeStage("window-created");
   await loadRenderer(mainWindow);
+  if (updateValidationId !== undefined) {
+    validationRendererReady =
+      (await mainWindow.webContents.executeJavaScript(
+        `new Promise((resolve) => { const deadline = Date.now() + 15000; const inspect = () => { if (document.querySelector('.app-shell')) return resolve(true); if (Date.now() >= deadline) return resolve(false); setTimeout(inspect, 50); }; inspect(); })`,
+      )) === true;
+    assert(validationRendererReady, "Candidate renderer did not initialize");
+    return;
+  }
   await writeSmokeStage("renderer-loaded");
+  if (sessionSmokeMode) return;
+  if (lifecycleSmokeMode) {
+    assert(activityLease, "Lifecycle qualification requires managed activity participation");
+    assert(smokeTerminalRoot);
+    ptySessions.create("lifecycle", "test-only", smokeTerminalRoot, 80, 24, true);
+    let finish: () => void = () => {};
+    const pending = activityDrain.run(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    mainWindow.close();
+    assert(!mainWindow.isDestroyed());
+    assert.equal(lifecyclePrompts, 0, "Terminal consent preceded work drain");
+    await assert.rejects(
+      activityDrain.run(() => undefined),
+      /closing/u,
+    );
+    finish();
+    await pending;
+    const deadline = Date.now() + 10000;
+    while (lifecyclePrompts === 0 && Date.now() < deadline) await delay(25);
+    assert.equal(lifecyclePrompts, 1);
+    assert(!mainWindow.isDestroyed());
+    assert.equal(ptySessions.list().filter((session) => session.state === "running").length, 1);
+    activityLease.assertHeld();
+    await activityDrain.run(() => undefined);
+    await writeSmokeStage("lifecycle-cancelled");
+    assert(smokeResultPath);
+    const continuePath = `${smokeResultPath}.continue`;
+    const continuationDeadline = Date.now() + 60000;
+    let continued = false;
+    while (Date.now() < continuationDeadline) {
+      try {
+        await access(continuePath);
+        continued = true;
+        break;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      await delay(50);
+    }
+    assert(continued, "Lifecycle controller did not acknowledge cancellation check");
+    lifecycleConsent = true;
+    await writeSmokeStage("lifecycle-passed");
+    app.quit();
+    return;
+  }
   if (captureMode && captureDirectory !== undefined) {
     try {
       await captureVisualFixture(mainWindow, captureDirectory);
@@ -976,7 +1180,26 @@ const createWindow = async (): Promise<void> => {
 };
 
 const startDesktop = async (): Promise<void> => {
+  assert(
+    updateValidationId === undefined || (app.isPackaged && !fixtureMode),
+    "Validation requires a managed production Desktop",
+  );
   await writeSmokeStage("module-loaded");
+  if (app.isPackaged)
+    activityLease = await acquireInstalledActivity(
+      path.resolve(process.resourcesPath, "../.."),
+      updateValidationId,
+    );
+  const storageTools = app.isPackaged
+    ? await readInstalledStorage(path.resolve(process.resourcesPath, "../.."))
+    : undefined;
+  if (storageTools !== undefined) {
+    installedStorageCommand = storageTools.managed?.clientCommand;
+    core = new HoneyBeeWorkspaceCore({
+      storageTools,
+      usageCommand: path.join(process.resourcesPath, "win32-x64", "honeybee-usage.exe"),
+    });
+  }
   await app.whenReady();
   await writeSmokeStage("app-ready");
   Menu.setApplicationMenu(null);
@@ -984,10 +1207,28 @@ const startDesktop = async (): Promise<void> => {
     smokeTerminalRoot = await mkdtemp(path.join(tmpdir(), "honeybee-desktop-terminal-"));
   registerIpc();
   await createWindow();
+  if (activityLease !== undefined && (!fixtureMode || sessionSmokeMode)) {
+    const releaseRoot = path.resolve(process.resourcesPath, "../..");
+    updateSession = await openDesktopUpdateSession({
+      root: path.resolve(releaseRoot, "../.."),
+      version: path.basename(releaseRoot),
+      ...(updateValidationId === undefined ? {} : { validationId: updateValidationId }),
+      isReady: () =>
+        activityLease !== undefined &&
+        !activityLease.signal.aborted &&
+        mainWindow !== undefined &&
+        !mainWindow.isDestroyed() &&
+        !mainWindow.webContents.isLoading() &&
+        (updateValidationId === undefined || validationRendererReady),
+      shutdown: (signal) => updateShutdown.request(signal),
+      quit: () => app.quit(),
+    });
+  }
 };
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   app.on("second-instance", () => {
+    if (updateValidationId !== undefined) return;
     if (mainWindow?.isMinimized() === true) mainWindow.restore();
     mainWindow?.show();
     mainWindow?.focus();
@@ -1008,6 +1249,10 @@ app.on("window-all-closed", () => {
 });
 const confirmTerminalQuit = (): boolean =>
   ptySessions.requestQuit((running) => {
+    if (lifecycleSmokeMode) {
+      lifecyclePrompts++;
+      return lifecycleConsent;
+    }
     const korean = app.getLocale().startsWith("ko");
     const response = dialog.showMessageBoxSync({
       type: "question",
@@ -1023,6 +1268,22 @@ const confirmTerminalQuit = (): boolean =>
     });
     return response === 1;
   });
+const requestDesktopQuit = (): boolean => {
+  if (!activityDrain.requestQuit()) {
+    return false;
+  }
+  if (!confirmTerminalQuit()) {
+    activityDrain.cancelQuit();
+    return false;
+  }
+  return true;
+};
 app.on("before-quit", (event) => {
-  if (!confirmTerminalQuit()) event.preventDefault();
+  if (!requestDesktopQuit()) event.preventDefault();
+});
+// Release only after quit is accepted; cancellation retains shared ownership.
+app.on("will-quit", () => {
+  updateCheck.dispose();
+  void updateSession?.close();
+  void activityLease?.release();
 });

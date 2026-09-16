@@ -13,7 +13,14 @@ export default defineConfig({
     // identities. Isolate files on constrained Windows CI runners so one suite
     // cannot exhaust another suite's durable registration deadline.
     fileParallelism: !serializeWindowsCiFiles,
-    include: ["apps/**/*.test.ts", "packages/**/*.test.ts", "scripts/**/*.test.mjs"],
+    // Installation/update/qualification scripts use node:test and run through
+    // the corresponding package scripts. Vitest cannot collect those suites.
+    include: [
+      "apps/**/*.test.ts",
+      "packages/**/*.test.ts",
+      "scripts/security/**/*.test.mjs",
+      "scripts/dogfood/**/*.test.mjs",
+    ],
     passWithNoTests: false,
     reporters: ["default"],
   },

@@ -3,6 +3,7 @@ import { ArrowsOutSimple, Minus, X } from "@phosphor-icons/react";
 import type { ReactNode } from "react";
 
 import type { Locale, MessageKey } from "../i18n.js";
+import { UpdateCheck } from "./UpdateCheck.js";
 
 export function AppFrame({
   children,
@@ -23,6 +24,7 @@ export function AppFrame({
           <strong>HoneyBee</strong>
         </div>
         <div className="titlebar-drag" />
+        <UpdateCheck locale={locale} />
         <button className="locale-button" onClick={() => setLocale(locale === "ko" ? "en" : "ko")}>
           {t("language")}
         </button>
