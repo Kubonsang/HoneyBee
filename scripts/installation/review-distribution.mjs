@@ -12,6 +12,7 @@ import { summarizeFinalAcceptance } from "../qualification/final-acceptance.mjs"
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { renderWingetManifest } from "./winget-manifest.mjs";
 import { distributionPolicy, distributionReadiness } from "./distribution-policy.mjs";
+import { publicDeliveryAdmission } from "./beta32-delivery-approval.mjs";
 
 /** Offline handoff review, not a test runner or publishing authorization.
  * Trust anchors come from the caller, never from the distribution receipt. */
@@ -86,6 +87,7 @@ export async function reviewDistribution(options) {
     counts: acceptance.counts,
     ...policy,
     ...distributionReadiness(policy, acceptance),
+    ...publicDeliveryAdmission(policy, acceptance, receipt.version, options.deliveryApproval),
     evidenceVerifiedByTool: false,
     publicationAllowed: false,
   };

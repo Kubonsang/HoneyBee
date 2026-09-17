@@ -9,6 +9,7 @@ import { readBounded } from "../update/prepare-release.mjs";
 import { sha256 } from "../update/release-manifest.mjs";
 import { plainDirectory } from "../update/stage-release.mjs";
 import { resolveRecoverySource, verifyRecoverySourceFiles } from "../update/recovery-source.mjs";
+import { reconnectRecoveryWorkspaces } from "./reconnect-workspaces.mjs";
 
 const runtime = path.resolve(import.meta.dirname, "../..");
 const [rootArgument, transactionName, ...extra] = process.argv.slice(2);
@@ -70,6 +71,20 @@ const execute = async () => {
   const result = await withApplicationActivity(
     { installationRoot: root, mode: "exclusive", timeoutMs: 30000 },
     async ({ assertHeld }) => {
+      await verifySource();
+      let reconnectRecord = 0;
+      const reconnect = () =>
+        reconnectRecoveryWorkspaces({
+          root,
+          version: approved.version,
+          assertHeld,
+          record: async (event, value) =>
+            writeFile(
+              path.join(evidence, `workspace-${reconnectRecord++}.json`),
+              JSON.stringify({ event, ...value }),
+              { flag: "wx" },
+            ),
+        });
       const recovered = await recoverAppPointer(
         {
           installationRoot: root,
@@ -91,7 +106,16 @@ const execute = async () => {
               "Automatic recovery only authorizes the approved source",
             );
             assertHeld();
-            const checked = await health();
+            let checked = await health();
+            const failed = checked.report?.checks.filter((check) => check.status === "fail");
+            if (
+              !checked.ready &&
+              failed?.length > 0 &&
+              failed.every((check) => check.code === "workspace.repair-required")
+            ) {
+              await reconnect();
+              checked = await health();
+            }
             assertHeld();
             return checked.ready;
           },

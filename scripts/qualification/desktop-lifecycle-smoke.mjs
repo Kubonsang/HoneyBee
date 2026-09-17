@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 import { withApplicationActivity } from "../update/application-activity.mjs";
 const repository = path.resolve(import.meta.dirname, "../..");
 const candidate = JSON.parse(
-  await readFile(path.join(repository, "output/two-version-qa/candidate.json")),
+  await readFile(process.argv[2] ?? path.join(repository, "output/two-version-qa/candidate.json")),
 );
 const root = path.resolve(candidate.installation);
 assert(

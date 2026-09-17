@@ -28,6 +28,25 @@ an unsigned artifact. WinGet external submission remains excluded.
 
 ## Acceptance ledger
 
+### Approved public-delivery ordering (2026-09-16)
+
+The user subsequently approved testing the actual public GitHub route and local
+WinGet installation immediately after beta publication. This is restricted to
+the pinned beta.32 candidate documented in
+`acceptance-completion-2026-09-16.md`. Gates 04 and 16 retain their pending public
+checks until they run. Every other gate and their prepublication portions must
+pass before `publish-for-verification`. Publication is not release completion;
+failed delivery verification requires withdrawal. Ordinary publication readiness,
+the Authenticode exception, and the sixteen-gate scope remain unchanged.
+
+On 2026-09-17 the user explicitly approved continuing public verification for
+beta.35 after the fourteen prepublication gates passed. This adds only candidate
+Setup `643a944173291018a9d2a357f7edf52874f874dfd644f01e9b1b60ace2c40c04`
+and manifest `5d895f4e603c423ea99e3387e61f2e2fa02dd54a7f9436a9be7b68e8179c7df4`
+under `beta35-public-delivery-20260917`. The two public checks remain pending;
+failed public verification requires withdrawal. It does not authorize stable
+publication or mark acceptance complete.
+
 `Partial` means existing evidence is accepted but does not cover the entire final
 behavior. It is not an instruction to repeat the earlier fixture scenario.
 Guest console reports remain valid attributed evidence; exporting full logs is not

@@ -10,6 +10,7 @@ import test from "node:test";
 import { pathToFileURL } from "node:url";
 import { sha256 } from "./release-manifest.mjs";
 import { activateAppPointer, recoverAppPointer } from "./app-activation.mjs";
+import { runDoctorProcess } from "./version-health.mjs";
 
 const fixture = async () => {
   const base = path.resolve("output/activation-tests");
@@ -101,6 +102,41 @@ test("post-switch health failure restores exact old pointer bytes", async () => 
     },
     health: async ({ version }) => !(switched && version === f.options.targetVersion),
   });
+  assert.equal(result.state, "RolledBack");
+  assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
+  await preserved(f);
+});
+test("native process start failure after switching restores the exact source pointer", async () => {
+  const f = await fixture();
+  const probe = path.join(f.root, "healthy-process.cjs");
+  await writeFile(probe, 'process.stdout.write("native-control-ok")');
+  assert.equal(
+    (await runDoctorProcess({ node: process.execPath, cli: probe, cwd: f.root, timeoutMs: 10000 }))
+      .stdout,
+    "native-control-ok",
+  );
+  let failures = 0;
+  let switched = false;
+  const result = await activateAppPointer(f.options, {
+    ...f.hooks,
+    checkpoint: async (state) => {
+      if (state === "switched") switched = true;
+    },
+    health: async ({ version }) => {
+      if (version !== f.options.targetVersion || !switched) return true;
+      await assert.rejects(
+        runDoctorProcess({
+          node: path.join(f.root, "missing-node.exe"),
+          cli: probe,
+          cwd: f.root,
+          timeoutMs: 10000,
+        }),
+      );
+      failures++;
+      return false;
+    },
+  });
+  assert.equal(failures, 1);
   assert.equal(result.state, "RolledBack");
   assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
   await preserved(f);

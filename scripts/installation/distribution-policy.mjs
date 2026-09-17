@@ -3,12 +3,21 @@ import assert from "node:assert/strict";
 /** Draft delivery is reviewable before qualification finishes. Public release
  * still requires the original signed/explicit unsigned-beta acceptance decision. */
 export function assertDistributionActionAllowed(review, action) {
-  assert(["stage", "publish"].includes(action), "Unknown publication action");
+  assert(
+    ["stage", "publish", "publish-for-verification"].includes(action),
+    "Unknown publication action",
+  );
   assert.equal(review.artifactsVerified, true, "Distribution artifacts are not verified");
   if (action === "publish")
     assert(
       review.unsignedBetaReady === true || review.signedReleaseReady === true,
       "Final acceptance has unresolved release gates",
+    );
+  if (action === "publish-for-verification")
+    assert.equal(
+      review.publicDeliveryVerificationAllowed,
+      true,
+      "Public delivery verification not admitted",
     );
 }
 

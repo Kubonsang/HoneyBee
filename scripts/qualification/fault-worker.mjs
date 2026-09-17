@@ -32,7 +32,15 @@ const mapping = {
   "app-health-failure": "validated",
 };
 const result = await activateAuthenticatedUpdate(
-  { installationRoot: root, runtime: path.join(root, "recovery/v1"), request },
+  {
+    installationRoot: root,
+    runtime: path.join(root, "recovery/v1"),
+    request,
+    activationJob: {
+      directory: path.join(root, "update/jobs", config.job.name),
+      requestSha256: config.job.sha256,
+    },
+  },
   {
     checkpoint: async (state, transactionDirectory) => {
       if (mapping[config.point] !== state) return;

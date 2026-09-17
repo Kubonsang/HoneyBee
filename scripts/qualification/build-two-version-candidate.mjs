@@ -10,7 +10,7 @@ const version = process.argv[2] ?? "0.1.0-beta.12";
 const maintenanceBaseline = process.argv[3] === "--maintenance-baseline";
 assert(
   (process.argv.length <= 3 &&
-    [12, 13, 14, 16, 17, 18, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34]
+    [12, 13, 14, 16, 17, 18, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36]
       .map((n) => "0.1.0-beta." + n)
       .includes(version)) ||
     (process.argv.length === 4 &&

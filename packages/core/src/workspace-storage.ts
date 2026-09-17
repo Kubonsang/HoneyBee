@@ -276,6 +276,7 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
   public async heartbeat(
     command: StorageCommand,
     leaseId: string,
+    options: Readonly<{ inactiveOnly?: boolean }> = {},
   ): Promise<StorageLease | undefined> {
     try {
       const lease = this.#lease(
@@ -294,9 +295,10 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     } catch (error) {
       if (
         error instanceof WorkspaceCoreError &&
-        ["lease-not-active", "lease-not-found", "lease-not-ready"].includes(
-          error.upstreamCode ?? "",
-        )
+        (options.inactiveOnly
+          ? ["lease-not-active"]
+          : ["lease-not-active", "lease-not-found", "lease-not-ready"]
+        ).includes(error.upstreamCode ?? "")
       ) {
         return undefined;
       }

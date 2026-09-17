@@ -8,14 +8,15 @@ import { reviewDistribution } from "./review-distribution.mjs";
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { assertDistributionActionAllowed } from "./distribution-policy.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
+import { beta35DeliveryApproval } from "./beta32-delivery-approval.mjs";
 
 const [configPath, notesPath, commit, action] = process.argv.slice(2);
 assert(
   configPath &&
     notesPath &&
     /^[a-f0-9]{40}$/u.test(commit) &&
-    ["stage", "publish"].includes(action),
-  "Usage: publish-beta.mjs <review-config.json> <release-notes.md> <full-remote-commit> <stage|publish>",
+    ["stage", "publish", "publish-for-verification"].includes(action),
+  "Usage: publish-beta.mjs <review-config.json> <release-notes.md> <full-remote-commit> <stage|publish|publish-for-verification>",
 );
 const options = JSON.parse(await readBounded(configPath, 64 * 1024));
 const review = await reviewDistribution(options);
@@ -35,6 +36,11 @@ assert.equal(
   "Release URL differs from intended GitHub tag",
 );
 const notes = await readBounded(notesPath, 256 * 1024);
+if (action === "publish-for-verification")
+  assert(
+    notes.toString("utf8").includes("Public delivery verification pending"),
+    "Pending public verification must be disclosed",
+  );
 if (review.releaseMode === "unsigned-beta")
   assert(
     notes.toString("utf8").includes("Windows Authenticode: not signed"),
@@ -47,6 +53,16 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
+const includeWinget = receipt.version === beta35DeliveryApproval.version;
+if (includeWinget) {
+  assert.equal(review.candidate.setupSha256, beta35DeliveryApproval.setupSha256);
+  assert.equal(review.candidate.manifestSha256, beta35DeliveryApproval.manifestSha256);
+  assert.equal(
+    (await digestDistributionFile(path.join(distribution, "Kubonsang.HoneyBee.yaml"))).sha256,
+    beta35DeliveryApproval.wingetManifestSha256,
+  );
+  assets.push("Kubonsang.HoneyBee.yaml");
+}
 assert.equal(new Set(assets).size, assets.length, "Conflicting release asset names");
 const hashes = Object.fromEntries(
   await Promise.all(
@@ -56,7 +72,7 @@ const hashes = Object.fromEntries(
 assert.equal(
   await readFile(path.join(distribution, "SHA256SUMS.txt"), "utf8"),
   assets
-    .filter((name) => name !== "SHA256SUMS.txt")
+    .filter((name) => name !== "SHA256SUMS.txt" && name !== "Kubonsang.HoneyBee.yaml")
     .map((name) => `${hashes[name].sha256}  ${name}`)
     .join("\n") + "\n",
   "Checksum list differs from release assets",
@@ -181,7 +197,7 @@ assert.equal(
   notes.toString("utf8").replaceAll("\r\n", "\n").trimEnd(),
   "Draft notes differ",
 );
-if (action === "publish") {
+if (action === "publish" || action === "publish-for-verification") {
   // Repeat local admission after the network roundtrip; do not rerun qualification.
   const final = await reviewDistribution(options);
   assert.deepEqual(final, review, "Candidate or acceptance changed before publication");
@@ -208,6 +224,13 @@ const result = {
   hashes,
   releaseMode: review.releaseMode,
   authenticode: review.authenticode,
+  releaseCompleted: action === "publish",
+  ...(action === "publish-for-verification"
+    ? {
+        deliveryApproval: review.deliveryApproval,
+        remainingPublicChecks: review.remainingPublicChecks,
+      }
+    : {}),
 };
 await writeFile(path.join(attempt, "result.json"), JSON.stringify(result, null, 2) + "\n", {
   flag: "wx",
