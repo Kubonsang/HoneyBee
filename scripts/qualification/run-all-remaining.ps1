@@ -66,4 +66,8 @@ if(-not (Test-Path -LiteralPath (Join-Path $bundle 'public-delivery-ready.json')
 $approval=Get-Content -LiteralPath (Join-Path $bundle 'public-delivery-ready.json') -Raw -Encoding UTF8|ConvertFrom-Json
 $inputs=Get-Content -LiteralPath (Join-Path $bundle 'inputs.json') -Raw -Encoding UTF8|ConvertFrom-Json
 if($approval.setupSha256 -ne $inputs.candidate.setupSha256 -or $approval.manifestSha256 -ne $inputs.candidate.manifestSha256 -or -not $approval.publishedForVerification){throw 'Public delivery candidate differs'}
-& (Join-Path $PSScriptRoot 'remaining-public-delivery.ps1')
+if(Test-Path -LiteralPath (Join-Path $bundle 'Public-Evidence\winget-exit.json')){
+ & (Join-Path $PSScriptRoot 'remaining-winget-resume.ps1')
+} else {
+ & (Join-Path $PSScriptRoot 'remaining-public-delivery.ps1')
+}

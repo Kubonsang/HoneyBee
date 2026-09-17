@@ -65,3 +65,23 @@ discovery/download and local WinGet installation remain after prepublication
 readiness. The user explicitly approved the beta.35 public-verification order on
 2026-09-17; see `beta35-public-verification.md`. This does not mark those public
 checks passed or complete acceptance.
+
+On 2026-09-18, the attributed guest report in
+`output/reboot-fix-20260917/reported-public-winget-pass.json` confirms public
+download, observed cancellation/retry, successful interactive WinGet installation,
+ready Doctor and preservation after beta.35 activation. The original silent
+WinGet failure remains retained. Gate 16's local installation requirement is now
+passed; its approved Authenticode deferral remains unchanged.
+
+The same report explicitly records `downloadProgressObserved: false`. Gate 04
+therefore remains partial for displayed download progress. Existing controller
+unit tests exercise progress callbacks with synthetic byte counts; they do not
+replace this missing observation of the integrated public download. No acceptance
+promotion or release completion is recorded by this report.
+
+The subsequent isolated public-download integration closed the progress gap
+without changing that guest report. See `beta35-public-completion.md` for exact
+packaged-component binding, real-byte progress screenshots and scope. Final
+review reports `unsignedBetaReady: true`; public asset verification and final
+release-note publication completed on 2026-09-18. The unsigned Authenticode
+exception remains explicit.

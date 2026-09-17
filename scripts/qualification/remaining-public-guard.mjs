@@ -20,14 +20,14 @@ const receiptPath = path.join(
   "UnityWorkspaceStorage/install-receipt.json",
 );
 const mode = process.argv[2];
-assert(["before", "after"].includes(mode));
+assert(["before", "resume", "after"].includes(mode));
 const snapshot = await snapshotRegisteredProject({
   installationRoot: root,
   projectId: completed.projectId,
 });
 const pointer = await json(path.join(root, "current.json"));
 const receiptSha256 = sha256(await readFile(receiptPath));
-if (mode === "before") {
+if (mode === "before" || mode === "resume") {
   assert.equal(pointer.activeVersion, "0.1.0-beta.32");
   const trust = await json(path.join(root, "recovery/v1/update-trust.json"));
   const authenticated = authenticateReleaseManifest(
@@ -41,15 +41,21 @@ if (mode === "before") {
     sha256(await readFile(path.join(evidence, "Kubonsang.HoneyBee.yaml"))),
     inputs.publicDelivery.wingetManifestSha256,
   );
-  await writeFile(
-    path.join(evidence, "before.json"),
-    JSON.stringify({
-      snapshot,
-      receiptSha256,
-      targetLaunchSha256: authenticated.manifest.recovery.launchManifestSha256,
-    }) + "\n",
-    { flag: "wx" },
-  );
+  if (mode === "resume") {
+    const original = await json(path.join(evidence, "before.json"));
+    assertPreserved(original.snapshot, snapshot);
+    assert.equal(original.receiptSha256, receiptSha256);
+    assert.equal(original.targetLaunchSha256, authenticated.manifest.recovery.launchManifestSha256);
+  } else
+    await writeFile(
+      path.join(evidence, "before.json"),
+      JSON.stringify({
+        snapshot,
+        receiptSha256,
+        targetLaunchSha256: authenticated.manifest.recovery.launchManifestSha256,
+      }) + "\n",
+      { flag: "wx" },
+    );
 } else {
   const before = await json(path.join(evidence, "before.json"));
   assertPreserved(before.snapshot, snapshot);
