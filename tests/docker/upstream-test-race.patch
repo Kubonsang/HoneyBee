@@ -41,7 +41,17 @@ diff --git a/workspace/removal_test.go b/workspace/removal_test.go
  	}
  	if _, err := broker.store.ReadRemovalReceipt("abort-remove"); !os.IsNotExist(err) {
  		t.Fatalf("abort receipt remains: %v", err)
-@@ -223,10 +223,13 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+@@ -217,6 +217,8 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+ 	deadline := time.Now().Add(time.Second)
+ 	for {
+-		_, err := broker.store.ReadRemovalReceipt("abort-remove")
++		// Observe absence without opening the receipt: a polling reader can
++		// deny the timer's deletion on Windows and create its own failure.
++		_, err := os.Lstat(filepath.Join(broker.store.paths.Receipts, "removal-abort-remove.json"))
+ 		if os.IsNotExist(err) {
+ 			break
+ 		}
+@@ -223,10 +225,13 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
  		if time.Now().After(deadline) {
 -			t.Fatalf("reservation did not expire: %v", err)
 +			broker.mu.Lock()

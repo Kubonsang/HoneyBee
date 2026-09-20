@@ -47,6 +47,11 @@ atomic and changes only two `_test.go` files. Its digest is recorded separately
 from the production overlay; preparation refuses any other target filenames.
 No hb15 production source or component identity is changed by this test fix.
 The affected test additionally runs 50 times under the race detector.
+Its expiry observer uses file metadata rather than repeatedly opening the receipt:
+on Windows the polling reader otherwise denies deletion and causes the failure
+it observes. The one-second deadline, abort count, receipt absence and preserved
+Library assertions remain in place. This does not qualify production recovery
+from unrelated processes holding conflicting file handles.
 
 Evidence is per-run: source inventory, build log, image identity, combined stage
 log and final result. No public release or VM storage mutation is part of this
