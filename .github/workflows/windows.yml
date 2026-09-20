@@ -29,6 +29,12 @@ jobs:
           go-version: "1.26.2"
           cache-dependency-path: tools/workspace-storage-host/go.sum
       - run: pnpm install --frozen-lockfile
+      - name: Preflight native metadata replay
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
+          go -C tools/workspace-storage-host test ./... -run '^(TestRestoreMetadataNativeReplay|TestRestoreMetadataSparseFlagAndReplay|TestRestoreMetadataInterruptionAfterSecurity|TestRestoreDirectoryMetadataNativeReplay|TestRestoreCompressedMetadataIntentAndReplay|TestStoreRestoreNativeCompositionAndReplay)$' -count=1 -timeout=120s 2>&1 | Tee-Object -FilePath artifacts/quality/metadata-replay.log
+          exit $LASTEXITCODE
       - name: Verify source
         shell: pwsh
         run: |

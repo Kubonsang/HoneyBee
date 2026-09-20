@@ -31,6 +31,20 @@ func metadataFixture(t *testing.T) (*os.File, storeInventoryEntry) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Only diagnostic data from this test-owned temporary fixture. Keep the
+	// handle open until this cleanup runs so hosted-runner inheritance changes
+	// can be distinguished from a permissions failure without relaxing readback.
+	t.Cleanup(func() {
+		if !t.Failed() {
+			return
+		}
+		actual, readErr := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+		if readErr != nil {
+			t.Logf("metadata fixture security readback failed: %v", readErr)
+			return
+		}
+		t.Logf("metadata fixture expected SDDL=%q; actual SDDL=%q", sd.String(), actual.String())
+	})
 	hash := sha256.Sum256(data)
 	return file, storeInventoryEntry{Name: "restored.bin", Size: int64(len(data)), SHA256: hex.EncodeToString(hash[:]), Security: sd.String(), Attributes: windows.FILE_ATTRIBUTE_ARCHIVE | windows.FILE_ATTRIBUTE_READONLY | windows.FILE_ATTRIBUTE_HIDDEN}
 }
