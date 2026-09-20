@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
 import { inventoryTree, verifyRepairApplication } from "./fresh-install.mjs";
 
 test("Repair admits the selected release with older versions and preserves user state", async (t) => {
-  const root = await mkdtemp(path.join(tmpdir(), "honeybee-repair-admission-"));
+  // Hosted Windows TEMP can use an 8.3 alias. Capture the real fixture root
+  // before admission; do not relax production payload redirection checks.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "honeybee-repair-admission-")));
   t.after(() => rm(root, { recursive: true, force: true }));
   const version = "0.1.0-beta.12";
   await mkdir(path.join(root, "versions", version, "desktop"), { recursive: true });
