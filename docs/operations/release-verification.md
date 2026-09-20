@@ -221,6 +221,16 @@ Supply the scenario's estimated peak growth, not the illustrative 1 GiB above.
 
 ## Current rollout
 
+Windows metadata replay fixtures establish auto-inheritance before capturing
+their backup inventory. This makes positive tests independent of a runner's
+legacy inherited ACL defaults; it does not normalize production backups.
+Restoration still requires exact security-descriptor readback. If Windows adds
+the auto-inherited control flag to a recorded legacy descriptor during replay,
+restoration fails closed rather than claiming exact recovery. Separate negative
+tests cover that mismatch and changed access permissions; protected ACL replay
+is also tested. See Microsoft's
+[automatic propagation rules](https://learn.microsoft.com/en-us/windows/win32/secauthz/automatic-propagation-of-inheritable-aces).
+
 The first integrated report for issue46 is expected to remain blocked until its
 Windows CI and real native evidence exist for the same final source/candidate.
 The old Docker pass is historical evidence, not a pass for newly changed code.

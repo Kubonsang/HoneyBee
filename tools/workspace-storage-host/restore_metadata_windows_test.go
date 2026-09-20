@@ -8,10 +8,55 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"golang.org/x/sys/windows"
 )
+
+// Establish the current inheritance model before capturing a positive fixture.
+// Hosted runners can inherit legacy ACLs with inherited ACEs but no AI control
+// bit. SetSecurityInfo converts those on restoration; production must continue
+// refusing that non-exact readback rather than silently rewriting an inventory.
+func initializeMetadataFixtureInheritance(t *testing.T, handle windows.Handle) *windows.SECURITY_DESCRIPTOR {
+	t.Helper()
+	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dacl, _, err := sd.DACL()
+	if err != nil || dacl == nil {
+		t.Fatal("fixture DACL missing", err)
+	}
+	if err = windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.UNPROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {
+		t.Fatal(err)
+	}
+	sd, err = windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	control, _, err := sd.Control()
+	if err != nil || control&windows.SE_DACL_AUTO_INHERITED == 0 || control&windows.SE_DACL_PROTECTED != 0 {
+		t.Fatal("positive fixture did not enter unprotected auto-inheritance model", err)
+	}
+	return sd
+}
+
+func initializeMetadataFixtureDirectory(t *testing.T, name string) {
+	t.Helper()
+	pointer, err := windows.UTF16PtrFromString(name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handle, err := windows.CreateFile(pointer, windows.READ_CONTROL|windows.WRITE_DAC,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING,
+		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer windows.CloseHandle(handle)
+	initializeMetadataFixtureInheritance(t, handle)
+}
 
 func metadataFixture(t *testing.T) (*os.File, storeInventoryEntry) {
 	t.Helper()
@@ -27,10 +72,7 @@ func metadataFixture(t *testing.T) (*os.File, storeInventoryEntry) {
 	}
 	file := os.NewFile(uintptr(handle), path)
 	t.Cleanup(func() { _ = file.Close(); _ = windows.SetFileAttributes(pointer, windows.FILE_ATTRIBUTE_NORMAL) })
-	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sd := initializeMetadataFixtureInheritance(t, handle)
 	// Only diagnostic data from this test-owned temporary fixture. Keep the
 	// handle open until this cleanup runs so hosted-runner inheritance changes
 	// can be distinguished from a permissions failure without relaxing readback.
@@ -76,6 +118,88 @@ func TestRestoreMetadataNativeReplay(t *testing.T) {
 	}
 	if persisted != 2 {
 		t.Fatal("replay skipped durable authority")
+	}
+}
+
+func TestRestoreMetadataRejectsUnreproducedInheritanceModel(t *testing.T) {
+	file, entry := metadataFixture(t)
+	sd, err := windows.SecurityDescriptorFromString(entry.Security)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = sd.SetControl(windows.SE_DACL_AUTO_INHERITED, 0); err != nil {
+		t.Fatal(err)
+	}
+	entry.Security = sd.String()
+	before := entry
+	persisted := 0
+	err = restoreHeldFileMetadata(file, entry, func() error { return nil }, func(got storeInventoryEntry) error {
+		if got != before {
+			t.Fatal("restore silently normalized recorded inventory")
+		}
+		persisted++
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "security descriptor differs") || persisted != 1 {
+		t.Fatal("unreproduced inheritance model was not refused", err, persisted)
+	}
+}
+
+func TestRestoreMetadataProtectedReplayAndDACLReadback(t *testing.T) {
+	for _, tamper := range []bool{false, true} {
+		name := "exact-protected-replay"
+		if tamper {
+			name = "changed-permissions-refused"
+		}
+		t.Run(name, func(t *testing.T) {
+			file, entry := metadataFixture(t)
+			handle := windows.Handle(file.Fd())
+			sd, err := windows.SecurityDescriptorFromString(entry.Security)
+			if err != nil {
+				t.Fatal(err)
+			}
+			dacl, _, _ := sd.DACL()
+			setDACL := func(acl *windows.ACL) error {
+				return windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, acl, nil)
+			}
+			if err = setDACL(dacl); err != nil {
+				t.Fatal(err)
+			}
+			protected, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry.Security = protected.String()
+			t.Cleanup(func() {
+				if err := setDACL(dacl); err != nil {
+					t.Error("fixture cleanup DACL", err)
+				}
+			})
+			checks := 0
+			check := func() error {
+				checks++
+				if tamper && checks == 3 { // after SetSecurityInfo, before exact readback
+					empty, e := windows.SecurityDescriptorFromString("D:P")
+					if e != nil {
+						return e
+					}
+					acl, _, e := empty.DACL()
+					if e != nil || acl == nil {
+						return errors.New("test requires an empty, not null, DACL")
+					}
+					return setDACL(acl)
+				}
+				return nil
+			}
+			err = restoreHeldFileMetadata(file, entry, check, func(storeInventoryEntry) error { return nil })
+			if tamper {
+				if err == nil || !strings.Contains(err.Error(), "security descriptor differs") {
+					t.Fatal("changed access rights accepted", err)
+				}
+			} else if err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 
@@ -161,10 +285,7 @@ func TestRestoreDirectoryMetadataNativeReplay(t *testing.T) {
 	}
 	file := os.NewFile(uintptr(handle), path)
 	t.Cleanup(func() { _ = file.Close(); _ = windows.SetFileAttributes(pointer, windows.FILE_ATTRIBUTE_DIRECTORY) })
-	sd, err := windows.GetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION|windows.GROUP_SECURITY_INFORMATION|windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sd := initializeMetadataFixtureInheritance(t, handle)
 	entry := storeInventoryEntry{Name: ".", Directory: true, Security: sd.String(), Attributes: windows.FILE_ATTRIBUTE_DIRECTORY | windows.FILE_ATTRIBUTE_HIDDEN}
 	dacl, _, _ := sd.DACL()
 	if err = windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil); err != nil {

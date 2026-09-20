@@ -33,7 +33,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
-          go -C tools/workspace-storage-host test ./... -run '^(TestRestoreMetadataNativeReplay|TestRestoreMetadataSparseFlagAndReplay|TestRestoreMetadataInterruptionAfterSecurity|TestRestoreDirectoryMetadataNativeReplay|TestRestoreCompressedMetadataIntentAndReplay|TestStoreRestoreNativeCompositionAndReplay)$' -count=1 -timeout=120s 2>&1 | Tee-Object -FilePath artifacts/quality/metadata-replay.log
+          go -C tools/workspace-storage-host test ./... -run '^(TestRestoreMetadata|TestRestoreDirectoryMetadata|TestRestoreCompressedMetadata|TestStoreRestoreNative)' -count=1 -timeout=120s 2>&1 | Tee-Object -FilePath artifacts/quality/metadata-replay.log
           exit $LASTEXITCODE
       - name: Verify source
         shell: pwsh
