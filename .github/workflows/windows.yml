@@ -29,6 +29,12 @@ jobs:
           go-version: "1.26.2"
           cache-dependency-path: tools/workspace-storage-host/go.sum
       - run: pnpm install --frozen-lockfile
+      - name: Canonicalize runner temporary directory
+        shell: pwsh
+        run: |
+          # Positive fixtures use real paths; production redirection checks stay strict.
+          # Hosted TEMP may contain RUNNER~1 even though realpath returns runneradmin.
+          node --input-type=module -e 'import fs from "node:fs"; import os from "node:os"; const temp = fs.realpathSync.native(os.tmpdir()); if (/[\r\n]/.test(temp)) throw new Error("Invalid temporary directory"); fs.appendFileSync(process.env.GITHUB_ENV, `TEMP=${temp}\nTMP=${temp}\n`);'
       - name: Preflight native metadata replay
         shell: pwsh
         run: |
