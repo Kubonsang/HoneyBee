@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -33,7 +34,7 @@ const setup = async () => {
   );
   return { f, options: { ...plan, installationRoot: f.installationRoot }, observe, observation };
 };
-test("Windows handle excludes a second owner and can be reused after release", async () => {
+windowsTest("Windows handle excludes a second owner and can be reused after release", async () => {
   const f = await setup();
   await withInstallationUpdateLock(f.f.installationRoot, async () => {
     await assert.rejects(
@@ -42,7 +43,7 @@ test("Windows handle excludes a second owner and can be reused after release", a
   });
   await withInstallationUpdateLock(f.f.installationRoot, async ({ assertHeld }) => assertHeld());
 });
-test("validation transaction is durable but never activates", async () => {
+windowsTest("validation transaction is durable but never activates", async () => {
   const f = await setup();
   const result = await runUpdateTransaction(f.options, { observe: f.observe });
   assert.equal(result.activationAllowed, false);
@@ -53,37 +54,40 @@ test("validation transaction is durable but never activates", async () => {
   ]);
   await preserved(f.f);
 });
-test("failed transaction blocks new work until explicit recovery with the same plan", async () => {
-  const f = await setup();
-  let directory;
-  await assert.rejects(
-    runUpdateTransaction(f.options, {
-      observe: f.observe,
-      checkpoint: async (state, dir) => {
-        directory = dir;
-        if (state === "validating") throw new Error("injected interruption");
-      },
-    }),
-  );
-  await assert.rejects(
-    runUpdateTransaction(f.options, { observe: f.observe }),
-    /Interrupted transaction/u,
-  );
-  await assert.rejects(
-    runUpdateTransaction(
-      { ...f.options, transactionDirectory: directory, planSha256: sha256("wrong") },
+windowsTest(
+  "failed transaction blocks new work until explicit recovery with the same plan",
+  async () => {
+    const f = await setup();
+    let directory;
+    await assert.rejects(
+      runUpdateTransaction(f.options, {
+        observe: f.observe,
+        checkpoint: async (state, dir) => {
+          directory = dir;
+          if (state === "validating") throw new Error("injected interruption");
+        },
+      }),
+    );
+    await assert.rejects(
+      runUpdateTransaction(f.options, { observe: f.observe }),
+      /Interrupted transaction/u,
+    );
+    await assert.rejects(
+      runUpdateTransaction(
+        { ...f.options, transactionDirectory: directory, planSha256: sha256("wrong") },
+        { observe: f.observe },
+      ),
+      /pin mismatch/u,
+    );
+    const result = await runUpdateTransaction(
+      { ...f.options, transactionDirectory: directory },
       { observe: f.observe },
-    ),
-    /pin mismatch/u,
-  );
-  const result = await runUpdateTransaction(
-    { ...f.options, transactionDirectory: directory },
-    { observe: f.observe },
-  );
-  assert.equal(result.state, "Validated");
-  await preserved(f.f);
-});
-test("stale failed plan can be abandoned without deleting its files", async () => {
+    );
+    assert.equal(result.state, "Validated");
+    await preserved(f.f);
+  },
+);
+windowsTest("stale failed plan can be abandoned without deleting its files", async () => {
   const f = await setup();
   let directory;
   await assert.rejects(
@@ -104,7 +108,7 @@ test("stale failed plan can be abandoned without deleting its files", async () =
   await runUpdateTransaction(f.options, { observe: f.observe });
   await preserved(f.f);
 });
-test(
+windowsTest(
   "killing a transaction process releases ownership and leaves recoverable intent",
   { timeout: 20000 },
   async (t) => {
@@ -149,7 +153,7 @@ test(
     await preserved(f.f);
   },
 );
-test("installation roots have independent locks", async () => {
+windowsTest("installation roots have independent locks", async () => {
   const base = path.resolve("output/update-lock-tests");
   await mkdir(base, { recursive: true });
   const a = await mkdtemp(path.join(base, "a-")),
@@ -159,7 +163,7 @@ test("installation roots have independent locks", async () => {
   );
 });
 
-test("corrupt durable journal blocks replay and new work", async () => {
+windowsTest("corrupt durable journal blocks replay and new work", async () => {
   const f = await setup();
   let directory;
   await assert.rejects(

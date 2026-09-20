@@ -1,0 +1,54 @@
+diff --git a/workspace/broker_test.go b/workspace/broker_test.go
+--- a/workspace/broker_test.go
++++ b/workspace/broker_test.go
+@@ -9,6 +9,7 @@ import (
+ 	"runtime"
+ 	"strings"
+ 	"sync"
++	"sync/atomic"
+ 	"testing"
+ 	"time"
+ )
+@@ -176,7 +177,7 @@ type fakeChildSession struct {
+ 	released     bool
+ 	prepareErr   error
+ 	prepareCalls int
+-	abortCalls   int
++	abortCalls   atomic.Int32
+ 	commitCalls  int
+ }
+ 
+@@ -238,7 +239,7 @@ func (removal *fakeChildRemoval) Abort() error {
+ 		return fmt.Errorf("removal was committed")
+ 	}
+ 	removal.aborted = true
+-	removal.session.abortCalls++
++	removal.session.abortCalls.Add(1)
+ 	return nil
+ }
+ 
+diff --git a/workspace/removal_test.go b/workspace/removal_test.go
+--- a/workspace/removal_test.go
++++ b/workspace/removal_test.go
+@@ -202,8 +202,8 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+ 	if response := broker.Handle(context.Background(), "S-1-5-21-test", abort); !response.OK || response.Removal == nil || response.Removal.State != removalAborted {
+ 		t.Fatalf("abort=%+v", response)
+ 	}
+-	if session.abortCalls != 1 {
+-		t.Fatalf("abort calls=%d", session.abortCalls)
++	if session.abortCalls.Load() != 1 {
++		t.Fatalf("abort calls=%d", session.abortCalls.Load())
+ 	}
+ 	if _, err := broker.store.ReadRemovalReceipt("abort-remove"); !os.IsNotExist(err) {
+ 		t.Fatalf("abort receipt remains: %v", err)
+@@ -225,8 +225,8 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+ 		}
+ 		time.Sleep(5 * time.Millisecond)
+ 	}
+-	if session.abortCalls != 2 {
+-		t.Fatalf("expiry abort calls=%d", session.abortCalls)
++	if session.abortCalls.Load() != 2 {
++		t.Fatalf("expiry abort calls=%d", session.abortCalls.Load())
+ 	}
+ 	if _, err := os.Lstat(filepath.Join(workspaces, "abort-remove", "Library")); err != nil {
+ 		t.Fatalf("expiry mutated Library: %v", err)

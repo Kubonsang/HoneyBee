@@ -12,7 +12,11 @@ import { summarizeFinalAcceptance } from "../qualification/final-acceptance.mjs"
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { renderWingetManifest } from "./winget-manifest.mjs";
 import { distributionPolicy, distributionReadiness } from "./distribution-policy.mjs";
-import { publicDeliveryAdmission } from "./beta32-delivery-approval.mjs";
+import {
+  publicDeliveryAdmission,
+  loadDeliveryApproval,
+  beta36DeliveryApprovalId,
+} from "./beta32-delivery-approval.mjs";
 
 /** Offline handoff review, not a test runner or publishing authorization.
  * Trust anchors come from the caller, never from the distribution receipt. */
@@ -79,6 +83,13 @@ export async function reviewDistribution(options) {
   );
   const candidate = { setupSha256: setup.sha256, manifestSha256: authenticated.manifestSha256 };
   assert.deepEqual(acceptance.candidate, candidate, "Acceptance belongs to a different candidate");
+  const approval = await loadDeliveryApproval(options);
+  if (approval?.id === beta36DeliveryApprovalId)
+    assert.equal(
+      (await digestDistributionFile(path.join(directory, "Kubonsang.HoneyBee.yaml"))).sha256,
+      approval.wingetManifestSha256,
+      "Approved WinGet manifest differs",
+    );
   return {
     schemaVersion: 1,
     candidate,
@@ -87,7 +98,16 @@ export async function reviewDistribution(options) {
     counts: acceptance.counts,
     ...policy,
     ...distributionReadiness(policy, acceptance),
-    ...publicDeliveryAdmission(policy, acceptance, receipt.version, options.deliveryApproval),
+    ...publicDeliveryAdmission(
+      policy,
+      acceptance,
+      receipt.version,
+      options.deliveryApproval,
+      approval,
+    ),
+    ...(approval?.id === beta36DeliveryApprovalId
+      ? { deliveryApprovalSha256: options.deliveryApprovalSha256 }
+      : {}),
     evidenceVerifiedByTool: false,
     publicationAllowed: false,
   };

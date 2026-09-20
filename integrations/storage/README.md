@@ -76,6 +76,22 @@ for native lifecycle, GNF Unity tests, package checks and deployment limitations
 
 ## Published provenance record
 
+### Issue #46 candidate: hb15 (2026-09-19)
+
+The hb14 overlay added active parent-session protection to
+periodic recovery. The begin CLI's exit no longer makes a service-owned build
+eligible for quarantine. Recovery still handles orphan journals after broker
+restart. Its native large commit succeeded after the client deadline (~16 minutes).
+The current hb15 candidate adds request/transaction-bound read-only observations,
+broker-session identity, and worker progress checkpoints. Core removes the total
+commit deadline and separately monitors service liveness and progress inactivity.
+No sync, hash, ownership, or atomic-publication checks are removed. hb15 has not
+yet been installed or native-qualified; the installed history above describes
+earlier components. See the
+[issue #46 record](../../docs/validation/issue-46-cache-timeout.md) for remaining gates.
+
+### Earlier upstream provenance publication
+
 `provenance-overlay.patch` applies to `c238f283ded29f716f72e7d556cfeef3efd98639`
 and updates only `PROVENANCE.md` and `provenance/post-rc-destination-sha256.tsv`.
 The repository's layered destination check requires the two new normalized

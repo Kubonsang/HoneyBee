@@ -1,7 +1,7 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
@@ -126,109 +126,118 @@ const doctorOutput = () => {
 };
 
 for (const rollback of [false, true])
-  test(`Desktop lifecycle composes real pointer ${rollback ? "rollback" : "commit"} with Doctor`, async () => {
+  windowsTest(
+    `Desktop lifecycle composes real pointer ${rollback ? "rollback" : "commit"} with Doctor`,
+    async () => {
+      const f = await setup();
+      await writeFile(
+        path.join(f.options.installationRoot, "HoneyBeeLauncher.exe"),
+        "fixture launcher",
+      );
+      let phase;
+      let restarted = false;
+      const result = await updateAndRestartWithDoctor(
+        {
+          ...f.options,
+          sourcePointerSha256: sha256(f.pointer),
+          launcherSha256: sha256("fixture launcher"),
+        },
+        {
+          ...f.hooks,
+          requestShutdown: async ({ requestId }) => ({ requestId, status: "accepted" }),
+          authorizeHealth: async (context) => {
+            phase = context.phase;
+            return true;
+          },
+          runDoctor: async () => {
+            if (rollback && phase === "target-after-switch")
+              throw new Error("Candidate Doctor failed");
+            return doctorOutput();
+          },
+          authorizeRestart: async () => true,
+          dispatchLauncher: async () => {
+            await withApplicationActivity(
+              { installationRoot: f.options.installationRoot, mode: "shared" },
+              async () => {},
+            );
+            restarted = true;
+          },
+        },
+      );
+      assert.equal(result.state, rollback ? "RolledBack" : "Committed");
+      assert.equal(result.restart, "Dispatched");
+      assert(restarted);
+      await preserved(f, rollback);
+      assert.equal(
+        JSON.parse(await readFile(path.join(f.options.installationRoot, "current.json")))
+          .activeVersion,
+        rollback ? JSON.parse(f.pointer).activeVersion : version,
+      );
+    },
+  );
+
+windowsTest(
+  "Doctor adapter selects pinned versions for activation and committed recovery",
+  async () => {
+    const f = await setup(),
+      phases = [],
+      directories = [];
+    const hooks = {
+      ...f.hooks,
+      authorizeHealth: async (context) => {
+        phases.push(context.phase);
+        return true;
+      },
+      runDoctor: async (request) => {
+        directories.push(request.cwd);
+        return doctorOutput();
+      },
+    };
+    const result = await activatePublishedUpdateWithDoctor(f.options, hooks);
+    assert.equal(result.state, "Committed");
+    assert.deepEqual(phases, ["source-health", "target-before-switch", "target-after-switch"]);
+    assert.deepEqual(directories, [f.old, f.target, f.target]);
+    assert.equal(result.healthChecks.length, 3);
+    const recovered = await recoverPublishedUpdateWithDoctor(
+      { ...f.options, transactionDirectory: result.transactionDirectory },
+      hooks,
+    );
+    assert.equal(recovered.state, "Committed");
+    assert.equal(phases.at(-1), "committed-health");
+    await preserved(f, false);
+  },
+);
+
+windowsTest(
+  "Doctor adapter refuses absent authorization and pre-switch Doctor failure",
+  async () => {
     const f = await setup();
-    await writeFile(
-      path.join(f.options.installationRoot, "HoneyBeeLauncher.exe"),
-      "fixture launcher",
-    );
-    let phase;
-    let restarted = false;
-    const result = await updateAndRestartWithDoctor(
-      {
-        ...f.options,
-        sourcePointerSha256: sha256(f.pointer),
-        launcherSha256: sha256("fixture launcher"),
-      },
-      {
+    await assert.rejects(activatePublishedUpdateWithDoctor(f.options, f.hooks), /authorization/u);
+    await assert.rejects(
+      activatePublishedUpdateWithDoctor(f.options, {
         ...f.hooks,
-        requestShutdown: async ({ requestId }) => ({ requestId, status: "accepted" }),
-        authorizeHealth: async (context) => {
-          phase = context.phase;
-          return true;
-        },
+        authorizeHealth: async () => false,
+        runDoctor: async () => assert.fail("must not run"),
+      }),
+    );
+    await assert.rejects(
+      activatePublishedUpdateWithDoctor(f.options, {
+        ...f.hooks,
+        authorizeHealth: async () => true,
         runDoctor: async () => {
-          if (rollback && phase === "target-after-switch")
-            throw new Error("Candidate Doctor failed");
-          return doctorOutput();
+          throw new Error("Doctor timed out");
         },
-        authorizeRestart: async () => true,
-        dispatchLauncher: async () => {
-          await withApplicationActivity(
-            { installationRoot: f.options.installationRoot, mode: "shared" },
-            async () => {},
-          );
-          restarted = true;
-        },
+      }),
+      (error) => {
+        assert.equal(error.healthChecks[0].ready, false);
+        return true;
       },
     );
-    assert.equal(result.state, rollback ? "RolledBack" : "Committed");
-    assert.equal(result.restart, "Dispatched");
-    assert(restarted);
-    await preserved(f, rollback);
-    assert.equal(
-      JSON.parse(await readFile(path.join(f.options.installationRoot, "current.json")))
-        .activeVersion,
-      rollback ? JSON.parse(f.pointer).activeVersion : version,
-    );
-  });
+    await preserved(f);
+  },
+);
 
-test("Doctor adapter selects pinned versions for activation and committed recovery", async () => {
-  const f = await setup(),
-    phases = [],
-    directories = [];
-  const hooks = {
-    ...f.hooks,
-    authorizeHealth: async (context) => {
-      phases.push(context.phase);
-      return true;
-    },
-    runDoctor: async (request) => {
-      directories.push(request.cwd);
-      return doctorOutput();
-    },
-  };
-  const result = await activatePublishedUpdateWithDoctor(f.options, hooks);
-  assert.equal(result.state, "Committed");
-  assert.deepEqual(phases, ["source-health", "target-before-switch", "target-after-switch"]);
-  assert.deepEqual(directories, [f.old, f.target, f.target]);
-  assert.equal(result.healthChecks.length, 3);
-  const recovered = await recoverPublishedUpdateWithDoctor(
-    { ...f.options, transactionDirectory: result.transactionDirectory },
-    hooks,
-  );
-  assert.equal(recovered.state, "Committed");
-  assert.equal(phases.at(-1), "committed-health");
-  await preserved(f, false);
-});
-
-test("Doctor adapter refuses absent authorization and pre-switch Doctor failure", async () => {
-  const f = await setup();
-  await assert.rejects(activatePublishedUpdateWithDoctor(f.options, f.hooks), /authorization/u);
-  await assert.rejects(
-    activatePublishedUpdateWithDoctor(f.options, {
-      ...f.hooks,
-      authorizeHealth: async () => false,
-      runDoctor: async () => assert.fail("must not run"),
-    }),
-  );
-  await assert.rejects(
-    activatePublishedUpdateWithDoctor(f.options, {
-      ...f.hooks,
-      authorizeHealth: async () => true,
-      runDoctor: async () => {
-        throw new Error("Doctor timed out");
-      },
-    }),
-    (error) => {
-      assert.equal(error.healthChecks[0].ready, false);
-      return true;
-    },
-  );
-  await preserved(f);
-});
-
-test("Doctor adapter rolls back after candidate Doctor process failure", async () => {
+windowsTest("Doctor adapter rolls back after candidate Doctor process failure", async () => {
   const f = await setup(),
     directories = [];
   let phase;
@@ -251,7 +260,7 @@ test("Doctor adapter rolls back after candidate Doctor process failure", async (
   await preserved(f);
 });
 
-test("Doctor recovery uses saved source pin even while candidate is selected", async () => {
+windowsTest("Doctor recovery uses saved source pin even while candidate is selected", async () => {
   const f = await setup();
   let transactionDirectory, phase;
   await assert.rejects(
@@ -294,26 +303,30 @@ test("Doctor recovery uses saved source pin even while candidate is selected", a
   await preserved(f);
 });
 
-test("published plan activates and terminal recovery verifies health and full payload", async () => {
-  const f = await setup();
-  const result = await activatePublishedUpdate(f.options, f.hooks);
-  assert.equal(result.state, "Committed");
-  assert.equal(
-    JSON.parse(await readFile(path.join(f.options.installationRoot, "current.json"))).activeVersion,
-    version,
-  );
-  const recovery = { ...f.options, transactionDirectory: result.transactionDirectory };
-  assert.equal((await recoverPublishedUpdate(recovery, f.hooks)).state, "Committed");
-  await assert.rejects(
-    recoverPublishedUpdate(recovery, { ...f.hooks, health: async () => false }),
-    /Terminal activation health/u,
-  );
-  await writeFile(path.join(f.target, "desktop/resources/app.asar"), "tampered");
-  await assert.rejects(recoverPublishedUpdate(recovery, f.hooks));
-  await preserved(f, false);
-});
+windowsTest(
+  "published plan activates and terminal recovery verifies health and full payload",
+  async () => {
+    const f = await setup();
+    const result = await activatePublishedUpdate(f.options, f.hooks);
+    assert.equal(result.state, "Committed");
+    assert.equal(
+      JSON.parse(await readFile(path.join(f.options.installationRoot, "current.json")))
+        .activeVersion,
+      version,
+    );
+    const recovery = { ...f.options, transactionDirectory: result.transactionDirectory };
+    assert.equal((await recoverPublishedUpdate(recovery, f.hooks)).state, "Committed");
+    await assert.rejects(
+      recoverPublishedUpdate(recovery, { ...f.hooks, health: async () => false }),
+      /Terminal activation health/u,
+    );
+    await writeFile(path.join(f.target, "desktop/resources/app.asar"), "tampered");
+    await assert.rejects(recoverPublishedUpdate(recovery, f.hooks));
+    await preserved(f, false);
+  },
+);
 
-test("missing or false admission cannot activate", async () => {
+windowsTest("missing or false admission cannot activate", async () => {
   const f = await setup();
   await assert.rejects(activatePublishedUpdate(f.options), /Explicit admission/u);
   for (const value of [false, undefined])
@@ -324,14 +337,14 @@ test("missing or false admission cannot activate", async () => {
   await preserved(f);
 });
 
-test("source drift after publication blocks activation", async () => {
+windowsTest("source drift after publication blocks activation", async () => {
   const f = await setup();
   f.observation.sourceEvidenceSha256 = sha256("changed service");
   await assert.rejects(activatePublishedUpdate(f.options, f.hooks), /stale/u);
   await preserved(f);
 });
 
-test("unpublished marker and wrong plan pin are refused", async () => {
+windowsTest("unpublished marker and wrong plan pin are refused", async () => {
   const f = await setup();
   await assert.rejects(
     activatePublishedUpdate({ ...f.options, planSha256: sha256("wrong") }, f.hooks),
@@ -343,7 +356,7 @@ test("unpublished marker and wrong plan pin are refused", async () => {
 });
 
 for (const phase of ["target-before-switch", "target-after-switch"])
-  test(`whole payload mutation during ${phase} prevents commitment`, async () => {
+  windowsTest(`whole payload mutation during ${phase} prevents commitment`, async () => {
     const f = await setup();
     const operation = activatePublishedUpdate(f.options, {
       ...f.hooks,
@@ -358,7 +371,7 @@ for (const phase of ["target-before-switch", "target-after-switch"])
     await preserved(f);
   });
 
-test("source drift during pre-switch health blocks pointer replacement", async () => {
+windowsTest("source drift during pre-switch health blocks pointer replacement", async () => {
   const f = await setup();
   await assert.rejects(
     activatePublishedUpdate(f.options, {
@@ -374,7 +387,7 @@ test("source drift during pre-switch health blocks pointer replacement", async (
   await preserved(f);
 });
 
-test("failed post-switch health rolls back through the composed path", async () => {
+windowsTest("failed post-switch health rolls back through the composed path", async () => {
   const f = await setup();
   const result = await activatePublishedUpdate(f.options, {
     ...f.hooks,
@@ -393,31 +406,34 @@ test("failed post-switch health rolls back through the composed path", async () 
   await preserved(f);
 });
 
-test("explicit recovery restores source even with corrupt target and changed live pointer", async () => {
-  const f = await setup();
-  let transactionDirectory;
-  await assert.rejects(
-    activatePublishedUpdate(f.options, {
-      ...f.hooks,
-      checkpoint: async (state, directory) => {
-        transactionDirectory = directory;
-        if (state === "switched") throw new Error("interruption");
-      },
-      health: async ({ phase }) => phase !== "rollback",
-    }),
-    /needs recovery/u,
-  );
-  await writeFile(path.join(f.target, "desktop/HoneyBee.exe"), "corrupt target");
-  const options = { ...f.options, transactionDirectory };
-  await assert.rejects(
-    recoverPublishedUpdate(options, { ...f.hooks, admit: async () => false }),
-    /admission refused/u,
-  );
-  assert.equal((await recoverPublishedUpdate(options, f.hooks)).state, "RolledBack");
-  await preserved(f);
-});
+windowsTest(
+  "explicit recovery restores source even with corrupt target and changed live pointer",
+  async () => {
+    const f = await setup();
+    let transactionDirectory;
+    await assert.rejects(
+      activatePublishedUpdate(f.options, {
+        ...f.hooks,
+        checkpoint: async (state, directory) => {
+          transactionDirectory = directory;
+          if (state === "switched") throw new Error("interruption");
+        },
+        health: async ({ phase }) => phase !== "rollback",
+      }),
+      /needs recovery/u,
+    );
+    await writeFile(path.join(f.target, "desktop/HoneyBee.exe"), "corrupt target");
+    const options = { ...f.options, transactionDirectory };
+    await assert.rejects(
+      recoverPublishedUpdate(options, { ...f.hooks, admit: async () => false }),
+      /admission refused/u,
+    );
+    assert.equal((await recoverPublishedUpdate(options, f.hooks)).state, "RolledBack");
+    await preserved(f);
+  },
+);
 
-test(
+windowsTest(
   "process death after composed pointer switch recovers the previous version",
   { timeout: 20000 },
   async (t) => {

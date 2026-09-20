@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
@@ -79,49 +80,55 @@ async function preserved({ options, pointer }) {
     "preserve",
   );
 }
-test("signed stage produces a real verified inactive publication and durable receipt", async () => {
-  const f = await setup();
-  const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
-  assert.equal(result.state, "ReadyForActivation");
-  assert.equal(result.activationAllowed, false);
-  assert.equal(result.manifestSha256, f.options.manifestSha256);
-  assert.equal(result.sourcePointerSha256, sha256(f.pointer));
-  assert.deepEqual(
-    JSON.parse(
-      await readFile(path.join(path.dirname(result.planPath), "authenticated-preparation.json")),
-    ),
-    result,
-  );
-  assert(
-    (await readdir(path.join(f.options.installationRoot, "versions"))).includes(result.version),
-  );
-  await preserved(f);
-});
-test("authenticated service migration publishes an inactive candidate without switching the app", async () => {
-  const f = await setup(true);
-  const file = path.join(f.options.stageAttempt, "release.json");
-  const manifest = JSON.parse(await readFile(file));
-  manifest.components.storage.migration = {
-    kind: "service-replacement",
-    supportedSourceVersions: ["older.managed.service"],
-  };
-  const bytes = Buffer.from(JSON.stringify(manifest));
-  await writeFile(file, bytes);
-  await writeFile(
-    path.join(f.options.stageAttempt, "release.sig.json"),
-    signReleaseManifest(bytes, keys.privateKey),
-  );
-  f.options.expectedManifestSha256 = sha256(bytes);
-  f.observation.manifestSha256 = sha256(bytes);
-  f.observation.sourceComponentVersion = "older.managed.service";
-  f.observation.status = "migration-required";
-  const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
-  assert.equal(result.state, "ReadyForActivation");
-  assert.equal(result.activationAllowed, false);
-  const plan = JSON.parse(await readFile(result.planPath));
-  assert.equal(plan.identity.status, "migration-required");
-  await preserved(f);
-});
+windowsTest(
+  "signed stage produces a real verified inactive publication and durable receipt",
+  async () => {
+    const f = await setup();
+    const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
+    assert.equal(result.state, "ReadyForActivation");
+    assert.equal(result.activationAllowed, false);
+    assert.equal(result.manifestSha256, f.options.manifestSha256);
+    assert.equal(result.sourcePointerSha256, sha256(f.pointer));
+    assert.deepEqual(
+      JSON.parse(
+        await readFile(path.join(path.dirname(result.planPath), "authenticated-preparation.json")),
+      ),
+      result,
+    );
+    assert(
+      (await readdir(path.join(f.options.installationRoot, "versions"))).includes(result.version),
+    );
+    await preserved(f);
+  },
+);
+windowsTest(
+  "authenticated service migration publishes an inactive candidate without switching the app",
+  async () => {
+    const f = await setup(true);
+    const file = path.join(f.options.stageAttempt, "release.json");
+    const manifest = JSON.parse(await readFile(file));
+    manifest.components.storage.migration = {
+      kind: "service-replacement",
+      supportedSourceVersions: ["older.managed.service"],
+    };
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    await writeFile(file, bytes);
+    await writeFile(
+      path.join(f.options.stageAttempt, "release.sig.json"),
+      signReleaseManifest(bytes, keys.privateKey),
+    );
+    f.options.expectedManifestSha256 = sha256(bytes);
+    f.observation.manifestSha256 = sha256(bytes);
+    f.observation.sourceComponentVersion = "older.managed.service";
+    f.observation.status = "migration-required";
+    const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
+    assert.equal(result.state, "ReadyForActivation");
+    assert.equal(result.activationAllowed, false);
+    const plan = JSON.parse(await readFile(result.planPath));
+    assert.equal(plan.identity.status, "migration-required");
+    await preserved(f);
+  },
+);
 for (const failure of [
   "signature",
   "manifest",
@@ -182,16 +189,22 @@ test("signature mutation during real preflight cannot reach planning", async () 
   await preserved(f);
 });
 
-test("real inactive publication preserves the signed recovery inventory before completion", async () => {
-  const f = await setup(true);
-  const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
-  const proof = path.join(f.options.installationRoot, "update/recovery-sources", result.version);
-  const manifest = JSON.parse(await readFile(path.join(proof, "release.json")));
-  const inventory = JSON.parse(await readFile(path.join(proof, "inventory.json")));
-  assert.equal(sha256(recoveryInventoryBytes(inventory.files)), manifest.recovery.inventorySha256);
-  assert.deepEqual(
-    await readFile(path.join(proof, "release.sig.json")),
-    await readFile(path.join(f.options.stageAttempt, "release.sig.json")),
-  );
-  await preserved(f);
-});
+windowsTest(
+  "real inactive publication preserves the signed recovery inventory before completion",
+  async () => {
+    const f = await setup(true);
+    const result = await prepareAuthenticatedUpdate(f.options, { observe: f.observe });
+    const proof = path.join(f.options.installationRoot, "update/recovery-sources", result.version);
+    const manifest = JSON.parse(await readFile(path.join(proof, "release.json")));
+    const inventory = JSON.parse(await readFile(path.join(proof, "inventory.json")));
+    assert.equal(
+      sha256(recoveryInventoryBytes(inventory.files)),
+      manifest.recovery.inventorySha256,
+    );
+    assert.deepEqual(
+      await readFile(path.join(proof, "release.sig.json")),
+      await readFile(path.join(f.options.stageAttempt, "release.sig.json")),
+    );
+    await preserved(f);
+  },
+);

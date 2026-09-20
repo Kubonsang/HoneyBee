@@ -46,6 +46,29 @@ test("modified tool bytes are rejected", async (t) => {
     /Tool digest mismatch/,
   );
 });
+
+test("hb15 production candidate binds the heartbeat service payload", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb15";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  const result = await bindCandidateTools(f.directory, f.compatibility, false);
+  assert.equal(result.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
+  assert.equal(result.workspaceStorage[0].payloads[0].sha256, f.manifest.files["host.exe"].sha256);
+});
+
+test("hb15 qualification payload cannot masquerade as a production build", async (t) => {
+  const f = await fixture(t, true);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb15";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
+});
+
+test("an unreviewed future component version is rejected", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb16";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
+});
 test("QA tools cannot enter a production candidate", async (t) => {
   const f = await fixture(t, true);
   await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));

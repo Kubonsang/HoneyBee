@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -41,7 +42,7 @@ const waitFor = async (owner, text) => {
   assert.fail("Activity checkpoint timeout");
 };
 
-test("parent pipe closure cancels a pending drain without killing the client", async (t) => {
+windowsTest("parent pipe closure cancels a pending drain without killing the client", async (t) => {
   const root = await fixture(),
     client = owner(t, root, "shared");
   await waitFor(client, "HELD");
@@ -66,33 +67,36 @@ test("redirected activity directory refuses acquisition", async () => {
     ),
   );
 });
-test("concurrent clients drain before updater; new clients refuse while draining", async (t) => {
-  const root = await fixture(),
-    a = owner(t, root, "shared"),
-    b = owner(t, root, "shared");
-  await waitFor(a, "HELD");
-  await waitFor(b, "HELD");
-  const update = owner(t, root, "exclusive");
-  await waitFor(update, "DRAINING");
-  assert(!update.output().includes("HELD"));
-  const rejected = owner(t, root, "shared");
-  assert.notEqual((await rejected.exit)[0], 0);
-  a.child.stdin.end();
-  await a.exit;
-  assert(!update.output().includes("HELD"));
-  b.child.stdin.end();
-  await b.exit;
-  await waitFor(update, "HELD");
-  const competing = owner(t, root, "exclusive");
-  assert.notEqual((await competing.exit)[0], 0);
-  update.child.stdin.end();
-  await update.exit;
-  await withApplicationActivity(
-    { installationRoot: root, mode: "shared" },
-    async ({ assertHeld }) => assertHeld(),
-  );
-});
-test("drain timeout releases admission without terminating an active client", async (t) => {
+windowsTest(
+  "concurrent clients drain before updater; new clients refuse while draining",
+  async (t) => {
+    const root = await fixture(),
+      a = owner(t, root, "shared"),
+      b = owner(t, root, "shared");
+    await waitFor(a, "HELD");
+    await waitFor(b, "HELD");
+    const update = owner(t, root, "exclusive");
+    await waitFor(update, "DRAINING");
+    assert(!update.output().includes("HELD"));
+    const rejected = owner(t, root, "shared");
+    assert.notEqual((await rejected.exit)[0], 0);
+    a.child.stdin.end();
+    await a.exit;
+    assert(!update.output().includes("HELD"));
+    b.child.stdin.end();
+    await b.exit;
+    await waitFor(update, "HELD");
+    const competing = owner(t, root, "exclusive");
+    assert.notEqual((await competing.exit)[0], 0);
+    update.child.stdin.end();
+    await update.exit;
+    await withApplicationActivity(
+      { installationRoot: root, mode: "shared" },
+      async ({ assertHeld }) => assertHeld(),
+    );
+  },
+);
+windowsTest("drain timeout releases admission without terminating an active client", async (t) => {
   const root = await fixture(),
     client = owner(t, root, "shared");
   await waitFor(client, "HELD");
@@ -103,7 +107,7 @@ test("drain timeout releases admission without terminating an active client", as
   client.child.stdin.end();
   await client.exit;
 });
-test("killing a client releases activity for a waiting updater", async (t) => {
+windowsTest("killing a client releases activity for a waiting updater", async (t) => {
   const root = await fixture(),
     client = owner(t, root, "shared");
   await waitFor(client, "HELD");
@@ -116,7 +120,7 @@ test("killing a client releases activity for a waiting updater", async (t) => {
   await update.exit;
 });
 for (const acquired of [false, true])
-  test(`updater death releases gate while ${acquired ? "held" : "draining"}`, async (t) => {
+  windowsTest(`updater death releases gate while ${acquired ? "held" : "draining"}`, async (t) => {
     const root = await fixture();
     let client;
     if (!acquired) {
@@ -133,20 +137,23 @@ for (const acquired of [false, true])
       await client.exit;
     }
   });
-test("callback failure releases exclusive activity and independent roots do not block", async () => {
-  const root = await fixture(),
-    other = await fixture();
-  await assert.rejects(
-    withApplicationActivity({ installationRoot: root, mode: "exclusive" }, async () => {
-      await withApplicationActivity({ installationRoot: other, mode: "shared" }, async () => {});
-      throw new Error("injected");
-    }),
-    /injected/u,
-  );
-  await withApplicationActivity({ installationRoot: root, mode: "shared" }, async () => {});
-});
+windowsTest(
+  "callback failure releases exclusive activity and independent roots do not block",
+  async () => {
+    const root = await fixture(),
+      other = await fixture();
+    await assert.rejects(
+      withApplicationActivity({ installationRoot: root, mode: "exclusive" }, async () => {
+        await withApplicationActivity({ installationRoot: other, mode: "shared" }, async () => {});
+        throw new Error("injected");
+      }),
+      /injected/u,
+    );
+    await withApplicationActivity({ installationRoot: root, mode: "shared" }, async () => {});
+  },
+);
 
-test("validation shares activity then drains before mutation", async (t) => {
+windowsTest("validation shares activity then drains before mutation", async (t) => {
   const root = await fixture();
   await withApplicationActivity({ installationRoot: root, mode: "exclusive" }, async (lease) => {
     const blocked = owner(t, root, "shared", 100);
@@ -168,7 +175,7 @@ test("validation shares activity then drains before mutation", async (t) => {
   });
 });
 
-test("failed validation drain cannot authorize mutation", async (t) => {
+windowsTest("failed validation drain cannot authorize mutation", async (t) => {
   const root = await fixture();
   const candidate = owner(t, root, "shared");
   await waitFor(candidate, "HELD");

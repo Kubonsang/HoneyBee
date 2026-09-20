@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -57,44 +58,50 @@ const preserved = async (f) => {
     "old-version",
   );
 };
-test("publishes the complete version without activating and verifies explicit recovery", async () => {
-  const f = await setup();
-  const result = await publishPreparedVersion(f.options, { observe: f.observe });
-  assert.equal(result.state, "Published");
-  assert.equal(result.activationAllowed, false);
-  assert.equal(
-    await readFile(path.join(result.directory, "desktop/HoneyBee.exe"), "utf8"),
-    "desktop",
-  );
-  assert.equal(
-    (
-      await recoverVersionPublication(
-        { ...f.options, publicationDirectory: result.publicationDirectory },
-        { observe: f.observe },
-      )
-    ).state,
-    "Published",
-  );
-  await assert.rejects(
-    publishPreparedVersion(f.options, { observe: f.observe }),
-    /Existing version/u,
-  );
-  await preserved(f);
-});
-for (const nonempty of [false, true])
-  test(`never adopts an existing ${nonempty ? "nonempty" : "empty"} target directory`, async () => {
-    const f = await setup(),
-      target = path.join(f.f.installationRoot, "versions/0.1.0-beta.12");
-    await mkdir(target);
-    if (nonempty) await writeFile(path.join(target, "user-file"), "owned");
+windowsTest(
+  "publishes the complete version without activating and verifies explicit recovery",
+  async () => {
+    const f = await setup();
+    const result = await publishPreparedVersion(f.options, { observe: f.observe });
+    assert.equal(result.state, "Published");
+    assert.equal(result.activationAllowed, false);
+    assert.equal(
+      await readFile(path.join(result.directory, "desktop/HoneyBee.exe"), "utf8"),
+      "desktop",
+    );
+    assert.equal(
+      (
+        await recoverVersionPublication(
+          { ...f.options, publicationDirectory: result.publicationDirectory },
+          { observe: f.observe },
+        )
+      ).state,
+      "Published",
+    );
     await assert.rejects(
       publishPreparedVersion(f.options, { observe: f.observe }),
       /Existing version/u,
     );
-    assert.deepEqual(await readdir(target), nonempty ? ["user-file"] : []);
     await preserved(f);
-  });
-test("copy interruption resumes only its owned version directory", async () => {
+  },
+);
+for (const nonempty of [false, true])
+  windowsTest(
+    `never adopts an existing ${nonempty ? "nonempty" : "empty"} target directory`,
+    async () => {
+      const f = await setup(),
+        target = path.join(f.f.installationRoot, "versions/0.1.0-beta.12");
+      await mkdir(target);
+      if (nonempty) await writeFile(path.join(target, "user-file"), "owned");
+      await assert.rejects(
+        publishPreparedVersion(f.options, { observe: f.observe }),
+        /Existing version/u,
+      );
+      assert.deepEqual(await readdir(target), nonempty ? ["user-file"] : []);
+      await preserved(f);
+    },
+  );
+windowsTest("copy interruption resumes only its owned version directory", async () => {
   const f = await setup();
   let publicationDirectory;
   await assert.rejects(
@@ -117,7 +124,7 @@ test("copy interruption resumes only its owned version directory", async () => {
   await recoverVersionPublication({ ...f.options, publicationDirectory }, { observe: f.observe });
   await preserved(f);
 });
-test("reservation refuses a destination created after the initial check", async () => {
+windowsTest("reservation refuses a destination created after the initial check", async () => {
   const f = await setup(),
     target = path.join(f.f.installationRoot, "versions/0.1.0-beta.12");
   await assert.rejects(
@@ -155,7 +162,7 @@ test("modified copied bytes cannot be recovered or overwritten", async () => {
   await preserved(f);
 });
 for (const phase of ["reserved", "file-linked", "verified"])
-  test(
+  windowsTest(
     `process death at ${phase} resumes without overwriting the version`,
     { timeout: 20000 },
     async (t) => {

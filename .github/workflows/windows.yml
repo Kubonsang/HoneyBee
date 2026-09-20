@@ -4,13 +4,14 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   verify:
-    runs-on: windows-latest
+    runs-on: windows-2025
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,11 +35,21 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
           pnpm verify 2>&1 | Tee-Object -FilePath artifacts/quality/verify.log
           exit $LASTEXITCODE
+      - name: Verify complete discovered test inventory including Windows-only cases
+        shell: pwsh
+        run: |
+          node tests/docker/prepare-go.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node tests/docker/run-portable.mjs 2>&1 | Tee-Object -FilePath artifacts/quality/windows-suite.log
+          exit $LASTEXITCODE
       - name: Verify CLI package
         shell: pwsh
         run: |
           pnpm --filter honeybee-cli package:smoke 2>&1 | Tee-Object -FilePath artifacts/quality/cli-package.log
           exit $LASTEXITCODE
+      - name: Compile small native QA binaries for the toolchain-free VM
+        shell: pwsh
+        run: node scripts/qualification/build-native-tests.mjs artifacts/quality/native-tests
       - name: Verify Desktop package and PTY
         shell: pwsh
         run: |
@@ -88,6 +99,12 @@ jobs:
           } | Set-Content -Encoding utf8 artifacts/quality/SHA256SUMS.txt
           git rev-parse HEAD | Set-Content -Encoding utf8 artifacts/quality/source-commit.txt
           $env:HONEYBEE_PR_HEAD | Set-Content -Encoding utf8 artifacts/quality/pr-head.txt
+      - name: Write source-bound Windows receipt
+        if: always()
+        shell: pwsh
+        env:
+          QUALITY_JOB_STATUS: ${{ job.status }}
+        run: node scripts/qualification/windows-quality-receipt.mjs artifacts/quality $env:QUALITY_JOB_STATUS
       - name: Preserve quality evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7

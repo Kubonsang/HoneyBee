@@ -10,6 +10,9 @@ coverage/
 /apps/cli/release*/
 /output/
 /tmp/
+/external/storage/
+/go.work
+/go.work.sum
 /dogfood/evidence/
 /dogfood/state/
 __pycache__/

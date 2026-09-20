@@ -29,6 +29,29 @@ it("dispatches client and control calls to the same pinned pair despite environm
   }).resolve(process.execPath);
   vi.stubEnv("HONEYBEE_WORKSPACE_STORAGE_CONTROL", path.join(root, "wrong-host.exe"));
   execute.mockImplementation((_command, _args, _options, callback) => {
+    if (_args[0] === "control")
+      return {
+        stdin: {
+          end: (input: string) => {
+            const request = JSON.parse(input) as { requestId: string };
+            callback(
+              null,
+              JSON.stringify({
+                ok: true,
+                requestId: request.requestId,
+                commitObservation: {
+                  version: 1,
+                  brokerSessionId: "session",
+                  requestId: "",
+                  transactionId: "",
+                  state: "capable",
+                },
+              }),
+              "",
+            );
+          },
+        },
+      };
     callback(
       null,
       JSON.stringify({
@@ -47,6 +70,7 @@ it("dispatches client and control calls to the same pinned pair despite environm
   await storage.diagnose(pair);
   await storage.status(pair);
   expect(execute.mock.calls.map(([command]) => command)).toEqual([
+    controlCommand,
     clientCommand,
     controlCommand,
     controlCommand,

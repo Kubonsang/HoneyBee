@@ -1,0 +1,6 @@
+# Ephemeral hosted runner, not the user's physical host/VM storage budget.
+[worker.oci]
+  gc = true
+  reservedSpace = "1GB"
+  maxUsedSpace = "8GB"
+  minFreeSpace = "2GB"

@@ -7,9 +7,21 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { HoneyBeeWorkspaceCore } from "./workspace-core.js";
 import { WorkspaceRegistryStore } from "./workspace-registry.js";
-import type { StorageLease, StorageParentBuild, WorkspaceStoragePort } from "./workspace-types.js";
+import type {
+  DoctorReportV1,
+  StorageLease,
+  StorageParentBuild,
+  WorkspaceStoragePort,
+} from "./workspace-types.js";
 
 const roots: string[] = [];
+
+const expectPlatformReadiness = (report: DoctorReportV1): void => {
+  expect(report.ready).toBe(process.platform === "win32");
+  expect(report.checks.filter((item) => item.status === "fail").map((item) => item.code)).toEqual(
+    process.platform === "win32" ? [] : ["system.windows"],
+  );
+};
 
 class DoctorStorage implements WorkspaceStoragePort {
   public userMatches = true;
@@ -139,7 +151,7 @@ describe("Workspace doctor", () => {
       expect.objectContaining({ code: "storage.component-version", status: "fail" }),
     );
     const matching = await core.doctor({ storageCommand, expectedComponentVersion: "test" });
-    expect(matching.ready).toBe(true);
+    expectPlatformReadiness(matching);
     expect(matching.checks).toContainEqual(
       expect.objectContaining({ code: "storage.component-version", status: "pass" }),
     );
@@ -153,7 +165,7 @@ describe("Workspace doctor", () => {
 
     const report = await core.doctor({ storageCommand: await tools(root) });
 
-    expect(report.ready).toBe(true);
+    expectPlatformReadiness(report);
     expect(report.checks).toContainEqual(
       expect.objectContaining({ code: "projects.registered", status: "warning" }),
     );
@@ -188,7 +200,7 @@ describe("Workspace doctor", () => {
 
     const report = await core.doctor({ storageCommand });
 
-    expect(report.ready).toBe(true);
+    expectPlatformReadiness(report);
     expect(report.checks).toContainEqual(
       expect.objectContaining({ code: "cache.prepared", status: "warning" }),
     );

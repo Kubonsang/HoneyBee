@@ -1,0 +1,20 @@
+# Allowlist: never send VM disks, evidence, credentials or Windows node_modules.
+**
+!package.json
+!pnpm-lock.yaml
+!pnpm-workspace.yaml
+!vitest.config.ts
+!packages/
+!packages/core/
+!packages/core/package.json
+!packages/core/src/
+!packages/core/src/**
+!apps/
+!apps/cli/
+!apps/cli/package.json
+!apps/desktop/
+!apps/desktop/package.json
+!tests/
+!tests/docker/
+!tests/docker/Dockerfile
+!tests/docker/Dockerfile.dockerignore

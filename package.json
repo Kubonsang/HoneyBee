@@ -18,6 +18,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "release:verify": "node scripts/qualification/release-verify.mjs",
+    "test:release-verification": "node --test scripts/qualification/release-verification.test.mjs scripts/qualification/test-coverage.test.mjs",
     "build": "corepack pnpm -r --if-present build",
     "clean": "corepack pnpm -r --if-present clean",
     "deps:check": "depcruise --config dependency-cruiser.cjs apps packages",

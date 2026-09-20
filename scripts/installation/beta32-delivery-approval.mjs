@@ -1,4 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import path from "node:path";
+import { readBounded } from "../update/prepare-release.mjs";
 import { summarizeFinalAcceptance } from "../qualification/final-acceptance.mjs";
 
 // User approved this publication order on 2026-09-16. This is deliberately
@@ -19,12 +22,47 @@ export const beta35DeliveryApproval = Object.freeze({
   wingetManifestSha256: "a47da7ade1f3e9b1c66e839340a04c212ce6d9af74f5841fb72a8d29187fa9c3",
 });
 
-export function publicDeliveryAdmission(policy, acceptance, version, approval) {
+export const beta36DeliveryApprovalId = "beta36-public-delivery-20260920";
+
+// The user approved this version's ordering, not an unbound future release.
+// An operator freezes this record after artifact construction; it is not embedded
+// in source, which would create a source-commit/artifact-hash cycle.
+export function validateBeta36Approval(record, sourceCommit) {
+  assert.equal(record?.schemaVersion, 1, "Delivery approval schema required");
+  assert.equal(record.id, beta36DeliveryApprovalId);
+  assert.equal(record.version, "0.1.0-beta.36");
+  assert(/^[a-f0-9]{40}$/u.test(sourceCommit ?? ""), "Approval source commit required");
+  assert.equal(record.sourceCommit, sourceCommit, "Approval source differs");
+  for (const key of ["setupSha256", "manifestSha256", "wingetManifestSha256"])
+    assert(/^[a-f0-9]{64}$/u.test(record[key] ?? ""), `Approval ${key} required`);
+  return record;
+}
+
+export async function loadDeliveryApproval(options) {
+  if (options.deliveryApproval === undefined) return undefined;
+  const legacy = [beta32DeliveryApproval, beta35DeliveryApproval].find(
+    (item) => item.id === options.deliveryApproval,
+  );
+  if (legacy) return legacy;
+  assert.equal(options.deliveryApproval, beta36DeliveryApprovalId, "Unknown delivery approval");
+  assert(path.isAbsolute(options.deliveryApprovalPath ?? ""), "Absolute approval path required");
+  assert(/^[a-f0-9]{64}$/u.test(options.deliveryApprovalSha256 ?? ""), "Approval digest required");
+  const bytes = await readBounded(options.deliveryApprovalPath, 64 * 1024);
+  assert.equal(
+    createHash("sha256").update(bytes).digest("hex"),
+    options.deliveryApprovalSha256,
+    "Delivery approval changed",
+  );
+  return validateBeta36Approval(JSON.parse(bytes), options.releaseCommit);
+}
+
+export function publicDeliveryAdmission(policy, acceptance, version, approval, record) {
   if (approval === undefined) return { publicDeliveryVerificationAllowed: false };
   acceptance = summarizeFinalAcceptance(acceptance);
-  const pinned = [beta32DeliveryApproval, beta35DeliveryApproval].find(
-    (item) => item.id === approval,
-  );
+  const pinned =
+    approval === beta36DeliveryApprovalId
+      ? validateBeta36Approval(record, record?.sourceCommit)
+      : [beta32DeliveryApproval, beta35DeliveryApproval].find((item) => item.id === approval);
   assert(pinned, "Unknown delivery approval");
   assert.equal(policy.releaseMode, "unsigned-beta");
   assert.equal(version, pinned.version);

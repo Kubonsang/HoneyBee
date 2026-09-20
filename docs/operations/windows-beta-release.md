@@ -7,6 +7,11 @@ repeating service interruption, reboot, and power-off qualification.
 
 ## Source checks
 
+Use [unified release verification](release-verification.md) for the recurring
+Docker / hosted Windows / minimal Windows 11 VM workflow and its common
+`pnpm release:verify` entry point. A new public candidate additionally requires a
+matching `verificationReportPath`; source checks alone do not authorize release.
+
 `pnpm verify` is the canonical source check. Vitest runs the app/Core tests and
 the Vitest-based security/dogfood scripts. The package's `node --test` commands run
 installation, update, and qualification tests. Do not load node:test suites through
