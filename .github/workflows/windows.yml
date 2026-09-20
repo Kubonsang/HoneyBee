@@ -35,6 +35,12 @@ jobs:
           # Positive fixtures use real paths; production redirection checks stay strict.
           # Hosted TEMP may contain RUNNER~1 even though realpath returns runneradmin.
           node --input-type=module -e 'import fs from "node:fs"; import os from "node:os"; const temp = fs.realpathSync.native(os.tmpdir()); if (/[\r\n]/.test(temp)) throw new Error("Invalid temporary directory"); fs.appendFileSync(process.env.GITHUB_ENV, `TEMP=${temp}\nTMP=${temp}\n`);'
+      - name: Prepare pinned storage test workspace
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
+          node tests/docker/prepare-go.mjs 2>&1 | Tee-Object -FilePath artifacts/quality/storage-preparation.log
+          exit $LASTEXITCODE
       - name: Preflight native metadata replay
         shell: pwsh
         run: |
@@ -50,8 +56,6 @@ jobs:
       - name: Verify complete discovered test inventory including Windows-only cases
         shell: pwsh
         run: |
-          node tests/docker/prepare-go.mjs
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           node tests/docker/run-portable.mjs 2>&1 | Tee-Object -FilePath artifacts/quality/windows-suite.log
           exit $LASTEXITCODE
       - name: Verify CLI package
