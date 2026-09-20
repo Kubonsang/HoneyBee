@@ -47,6 +47,11 @@ jobs:
           New-Item -ItemType Directory -Path artifacts/quality -Force | Out-Null
           go -C tools/workspace-storage-host test ./... -run '^(TestRestoreMetadata|TestRestoreDirectoryMetadata|TestRestoreCompressedMetadata|TestStoreRestoreNative)' -count=1 -timeout=120s 2>&1 | Tee-Object -FilePath artifacts/quality/metadata-replay.log
           exit $LASTEXITCODE
+      - name: Preflight retained removal expiry
+        shell: pwsh
+        run: |
+          go -C external/storage test -race -count=50 -timeout=180s -run '^TestRetainedRemovalAbortAndExpiryReleaseReservation$' ./workspace 2>&1 | Tee-Object -FilePath artifacts/quality/removal-expiry.log
+          exit $LASTEXITCODE
       - name: Verify source
         shell: pwsh
         run: |

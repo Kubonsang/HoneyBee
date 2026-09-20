@@ -41,7 +41,13 @@ diff --git a/workspace/removal_test.go b/workspace/removal_test.go
  	}
  	if _, err := broker.store.ReadRemovalReceipt("abort-remove"); !os.IsNotExist(err) {
  		t.Fatalf("abort receipt remains: %v", err)
-@@ -225,8 +225,8 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+@@ -223,10 +223,13 @@ func TestRetainedRemovalAbortAndExpiryReleaseReservation(t *testing.T) {
+ 		if time.Now().After(deadline) {
+-			t.Fatalf("reservation did not expire: %v", err)
++			broker.mu.Lock()
++			remaining := broker.removals["abort-remove"]
++			broker.mu.Unlock()
++			t.Fatalf("reservation did not expire: %v; abortCalls=%d; reservationStillRegistered=%t", err, session.abortCalls.Load(), remaining != nil)
  		}
  		time.Sleep(5 * time.Millisecond)
  	}

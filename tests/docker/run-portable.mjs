@@ -134,6 +134,24 @@ for (const cwd of [
   );
   stage(`${cwd}:vet`, "go", ["vet", "./..."], { cwd });
 }
+if (windows) {
+  stage(
+    "tools/workspace-storage-host:qualification:race-tests",
+    "go",
+    [
+      "test",
+      "-tags=honeybee_qualification",
+      "-race",
+      "-count=1",
+      "-timeout=180s",
+      "-json",
+      "-run",
+      "^TestQualification",
+      "./...",
+    ],
+    { cwd: "tools/workspace-storage-host" },
+  );
+}
 stage(
   "upstream-removal-fixture-race-repeat",
   "go",
