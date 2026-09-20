@@ -26,21 +26,26 @@ function writable(directory) {
   }
 }
 writable("external/storage");
-run("git", ["apply", "--check", "../../integrations/storage/external-bee.patch"], {
-  cwd: "external/storage",
-});
-run("git", ["apply", "../../integrations/storage/external-bee.patch"], { cwd: "external/storage" });
+// Apply from the repository root with an explicit destination. From a nested
+// working directory Git can silently skip all paths outside that directory.
+const apply = (patchPath, ...flags) =>
+  run("git", ["apply", ...flags, "--directory=external/storage", patchPath]);
+apply("integrations/storage/external-bee.patch", "--check");
+apply("integrations/storage/external-bee.patch");
 // Upstream's timer-backed fake counter has no synchronization. Repair only the
 // test fixture; never alter production hb15 source or its pinned overlay identity.
-const testPatch = "../../tests/docker/upstream-test-race.patch";
-const changedTestFiles = run("git", ["apply", "--numstat", testPatch], { cwd: "external/storage" })
+const testPatch = "tests/docker/upstream-test-race.patch";
+const changedTestFiles = run("git", ["apply", "--numstat", testPatch])
   .trim()
-  .split("\n")
+  .split(/\r?\n/)
   .map((line) => line.split("\t")[2])
   .sort();
 assert.deepEqual(changedTestFiles, ["workspace/broker_test.go", "workspace/removal_test.go"]);
-run("git", ["apply", "--check", testPatch], { cwd: "external/storage" });
-run("git", ["apply", testPatch], { cwd: "external/storage" });
+apply(testPatch, "--check");
+apply(testPatch);
+// Reverse checks prove the pinned patches actually reached the copied source.
+apply(testPatch, "--reverse", "--check");
+apply("integrations/storage/external-bee.patch", "--reverse", "--check");
 const testOnlyPatchSha256 = createHash("sha256")
   .update(readFileSync("tests/docker/upstream-test-race.patch"))
   .digest("hex");
