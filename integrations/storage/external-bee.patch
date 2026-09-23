@@ -2655,3 +2655,156 @@ index f110474..03b36a1 100644
  	SchemaVersion  int          `json:"schemaVersion"`
  	LeaseID        string       `json:"leaseId"`
  	RunID          string       `json:"runId"`
+diff --git a/storage/lifecycle_windows.go b/storage/lifecycle_windows.go
+--- a/storage/lifecycle_windows.go
++++ b/storage/lifecycle_windows.go
+@@ -584,8 +584,8 @@ func (a *Attachment) VerifyParent(expectedParent string) error {
+ 	}
+ 	resolved := *(*uint32)(unsafe.Pointer(&buffer[8])) != 0
+ 	words := unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[12])), (len(buffer)-12)/2)
+-	parent := filepath.Clean(syscall.UTF16ToString(words))
+-	if !resolved || !strings.EqualFold(parent, filepath.Clean(expectedParent)) {
++	parent := syscall.UTF16ToString(words)
++	if !resolved || !sameParentPath(parent, expectedParent) {
+ 		return newError(CodeParentInvalid, "verify-differencing-parent", a.path, fmt.Errorf("resolved=%t parent=%q expected=%q", resolved, parent, expectedParent))
+ 	}
+ 	return nil
+diff --git a/storage/parent_path_windows.go b/storage/parent_path_windows.go
+new file mode 100644
+--- /dev/null
++++ b/storage/parent_path_windows.go
+@@ -0,0 +1,51 @@
++//go:build windows
++
++package storage
++
++import (
++	"path/filepath"
++	"strings"
++)
++
++// sameParentPath accepts the extended local-drive spelling returned by VirtDisk,
++// but never translates device/UNC namespaces or ambiguous Win32 components.
++func sameParentPath(actual, expected string) bool {
++	if !strings.HasPrefix(actual, "\\\\?\\") && !strings.HasPrefix(expected, "\\\\?\\") {
++		return strings.EqualFold(filepath.Clean(actual), filepath.Clean(expected))
++	}
++	a, ok := plainParentPath(actual)
++	if !ok {
++		return false
++	}
++	b, ok := plainParentPath(expected)
++	return ok && strings.EqualFold(a, b)
++}
++
++func plainParentPath(path string) (string, bool) {
++	path = strings.TrimPrefix(path, "\\\\?\\")
++	if len(path) < 4 || path[1:3] != ":\\" ||
++		!((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
++		return "", false
++	}
++	for _, part := range strings.Split(path[3:], "\\") {
++		if part == "" || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") ||
++			strings.ContainsAny(part, "/<>:\"|?*") {
++			return "", false
++		}
++		for _, ch := range part {
++			if ch < 32 {
++				return "", false
++			}
++		}
++		name := strings.ToUpper(strings.SplitN(part, ".", 2)[0])
++		switch name {
++		case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
++			return "", false
++		}
++		if len(name) == 4 && (strings.HasPrefix(name, "COM") || strings.HasPrefix(name, "LPT")) &&
++			name[3] >= '0' && name[3] <= '9' {
++			return "", false
++		}
++	}
++	return path, true
++}
+diff --git a/storage/parent_path_windows_test.go b/storage/parent_path_windows_test.go
+new file mode 100644
+--- /dev/null
++++ b/storage/parent_path_windows_test.go
+@@ -0,0 +1,78 @@
++//go:build windows
++
++package storage
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestParentPathSpellings(t *testing.T) {
++	const ordinary = "C:\\store\\parent.vhdx"
++	const extended = "\\\\?\\C:\\store\\parent.vhdx"
++	for _, pair := range [][2]string{
++		{ordinary, extended}, {extended, ordinary}, {extended, extended},
++		{extended, "c:\\STORE\\parent.vhdx"},
++	} {
++		if !sameParentPath(pair[0], pair[1]) {
++			t.Errorf("equivalent paths rejected: %q", pair)
++		}
++	}
++	for _, other := range []string{
++		"C:\\store\\other.vhdx", "D:\\store\\parent.vhdx",
++		"C:store\\parent.vhdx", "\\store\\parent.vhdx",
++		"\\\\server\\store\\parent.vhdx", "\\\\?\\UNC\\server\\store\\parent.vhdx",
++		"\\\\.\\C:\\store\\parent.vhdx", "\\\\?\\GLOBALROOT\\store\\parent.vhdx",
++		"C:\\store\\.\\parent.vhdx", "C:\\store\\x\\..\\parent.vhdx",
++		"C:\\store\\parent.vhdx.", "C:\\store\\parent.vhdx ",
++		"C:/store/parent.vhdx", "C:\\store\\\\parent.vhdx",
++		"C:\\store\\parent.vhdx:stream", "", "C:\\store\\NUL.vhdx",
++	} {
++		if sameParentPath(extended, other) || sameParentPath(other, extended) {
++			t.Errorf("different or ambiguous path accepted: %q", other)
++		}
++	}
++}
++
++func TestDifferencingParentLongPath(t *testing.T) {
++	if os.Getenv("UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST") != "1" {
++		t.Skip("set UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST=1 on Windows NTFS")
++	}
++	root := t.TempDir()
++	for len(root) < 280 {
++		root = filepath.Join(root, strings.Repeat("long-parent-", 4))
++	}
++	if err := os.MkdirAll(root, 0700); err != nil {
++		t.Fatal(err)
++	}
++	parent := filepath.Join(root, "parent.vhdx")
++	child := filepath.Join(root, "child.vhdx")
++	wrong := filepath.Join(root, "wrong.vhdx")
++	for _, path := range []string{parent, wrong} {
++		if err := CreateDynamicWithOptions(path, CreateOptions{MaximumSize: 64 << 20, BlockSizeInBytes: 2 << 20, SectorSizeInBytes: 4096}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := CreateDifferencing(child, parent); err != nil {
++		t.Fatal(err)
++	}
++	a, err := Open(child, true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := a.CloseHandle(); err != nil {
++			t.Error(err)
++		}
++	}()
++	for _, path := range []string{parent, "\\\\?\\" + parent} {
++		if err := a.VerifyParent(path); err != nil {
++			t.Fatalf("long parent rejected (%d characters): %v", len(path), err)
++		}
++	}
++	if err := a.VerifyParent(wrong); err == nil {
++		t.Fatal("different existing parent was accepted")
++	}
++}

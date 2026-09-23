@@ -10,6 +10,7 @@ const nativeGo = new Set([
   "TestExternalBeeNativeLifecycle",
   "TestInstalledUserCanWriteMountedParent",
   "TestDifferencingChildGeometry",
+  "TestDifferencingParentLongPath",
   "TestNativeChildGeometry",
 ]);
 const unixGo = new Set([

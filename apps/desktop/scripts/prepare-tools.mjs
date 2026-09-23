@@ -15,7 +15,7 @@ assert(
   process.argv.length === 2 || (process.argv.length === 3 && qualificationBaseline),
   "Unknown tool build option",
 );
-const productionStorageVersion = "0.0.0+cfa606fd4143.hb15";
+const productionStorageVersion = "0.0.0+cfa606fd4143.hb16";
 const workspaceStorageVersion =
   productionStorageVersion + (qualificationBaseline ? ".qa-baseline" : "");
 const repository = "https://github.com/Kubonsang/unity-workspace-storage.git";

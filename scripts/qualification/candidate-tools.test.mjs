@@ -63,9 +63,17 @@ test("hb15 qualification payload cannot masquerade as a production build", async
   await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
 });
 
-test("an unreviewed future component version is rejected", async (t) => {
+test("hb16 production candidate binds the long-parent-path fix", async (t) => {
   const f = await fixture(t);
   f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb16";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  const result = await bindCandidateTools(f.directory, f.compatibility, false);
+  assert.equal(result.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
+});
+
+test("an unreviewed future component version is rejected", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb17";
   await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
   await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
 });

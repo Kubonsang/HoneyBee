@@ -76,6 +76,17 @@ for native lifecycle, GNF Unity tests, package checks and deployment limitations
 
 ## Published provenance record
 
+### Host long-parent-path correction: hb16 (2026-09-22)
+
+hb16 preserves hb15 commit observation and corrects parent verification when
+VirtDisk returns an extended local-drive path for a long ordinary absolute path.
+Only unambiguous local-drive spellings are translated; device/UNC namespaces,
+dot segments, alternate streams, and trailing-dot/space components are rejected
+by this translation. The unmounted native regression creates a parent beyond
+280 characters and checks both spellings plus rejection of a different parent.
+This does not constitute installed-service or full native qualification. The
+failed hb15 host fixture remains preserved for diagnosis.
+
 ### Issue #46 candidate: hb15 (2026-09-19)
 
 The hb14 overlay added active parent-session protection to

@@ -71,10 +71,11 @@ test("Windows build-tagged tests require owning-lane evidence", () => {
   input.ignoredGoTests = [
     { package: "p", name: "TestWindowsOnly" },
     { package: "p", name: "TestExternalBeeNativeLifecycle" },
+    { package: "p", name: "TestDifferencingParentLongPath" },
   ];
   const result = auditCoverage(input);
   assert.deepEqual(
     result.deferred.map((item) => item.owner),
-    ["windows", "native"],
+    ["windows", "native", "native"],
   );
 });

@@ -22,7 +22,11 @@ const definitions = [
     cwd: "external/storage",
     package: "./storage",
     module: "github.com/Kubonsang/unity-workspace-storage/storage",
-    tests: ["TestDifferencingChildGeometry"],
+    tests: [
+      "TestDifferencingChildGeometry",
+      "TestDifferencingParentLongPath",
+      "TestParentPathSpellings",
+    ],
   },
   {
     name: "geometry",
