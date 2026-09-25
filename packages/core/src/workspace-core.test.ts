@@ -277,7 +277,8 @@ const fixture = async () => {
     await mkdir(path.join(source, directory), { recursive: true });
   }
   await Promise.all([
-    writeFile(path.join(source, ".gitignore"), "/Library/\n", "utf8"),
+    // Ignore both the Windows directory junction and the Linux test symlink.
+    writeFile(path.join(source, ".gitignore"), "/Library\n", "utf8"),
     writeFile(path.join(source, "Assets", "Player.cs"), "class Player {}\n", "utf8"),
     writeFile(path.join(source, "Assets", "Gradient17сg.mat"), "unicode path\n", "utf8"),
     writeFile(path.join(source, "Packages", "manifest.json"), "{}\n", "utf8"),
@@ -945,6 +946,63 @@ describe("HoneyBeeWorkspaceCore", () => {
       code: "storage.operation-failed",
     });
     expect(storage.abortedTransactions).toHaveLength(2);
+    expect((await core.cacheStatus(project.projectId)).cache).toEqual(baseline.cache);
+  }, 30_000);
+
+  it("preserves the cache and skips abort when a completed commit response is lost", async () => {
+    const { core, project, storage } = await fixture();
+    const baseline = await core.cacheStatus(project.projectId);
+    const error = new WorkspaceCoreError("storage.commit-outcome-unknown", "response lost");
+    const commit = storage.commitParent.bind(storage);
+    vi.spyOn(storage, "commitParent").mockImplementationOnce(async (command, transaction) => {
+      await commit(command, transaction);
+      throw error;
+    });
+    await expect(core.prepareCache(project.projectId)).rejects.toBe(error);
+    expect(storage.abortedTransactions).toEqual([]);
+    expect((await core.cacheStatus(project.projectId)).cache).toEqual(baseline.cache);
+  }, 30_000);
+
+  it("does not publish or abort a successful commit with the wrong parent identity", async () => {
+    const { core, project, storage } = await fixture();
+    const baseline = await core.cacheStatus(project.projectId);
+    vi.spyOn(storage, "commitParent").mockResolvedValueOnce({ parentId: "wrong-parent" });
+    await expect(core.prepareCache(project.projectId)).rejects.toMatchObject({
+      code: "storage.commit-outcome-unknown",
+    });
+    expect(storage.abortedTransactions).toEqual([]);
+    expect((await core.cacheStatus(project.projectId)).cache).toEqual(baseline.cache);
+  }, 30_000);
+
+  it("aborts a failed Library copy without attempting commit", async () => {
+    const { core, project, storage } = await fixture();
+    const baseline = await core.cacheStatus(project.projectId);
+    const begin = storage.beginParent.bind(storage);
+    vi.spyOn(storage, "beginParent").mockImplementationOnce(async (command, key) => {
+      const build = await begin(command, key);
+      if (build.stagingPath === undefined) throw new Error("Fixture did not create staging");
+      await writeFile(path.join(build.stagingPath, "ArtifactDB"), "conflicting staging file");
+      return build;
+    });
+    const commit = vi.spyOn(storage, "commitParent");
+    await expect(core.prepareCache(project.projectId)).rejects.toBeDefined();
+    expect(commit).not.toHaveBeenCalled();
+    expect(storage.abortedTransactions).toHaveLength(1);
+    expect((await core.cacheStatus(project.projectId)).cache).toEqual(baseline.cache);
+  }, 30_000);
+
+  it("preserves preparation and cleanup errors without replacing the cache", async () => {
+    const { core, project, storage } = await fixture();
+    const baseline = await core.cacheStatus(project.projectId);
+    const commitError = new WorkspaceCoreError("storage.operation-failed", "commit failed");
+    const cleanupError = new Error("cleanup failed");
+    vi.spyOn(storage, "commitParent").mockRejectedValueOnce(commitError);
+    vi.spyOn(storage, "abortParent").mockRejectedValueOnce(cleanupError);
+    await expect(core.prepareCache(project.projectId)).rejects.toMatchObject({
+      code: "storage.operation-failed",
+      message: expect.stringMatching(/Preparation: commit failed Cleanup: cleanup failed/),
+      cause: { errors: [commitError, cleanupError] },
+    });
     expect((await core.cacheStatus(project.projectId)).cache).toEqual(baseline.cache);
   }, 30_000);
 

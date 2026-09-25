@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
@@ -33,7 +34,7 @@ test("complete Doctor report permits no-project warning", () => {
   assert.equal(parseDoctorHealth(JSON.stringify(report())).ready, true);
 });
 
-test("nonzero child exit preserves stdout and stderr diagnostics", async () => {
+windowsTest("nonzero child exit preserves stdout and stderr diagnostics", async () => {
   const cwd = await directory(),
     cli = path.join(cwd, "failure.cjs");
   await writeFile(
@@ -130,25 +131,28 @@ for (const [name, script] of [
       }),
     );
   });
-test("real child receives fixed Doctor arguments and sanitized Node environment", async () => {
-  const cwd = await directory(),
-    cli = path.join(cwd, "probe.cjs");
-  await writeFile(
-    cli,
-    "process.stdout.write(JSON.stringify({args:process.argv.slice(2), options:process.env.NODE_OPTIONS}))",
-  );
-  const previous = process.env.NODE_OPTIONS;
-  process.env.NODE_OPTIONS = "--require=nonexistent-health-test-module";
-  try {
-    const result = JSON.parse(
-      (await runDoctorProcess({ node: process.execPath, cli, cwd })).stdout,
+windowsTest(
+  "real child receives fixed Doctor arguments and sanitized Node environment",
+  async () => {
+    const cwd = await directory(),
+      cli = path.join(cwd, "probe.cjs");
+    await writeFile(
+      cli,
+      "process.stdout.write(JSON.stringify({args:process.argv.slice(2), options:process.env.NODE_OPTIONS}))",
     );
-    assert.deepEqual(result, { args: ["doctor", "--json"] });
-  } finally {
-    if (previous === undefined) delete process.env.NODE_OPTIONS;
-    else process.env.NODE_OPTIONS = previous;
-  }
-});
+    const previous = process.env.NODE_OPTIONS;
+    process.env.NODE_OPTIONS = "--require=nonexistent-health-test-module";
+    try {
+      const result = JSON.parse(
+        (await runDoctorProcess({ node: process.execPath, cli, cwd })).stdout,
+      );
+      assert.deepEqual(result, { args: ["doctor", "--json"] });
+    } finally {
+      if (previous === undefined) delete process.env.NODE_OPTIONS;
+      else process.env.NODE_OPTIONS = previous;
+    }
+  },
+);
 const installed = async () => {
   const root = await directory(),
     version = "0.1.0-beta.12";

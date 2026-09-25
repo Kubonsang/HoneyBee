@@ -16,6 +16,9 @@ import (
 // ProgramData factory. Exercise composition/replay rather than only fake hooks.
 func TestStoreRestoreNativeCompositionAndReplay(t *testing.T) {
 	root, candidate, previous := t.TempDir(), t.TempDir(), t.TempDir()
+	// Establish the positive fixture's inheritance model before creating or
+	// inventorying descendants. Never normalize a captured backup to force pass.
+	initializeMetadataFixtureDirectory(t, root)
 	check := func() error { return nil }
 	write := func(name, data string) {
 		t.Helper()

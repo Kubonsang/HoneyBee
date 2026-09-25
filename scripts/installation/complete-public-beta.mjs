@@ -5,7 +5,13 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
-import { beta32DeliveryApproval, beta35DeliveryApproval } from "./beta32-delivery-approval.mjs";
+import {
+  beta32DeliveryApproval,
+  beta35DeliveryApproval,
+  beta36DeliveryApprovalId,
+  loadDeliveryApproval,
+} from "./beta32-delivery-approval.mjs";
+import { requireReleaseVerification } from "../qualification/release-verify.mjs";
 import { reviewDistribution } from "./review-distribution.mjs";
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
@@ -18,15 +24,10 @@ assert(
   "Usage: complete-public-beta.mjs <review-config.json> <final-notes.md>",
 );
 const options = JSON.parse(await readBounded(config, 64 * 1024));
-const approval = [beta32DeliveryApproval, beta35DeliveryApproval].find(
-  (item) => item.id === options.deliveryApproval,
-);
+const approval = await loadDeliveryApproval(options);
 assert(approval, "Unknown public delivery approval");
 const finalOptions = { ...options };
 delete finalOptions.deliveryApproval;
-const review = await reviewDistribution(finalOptions);
-assert.equal(review.candidate.setupSha256, approval.setupSha256);
-assert.equal(review.candidate.manifestSha256, approval.manifestSha256);
 const repository = "Kubonsang/HoneyBee";
 const tag = `v${approval.version}`;
 const commit =
@@ -34,6 +35,7 @@ const commit =
     ? "67c1712e6fcf846a9179b5ea595cf0807950f844"
     : options.releaseCommit;
 assert(/^[a-f0-9]{40}$/.test(commit), "Pinned release source commit required");
+if (approval.id === beta36DeliveryApprovalId) assert.equal(commit, approval.sourceCommit);
 const assets = [
   "HoneyBeeSetup.exe",
   "application.zip",
@@ -41,7 +43,7 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
-if (approval === beta35DeliveryApproval) {
+if (approval === beta35DeliveryApproval || approval.id === beta36DeliveryApprovalId) {
   assert.equal(
     (await digestDistributionFile(path.join(options.directory, "Kubonsang.HoneyBee.yaml"))).sha256,
     approval.wingetManifestSha256,
@@ -64,12 +66,24 @@ const remote = JSON.parse(
 assert.equal(remote.isDraft, false);
 assert.equal(remote.isPrerelease, true);
 assert.equal(remote.targetCommitish, commit);
-assert.deepEqual(remote.assets.map((a) => a.name).sort(), [...assets].sort());
 const base = path.join(path.resolve(options.directory), "publication");
 await mkdir(base, { recursive: true });
 const attempt = await mkdtemp(path.join(base, "public-verification-"));
 const hashes = {};
 try {
+  assert.deepEqual(remote.assets.map((a) => a.name).sort(), [...assets].sort());
+  const review = await reviewDistribution(finalOptions);
+  assert.equal(review.candidate.setupSha256, approval.setupSha256);
+  assert.equal(review.candidate.manifestSha256, approval.manifestSha256);
+  if (approval.id === beta36DeliveryApprovalId) {
+    assert(options.verificationReportPath, "Unified release verification required");
+    await requireReleaseVerification(
+      options.verificationReportPath,
+      review.candidate,
+      commit,
+      review.releaseMode,
+    );
+  }
   assert.equal(
     review.unsignedBetaReady,
     true,
@@ -82,6 +96,10 @@ try {
     "Legacy migration limitation required",
   );
   assert(!notes.includes("Draft only"), "Final notes still describe a draft");
+  assert(
+    !notes.includes("Public delivery verification pending"),
+    "Final notes still describe pending delivery",
+  );
   for (const name of assets) {
     const expected = await digestDistributionFile(path.join(options.directory, name));
     const response = await globalThis.fetch(
@@ -108,6 +126,15 @@ try {
     "Acceptance changed during public verification",
   );
   const exactNotes = path.join(attempt, "final-notes.md");
+  if (approval.id === beta36DeliveryApprovalId) {
+    assert.deepEqual(await loadDeliveryApproval(options), approval, "Delivery approval changed");
+    await requireReleaseVerification(
+      options.verificationReportPath,
+      review.candidate,
+      commit,
+      review.releaseMode,
+    );
+  }
   await writeFile(exactNotes, notes, { flag: "wx" });
   await gh(["release", "edit", tag, "--repo", repository, "--notes-file", exactNotes]);
   const publishedNotes = JSON.parse(

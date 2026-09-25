@@ -406,7 +406,21 @@ export class HoneyBeeWorkspaceCore {
         "Workspace storage returned an incomplete parent build.",
       );
     }
-    let committed: StorageParentBuild;
+    const transactionId = build.transactionId;
+    const abortFailedPreparation = async (error: unknown): Promise<never> => {
+      const abortError = await this.#storage
+        .abortParent(storageTools, transactionId)
+        .then(() => undefined)
+        .catch((candidate: unknown) => candidate);
+      if (abortError !== undefined) {
+        throw new WorkspaceCoreError(
+          "storage.operation-failed",
+          `Cache preparation failed and workspace storage could not confirm parent cleanup (transactionId=${transactionId}). Preparation: ${error instanceof Error ? error.message : String(error)} Cleanup: ${abortError instanceof Error ? abortError.message : String(abortError)}`,
+          { cause: new AggregateError([error, abortError]) },
+        );
+      }
+      throw error;
+    };
     try {
       for (const entry of await readdir(library)) {
         await cp(path.join(library, entry), path.join(build.stagingPath, entry), {
@@ -416,37 +430,43 @@ export class HoneyBeeWorkspaceCore {
           preserveTimestamps: true,
         });
       }
-      committed = await this.#storage.commitParent(storageTools, build.transactionId);
     } catch (error) {
-      const abortError = await this.#storage
-        .abortParent(storageTools, build.transactionId)
-        .then(() => undefined)
-        .catch((candidate: unknown) => candidate);
-      if (abortError !== undefined) {
-        throw new WorkspaceCoreError(
-          "storage.operation-failed",
-          "Cache preparation failed and workspace storage could not confirm parent cleanup.",
-          { cause: new AggregateError([error, abortError]) },
-        );
-      }
       if (libraryBusyError(error)) {
-        throw new WorkspaceCoreError(
-          "cache.library-in-use",
-          "The source Library could not be copied because Unity or another process is using it.",
-          {
-            cause: error,
-            remediation: [
-              "Close Unity and any process using the source Library, then run cache prepare again.",
-            ],
-          },
+        return abortFailedPreparation(
+          new WorkspaceCoreError(
+            "cache.library-in-use",
+            "The source Library could not be copied because Unity or another process is using it.",
+            {
+              cause: error,
+              remediation: [
+                "Close Unity and any process using the source Library, then run cache prepare again.",
+              ],
+            },
+          ),
         );
       }
-      throw error;
+      return abortFailedPreparation(error);
+    }
+    let committed: StorageParentBuild;
+    try {
+      committed = await this.#storage.commitParent(storageTools, transactionId);
+    } catch (error) {
+      if (error instanceof WorkspaceCoreError && error.code === "storage.commit-outcome-unknown") {
+        // Killing the client does not cancel the service's parent finalization.
+        throw error;
+      }
+      return abortFailedPreparation(error);
     }
     if (committed.parentId !== parentId) {
       throw new WorkspaceCoreError(
-        "storage.operation-failed",
-        "Workspace storage committed an unexpected Library parent identity.",
+        "storage.commit-outcome-unknown",
+        `Workspace storage committed an unexpected Library parent identity (transactionId=${transactionId}; expected=${parentId}; received=${committed.parentId}).`,
+        {
+          remediation: [
+            "The registered cache is unchanged. Preserve these identifiers for transaction-specific diagnosis before retrying or cleaning up.",
+            "Run honeybee doctor for read-only health diagnostics; it cannot confirm this commit's outcome.",
+          ],
+        },
       );
     }
     const prepared: ProjectRecordV2 = {

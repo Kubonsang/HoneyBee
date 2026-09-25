@@ -8,7 +8,12 @@ import { reviewDistribution } from "./review-distribution.mjs";
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { assertDistributionActionAllowed } from "./distribution-policy.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
-import { beta35DeliveryApproval } from "./beta32-delivery-approval.mjs";
+import {
+  beta35DeliveryApproval,
+  beta36DeliveryApprovalId,
+  loadDeliveryApproval,
+} from "./beta32-delivery-approval.mjs";
+import { requireReleaseVerification } from "../qualification/release-verify.mjs";
 
 const [configPath, notesPath, commit, action] = process.argv.slice(2);
 assert(
@@ -19,6 +24,9 @@ assert(
   "Usage: publish-beta.mjs <review-config.json> <release-notes.md> <full-remote-commit> <stage|publish|publish-for-verification>",
 );
 const options = JSON.parse(await readBounded(configPath, 64 * 1024));
+const deliveryApproval = await loadDeliveryApproval(options);
+if (deliveryApproval?.id === beta36DeliveryApprovalId)
+  assert.equal(deliveryApproval.sourceCommit, commit, "Approved publication commit differs");
 const review = await reviewDistribution(options);
 assertDistributionActionAllowed(review, action);
 const distribution = path.resolve(options.directory);
@@ -26,6 +34,20 @@ const receipt = JSON.parse(
   await readBounded(path.join(distribution, "distribution.json"), 64 * 1024),
 );
 assert.equal(receipt.channel, "beta");
+if (
+  ["publish", "publish-for-verification"].includes(action) &&
+  receipt.version !== "0.1.0-beta.32" &&
+  receipt.version !== "0.1.0-beta.35"
+) {
+  assert(options.verificationReportPath, "Unified release verification report required");
+  await requireReleaseVerification(
+    options.verificationReportPath,
+    review.candidate,
+    commit,
+    review.releaseMode,
+    action === "publish-for-verification" ? deliveryApproval : undefined,
+  );
+}
 assert(/^\d+\.\d+\.\d+-beta\.\d+$/u.test(receipt.version));
 const tag = `v${receipt.version}`;
 const repository = "Kubonsang/HoneyBee";
@@ -53,13 +75,17 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
-const includeWinget = receipt.version === beta35DeliveryApproval.version;
+const includeWinget =
+  receipt.version === beta35DeliveryApproval.version || receipt.version === "0.1.0-beta.36";
 if (includeWinget) {
-  assert.equal(review.candidate.setupSha256, beta35DeliveryApproval.setupSha256);
-  assert.equal(review.candidate.manifestSha256, beta35DeliveryApproval.manifestSha256);
+  const pinned =
+    receipt.version === beta35DeliveryApproval.version ? beta35DeliveryApproval : deliveryApproval;
+  assert(pinned, "Candidate-bound WinGet delivery approval required");
+  assert.equal(review.candidate.setupSha256, pinned.setupSha256);
+  assert.equal(review.candidate.manifestSha256, pinned.manifestSha256);
   assert.equal(
     (await digestDistributionFile(path.join(distribution, "Kubonsang.HoneyBee.yaml"))).sha256,
-    beta35DeliveryApproval.wingetManifestSha256,
+    pinned.wingetManifestSha256,
   );
   assets.push("Kubonsang.HoneyBee.yaml");
 }
@@ -201,6 +227,18 @@ if (action === "publish" || action === "publish-for-verification") {
   // Repeat local admission after the network roundtrip; do not rerun qualification.
   const final = await reviewDistribution(options);
   assert.deepEqual(final, review, "Candidate or acceptance changed before publication");
+  if (
+    ["publish", "publish-for-verification"].includes(action) &&
+    receipt.version !== "0.1.0-beta.32" &&
+    receipt.version !== "0.1.0-beta.35"
+  )
+    await requireReleaseVerification(
+      options.verificationReportPath,
+      final.candidate,
+      commit,
+      final.releaseMode,
+      action === "publish-for-verification" ? await loadDeliveryApproval(options) : undefined,
+    );
   await gh([
     "release",
     "edit",

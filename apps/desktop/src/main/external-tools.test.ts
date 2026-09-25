@@ -53,7 +53,15 @@ describe("Desktop external tool resolution", () => {
       { isAvailable: async () => true },
     );
     expect(resolution.executable).toBe(
-      "C:\\Program Files\\Unity\\Hub\\Editor\\6000.0.42f1\\Editor\\Unity.exe",
+      path.join(
+        "C:\\Program Files",
+        "Unity",
+        "Hub",
+        "Editor",
+        "6000.0.42f1",
+        "Editor",
+        "Unity.exe",
+      ),
     );
     expect(resolution.args).toEqual(["-projectPath", root]);
   });

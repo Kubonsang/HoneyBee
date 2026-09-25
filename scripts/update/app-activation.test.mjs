@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { spawn } from "node:child_process";
@@ -74,7 +75,7 @@ const preserved = async (f) => {
     "0.1.0-beta.12",
   ]);
 };
-test("commits a newer pinned version and retains old version and user data", async () => {
+windowsTest("commits a newer pinned version and retains old version and user data", async () => {
   const f = await fixture();
   const result = await activateAppPointer(f.options, f.hooks);
   assert.equal(result.state, "Committed");
@@ -92,7 +93,7 @@ test("commits a newer pinned version and retains old version and user data", asy
   );
   await preserved(f);
 });
-test("post-switch health failure restores exact old pointer bytes", async () => {
+windowsTest("post-switch health failure restores exact old pointer bytes", async () => {
   const f = await fixture();
   let switched = false;
   const result = await activateAppPointer(f.options, {
@@ -106,43 +107,52 @@ test("post-switch health failure restores exact old pointer bytes", async () => 
   assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
   await preserved(f);
 });
-test("native process start failure after switching restores the exact source pointer", async () => {
-  const f = await fixture();
-  const probe = path.join(f.root, "healthy-process.cjs");
-  await writeFile(probe, 'process.stdout.write("native-control-ok")');
-  assert.equal(
-    (await runDoctorProcess({ node: process.execPath, cli: probe, cwd: f.root, timeoutMs: 10000 }))
-      .stdout,
-    "native-control-ok",
-  );
-  let failures = 0;
-  let switched = false;
-  const result = await activateAppPointer(f.options, {
-    ...f.hooks,
-    checkpoint: async (state) => {
-      if (state === "switched") switched = true;
-    },
-    health: async ({ version }) => {
-      if (version !== f.options.targetVersion || !switched) return true;
-      await assert.rejects(
-        runDoctorProcess({
-          node: path.join(f.root, "missing-node.exe"),
+windowsTest(
+  "native process start failure after switching restores the exact source pointer",
+  async () => {
+    const f = await fixture();
+    const probe = path.join(f.root, "healthy-process.cjs");
+    await writeFile(probe, 'process.stdout.write("native-control-ok")');
+    assert.equal(
+      (
+        await runDoctorProcess({
+          node: process.execPath,
           cli: probe,
           cwd: f.root,
           timeoutMs: 10000,
-        }),
-      );
-      failures++;
-      return false;
-    },
-  });
-  assert.equal(failures, 1);
-  assert.equal(result.state, "RolledBack");
-  assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
-  await preserved(f);
-});
+        })
+      ).stdout,
+      "native-control-ok",
+    );
+    let failures = 0;
+    let switched = false;
+    const result = await activateAppPointer(f.options, {
+      ...f.hooks,
+      checkpoint: async (state) => {
+        if (state === "switched") switched = true;
+      },
+      health: async ({ version }) => {
+        if (version !== f.options.targetVersion || !switched) return true;
+        await assert.rejects(
+          runDoctorProcess({
+            node: path.join(f.root, "missing-node.exe"),
+            cli: probe,
+            cwd: f.root,
+            timeoutMs: 10000,
+          }),
+        );
+        failures++;
+        return false;
+      },
+    });
+    assert.equal(failures, 1);
+    assert.equal(result.state, "RolledBack");
+    assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
+    await preserved(f);
+  },
+);
 for (const phase of ["intent", "switched", "validated"])
-  test(`exception at ${phase} rolls back safely`, async () => {
+  windowsTest(`exception at ${phase} rolls back safely`, async () => {
     const f = await fixture();
     const result = await activateAppPointer(f.options, {
       ...f.hooks,
@@ -172,7 +182,7 @@ test("missing admission, stale source or failed preflight cannot replace the poi
   assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
   await preserved(f);
 });
-test("unknown pointer is never overwritten during rollback", async () => {
+windowsTest("unknown pointer is never overwritten during rollback", async () => {
   const f = await fixture();
   const other = Buffer.from("external-pointer");
   await assert.rejects(
@@ -191,7 +201,7 @@ test("unknown pointer is never overwritten during rollback", async () => {
   await assert.rejects(activateAppPointer(f.options, f.hooks), /Interrupted activation/u);
   await preserved(f);
 });
-test("service compatibility change is rejected before admission", async () => {
+windowsTest("service compatibility change is rejected before admission", async () => {
   const f = await fixture();
   const directory = path.join(f.root, "versions", f.options.targetVersion);
   const installation = JSON.stringify({
@@ -214,7 +224,7 @@ test("service compatibility change is rejected before admission", async () => {
   assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
 });
 for (const phase of ["intent", "switched"])
-  test(
+  windowsTest(
     `process death at ${phase} conservatively restores source on recovery`,
     { timeout: 20000 },
     async (t) => {
@@ -263,7 +273,7 @@ for (const phase of ["intent", "switched"])
     },
   );
 
-test("Windows replacement failure leaves the old pointer intact", async () => {
+windowsTest("Windows replacement failure leaves the old pointer intact", async () => {
   const f = await fixture(),
     current = path.join(f.root, "current.json");
   await chmod(current, 0o444);
@@ -275,31 +285,34 @@ test("Windows replacement failure leaves the old pointer intact", async () => {
     await chmod(current, 0o666);
   }
 });
-test("unhealthy rollback source is retained for explicit recovery rather than activated", async () => {
-  const f = await fixture();
-  let directory;
-  await assert.rejects(
-    activateAppPointer(f.options, {
-      ...f.hooks,
-      checkpoint: async (state, dir) => {
-        directory = dir;
-        if (state === "switched") throw new Error("health failure");
-      },
-      health: async ({ phase }) => phase !== "rollback",
-    }),
-    /needs recovery/u,
-  );
-  assert.equal(
-    JSON.parse(await readFile(path.join(f.root, "current.json"))).activeVersion,
-    f.options.targetVersion,
-  );
-  assert.equal(
-    (await recoverAppPointer({ ...f.options, transactionDirectory: directory }, f.hooks)).state,
-    "RolledBack",
-  );
-  assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
-});
-test("incomplete validation blocks activation before admission", async () => {
+windowsTest(
+  "unhealthy rollback source is retained for explicit recovery rather than activated",
+  async () => {
+    const f = await fixture();
+    let directory;
+    await assert.rejects(
+      activateAppPointer(f.options, {
+        ...f.hooks,
+        checkpoint: async (state, dir) => {
+          directory = dir;
+          if (state === "switched") throw new Error("health failure");
+        },
+        health: async ({ phase }) => phase !== "rollback",
+      }),
+      /needs recovery/u,
+    );
+    assert.equal(
+      JSON.parse(await readFile(path.join(f.root, "current.json"))).activeVersion,
+      f.options.targetVersion,
+    );
+    assert.equal(
+      (await recoverAppPointer({ ...f.options, transactionDirectory: directory }, f.hooks)).state,
+      "RolledBack",
+    );
+    assert.deepEqual(await readFile(path.join(f.root, "current.json")), f.source);
+  },
+);
+windowsTest("incomplete validation blocks activation before admission", async () => {
   const f = await fixture();
   await mkdir(path.join(f.root, "update/transactions/txn-orphan"), { recursive: true });
   await assert.rejects(

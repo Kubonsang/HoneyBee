@@ -1,7 +1,7 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
 import { prepareApplicationRepair, recoverApplicationRepair } from "./repair-active.mjs";
 import { sha256 } from "./release-manifest.mjs";
 import { assertApplicationRepairAdmission } from "../../packages/core/dist/repair-admission.js";
@@ -51,44 +51,47 @@ async function fixture() {
   return { root, source, runtime, app, pointer, version };
 }
 
-test("damaged app Repair resumes after directory preservation without losing user state", async () => {
-  const f = await fixture();
-  const options = { installationRoot: f.root, sourceInstallation: f.source, runtime: f.runtime };
-  const prepared = await prepareApplicationRepair(options);
-  await assert.rejects(assertApplicationRepairAdmission(f.root));
-  await assert.rejects(
-    recoverApplicationRepair({
-      ...options,
-      name: prepared.name,
-      checkpoint: async (state) => {
-        if (state === "preserved") throw new Error("simulated interruption");
-      },
-    }),
-    /simulated interruption/,
-  );
-  assert.deepEqual(
-    await prepareApplicationRepair(options),
-    prepared,
-    "retry must reuse the durable transaction",
-  );
-  await recoverApplicationRepair({ ...options, name: prepared.name });
-  await assertApplicationRepairAdmission(f.root);
-  assert.equal(await readFile(f.app, "utf8"), "approved-app");
-  assert.equal(
-    await readFile(
-      path.join(prepared.directory, "previous-version/desktop/resources/app.asar"),
-      "utf8",
-    ),
-    "damaged-app",
-  );
-  assert.equal(
-    await readFile(path.join(f.root, "workspace-core/registry.json"), "utf8"),
-    "preserve-user-state",
-  );
-  assert.equal(await readFile(path.join(f.root, "current.json"), "utf8"), f.pointer);
-});
+windowsTest(
+  "damaged app Repair resumes after directory preservation without losing user state",
+  async () => {
+    const f = await fixture();
+    const options = { installationRoot: f.root, sourceInstallation: f.source, runtime: f.runtime };
+    const prepared = await prepareApplicationRepair(options);
+    await assert.rejects(assertApplicationRepairAdmission(f.root));
+    await assert.rejects(
+      recoverApplicationRepair({
+        ...options,
+        name: prepared.name,
+        checkpoint: async (state) => {
+          if (state === "preserved") throw new Error("simulated interruption");
+        },
+      }),
+      /simulated interruption/,
+    );
+    assert.deepEqual(
+      await prepareApplicationRepair(options),
+      prepared,
+      "retry must reuse the durable transaction",
+    );
+    await recoverApplicationRepair({ ...options, name: prepared.name });
+    await assertApplicationRepairAdmission(f.root);
+    assert.equal(await readFile(f.app, "utf8"), "approved-app");
+    assert.equal(
+      await readFile(
+        path.join(prepared.directory, "previous-version/desktop/resources/app.asar"),
+        "utf8",
+      ),
+      "damaged-app",
+    );
+    assert.equal(
+      await readFile(path.join(f.root, "workspace-core/registry.json"), "utf8"),
+      "preserve-user-state",
+    );
+    assert.equal(await readFile(path.join(f.root, "current.json"), "utf8"), f.pointer);
+  },
+);
 
-test("changed repair staging is refused before the active app is moved", async () => {
+windowsTest("changed repair staging is refused before the active app is moved", async () => {
   const f = await fixture();
   const options = { installationRoot: f.root, sourceInstallation: f.source, runtime: f.runtime };
   const prepared = await prepareApplicationRepair(options);
@@ -104,7 +107,7 @@ test("changed repair staging is refused before the active app is moved", async (
   await assert.rejects(assertApplicationRepairAdmission(f.root));
 });
 
-test("a published Repair without its completion record finishes on retry", async () => {
+windowsTest("a published Repair without its completion record finishes on retry", async () => {
   const f = await fixture();
   const options = { installationRoot: f.root, sourceInstallation: f.source, runtime: f.runtime };
   const prepared = await prepareApplicationRepair(options);

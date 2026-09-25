@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import process from "node:process";
 import { afterEach, expect, it } from "vitest";
 import { readInstalledStorage } from "./installed-storage.js";
 
@@ -11,7 +12,10 @@ afterEach(async () => {
 });
 const hash = (value: string) => createHash("sha256").update(value).digest("hex");
 it("discovers its pinned release without following current.json and rejects corrupted tools", async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "honeybee-installed-"));
+  // Windows hosted runners may expose TEMP through an 8.3 path alias. The
+  // positive fixture must use its canonical root; production redirect refusal
+  // remains strict and is exercised separately below.
+  const root = await realpath(await mkdtemp(path.join(tmpdir(), "honeybee-installed-")));
   roots.push(root);
   const release = path.join(root, "versions", "0.1.0-beta.11");
   await mkdir(path.join(release, "tools"), { recursive: true });
@@ -42,6 +46,12 @@ it("discovers its pinned release without following current.json and rejects corr
   expect(await readFile(path.join(root, "current.json"), "utf8")).toBe(
     "an unrelated activation is in progress",
   );
+  const redirected = path.join(root, "redirected", "versions", "0.1.0-beta.11");
+  await mkdir(path.dirname(redirected), { recursive: true });
+  await symlink(release, redirected, process.platform === "win32" ? "junction" : "dir");
+  await expect(readInstalledStorage(redirected)).rejects.toMatchObject({
+    code: "installation.invalid",
+  });
   await writeFile(path.join(release, "tools/honeybee-workspace-storage-host.exe"), "damaged");
   await expect(readInstalledStorage(release)).rejects.toMatchObject({
     code: "installation.invalid",

@@ -20,7 +20,7 @@ test("private keys cannot be generated in repository output or a relative path",
 
 test(
   "DPAPI key roundtrip signs, stores no plaintext, and refuses replacement",
-  { skip: process.platform !== "win32" },
+  { skip: process.platform !== "win32" ? "windows-native: dpapi" : false },
   async () => {
     const parent = await mkdtemp(path.join(tmpdir(), "honeybee-key-test-"));
     const keyPath = path.join(parent, "private", "release.dpapi");

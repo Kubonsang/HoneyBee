@@ -1,8 +1,8 @@
 diff --git a/PROVENANCE.md b/PROVENANCE.md
-index 781fc14..f78fd1f 100644
+index 781fc14..c4974a6 100644
 --- a/PROVENANCE.md
 +++ b/PROVENANCE.md
-@@ -185,3 +185,24 @@ source-tree symlinks and special files remain rejected before cloning. The
+@@ -185,3 +185,49 @@ source-tree symlinks and special files remain rejected before cloning. The
  checkpoint-derived `storage/clone_darwin.go` is unchanged. Native CI separately
  requires two-child isolation, allocated-byte evidence, clean release, and
  daemon restart recovery on APFS and reflink-enabled XFS.
@@ -27,6 +27,31 @@ index 781fc14..f78fd1f 100644
 +content/accounting, inheritance, hard-link rejection and mixed compressed/plain
 +retained lifecycle behavior. The complete reviewable overlay is SHA-256 pinned
 +by HoneyBee; frozen extraction manifests remain unchanged.
++
++## HoneyBee active parent recovery follow-up (2026-09-19)
++
++The hb14 overlay protects matching service-owned parent sessions from periodic
++pending recovery, including while the begin CLI has exited or Finalize is still
++running. Journal creation/session registration is serialized with the recovery
++snapshot. Native finalization does not block recovery. Protection ends after
++successful publication/abort or broker restart; abandoned in-memory sessions
++are conservatively retained rather than reclaimed using only a client PID.
++Restarted brokers retain the existing orphan quarantine rules. No on-disk schema,
++capacity floor, timeout, or compatibility key changes are made. The destination
++overlay now has 23 entries, including the additive recovery implementation and
++regression tests; the original 42-entry manifest remains unchanged.
++
++## HoneyBee commit observation follow-up (hb15, 2026-09-19)
++
++Adds authenticated, uncached read-only observations bound to broker instance,
++commit request and transaction IDs. Observations report actual worker checkpoint
++sequence and phase separately from service responsiveness, and return cached
++completion only for the matching transaction. Synchronous commit handling and
++pipe-server maintenance drain semantics are retained. Bee and VHDX checkpoints
++do not remove any sync, identity, digest or publication checks. The destination
++overlay has 25 entries with observation implementation and regression tests;
++the original frozen manifest is unchanged. This is a local, not native-qualified,
++HoneyBee overlay, not an upstream release.
 diff --git a/cmd/unity-workspace-storage/main.go b/cmd/unity-workspace-storage/main.go
 index 64105b8..5d930ba 100644
 --- a/cmd/unity-workspace-storage/main.go
@@ -155,15 +180,15 @@ index b86d757..8717e02 100644
  		return fail("invalid-compatibility-key", errors.New("compatibilityKey must be 64 lowercase hex characters"))
  	}
 diff --git a/provenance/post-rc-destination-sha256.tsv b/provenance/post-rc-destination-sha256.tsv
-index 9c7aad8..160b385 100644
+index 9c7aad8..d5f8d26 100644
 --- a/provenance/post-rc-destination-sha256.tsv
 +++ b/provenance/post-rc-destination-sha256.tsv
-@@ -6,16 +6,17 @@ d9b2efea2272fb81f058ebdc4176c07d25e934db004920e4873b5341771e6010	storage/retaine
+@@ -6,16 +6,21 @@ d9b2efea2272fb81f058ebdc4176c07d25e934db004920e4873b5341771e6010	storage/retaine
  fc5fdfe3cb0753a319690301cb8220d0a61cf7b9d7c4f1d5688518c8d1dbeb02	storage/retained_recovery_windows_test.go
  ba6d5c84d576c0d9dd94913b92c6d36c6d2d0211b5f91f0d6391364910245430	workspace/attach_recorded.go
  bb07edd78c9a8f750bf402755ecd7aace42579197258d09d4b06a0780f49b527	workspace/attach_recorded_test.go
 -973cf354068e11a167b6d3b4af88991e4a76a25573348fddaa48107daddb3d9a	workspace/broker.go
-+4320edfbacc760d1761da81b468bbf1ae2ad3c247b2f60c06a840a574ab41c66	workspace/broker.go
++faf62b24be9adf68727d9fedda766d9480ff4b58d1096bc96c5157b323765f31	workspace/broker.go
  c3970f5b6f239f48f248e39ded9df63d0503365f950170f7aefef685f97133a0	workspace/broker_test.go
  1d8b858a4344bc66f16b8307008df589dee94b5fc0398d3df3a4bcf1fcccbff9	workspace/installed_user_access_integration_windows_test.go
 -d4c0b5abee83f45d405a2bd867a4a0ffedfaa9b4409b410f271a088dfde4f82f	workspace/native.go
@@ -171,19 +196,23 @@ index 9c7aad8..160b385 100644
 +b99a5e83e6a12d52d1e42309c0d5061af98c2ddc92c0f4b2e20caff4a4e2cfc6	workspace/native.go
  8a4b5d8f42eff9e8fca5d2fab2c51981bffc5672910fb4c17eac94ae55be4e24	workspace/native_unsupported.go
 -52be82af2df284aa3061d0d6050191ff5dc8fb371afc70c2b5dacc1c9929a5e3	workspace/native_windows.go
-+8d11a908461f33519c5df0132e1cb347108cc02a653c4ea8169c46688089189c	workspace/native_windows.go
++61187b1585853de1b83b3cf48aefdb330dd22746e3b497ac201dd947d2aac444	workspace/native_windows.go
  e847fac674aedf034f8038c8ceaca0db9200073e4ebc44a6801496886e082aef	workspace/pipe_windows.go
 -8353fac09dc51ad30ca1555ce49c9bb2178a167889cf692a7a7a3bc77abbbdef	workspace/protocol.go
-+41452b0a9d2d15e62b111a4eaecc1c914f439a7c92fdf971a1239ab7df49250b	workspace/protocol.go
++118399ae9c0216937acfafe212e4d6efe3e37bae47f9476a91748a1f676f4167	workspace/protocol.go
  c6ed6aecc865837e086c6899045a1bf6e0e0c7d6265d4557fcab6a4e1fb03ecc	workspace/removal.go
  f7ec8b3776560370cd0ac2cb5371acd55b6b6c6791c113a3fe54dd3e4e34199e	workspace/service_unsupported.go
  ba7c496f93720b36ec7e23809ad70637b22ec030f0d4d4172e24231b9275e3ce	workspace/service_windows.go
 -1ed6ec956386e16fb78d9feeaad9983acd73ad11a2f518baa5d02889df99de27	workspace/store.go
 -5dc7e4a38b25e5667564c0ee3b463023b16b9ac2fceed8e800e83cd580233879	workspace/types.go
-+a21fc8001449bc5b95bb9ab94bc3970cac42b1721e2336c6f7da04b5e2985e26	workspace/store.go
++8172e13d4115ab2043d8dfdbe7b5b0bd35b3b1f09fc38de53979148767481abb	workspace/store.go
 +a86df810f6d7d63c3c4bc3b0acf4f9df1e3c2b4e8d4065c87c83c1480d3dc489	workspace/types.go
++9819d76447c7a8042cc83c040cdcb22a34399139277af07fa2af5fc70792f549	workspace/parent_recovery.go
++1b2bc8993b97c7e963ca9a9516118aa623d836f7e65eece1c8430c736cac6555	workspace/parent_recovery_test.go
++d77ae626bbd011480a85cf1f5140850ae28b19b808f9aa7c065a2472bf63adef	workspace/commit_progress.go
++947f9882fea35e0a9c5ae9722a8b3eaafc2f3e227f592610c18d71ae5dd115ea	workspace/commit_progress_test.go
 diff --git a/scripts/verify-frozen-destination-parity.ps1 b/scripts/verify-frozen-destination-parity.ps1
-index 9e0e707..bc0a554 100644
+index 9e0e707..74631bf 100644
 --- a/scripts/verify-frozen-destination-parity.ps1
 +++ b/scripts/verify-frozen-destination-parity.ps1
 @@ -15,7 +15,7 @@ $overlayManifestPath = if ([string]::IsNullOrWhiteSpace($OverlayManifest)) {
@@ -191,7 +220,7 @@ index 9e0e707..bc0a554 100644
  }
  $expectedFrozenFileCount = 42
 -$expectedOverlayFileCount = 20
-+$expectedOverlayFileCount = 21
++$expectedOverlayFileCount = 25
  $failures = [Collections.Generic.List[string]]::new()
  $checked = 0
  $sha256 = [Security.Cryptography.SHA256]::Create()
@@ -783,10 +812,10 @@ index 0000000..64b4158
 +}
 diff --git a/workspace/bee_native_windows.go b/workspace/bee_native_windows.go
 new file mode 100644
-index 0000000..cb91f15
+index 0000000..8ca278f
 --- /dev/null
 +++ b/workspace/bee_native_windows.go
-@@ -0,0 +1,213 @@
+@@ -0,0 +1,229 @@
 +//go:build windows
 +
 +package workspace
@@ -814,6 +843,7 @@ index 0000000..cb91f15
 +		return nil
 +	}
 +	seed := filepath.Join(filepath.Dir(s.pending.StagingPath), "bee-seed")
++	commitProgress(ctx, "bee-freeze")
 +	if _, e := os.Lstat(seed); !os.IsNotExist(e) {
 +		return errors.Join(e, ErrOwnershipMismatch)
 +	}
@@ -831,7 +861,8 @@ index 0000000..cb91f15
 +	if err = ro.MountExisting(ctx, s.pending.MountPath, true); err != nil {
 +		return errors.Join(err, ro.Close(ctx))
 +	}
-+	tree, err := openBeeTree(filepath.Join(s.pending.MountPath, "Bee"), 1)
++	commitProgress(ctx, "bee-copy")
++	tree, err := openBeeTreeProgress(filepath.Join(s.pending.MountPath, "Bee"), 1, func() { commitProgress(ctx, "bee-copy") })
 +	if err == nil {
 +		if !strings.EqualFold(fmt.Sprintf("%08X", tree.nodes[0].volumeSerial), s.evidence.Volume.VolumeSerial) {
 +			err = ErrOwnershipMismatch
@@ -844,7 +875,8 @@ index 0000000..cb91f15
 +	if err != nil {
 +		return err
 +	}
-+	seedTree, err := openBeeTree(seed, 1)
++	commitProgress(ctx, "bee-digest")
++	seedTree, err := openBeeTreeProgress(seed, 1, func() { commitProgress(ctx, "bee-digest") })
 +	if err != nil {
 +		return err
 +	}
@@ -864,9 +896,16 @@ index 0000000..cb91f15
 +	if err = rw.MountExisting(ctx, s.pending.MountPath, false); err != nil {
 +		return err
 +	}
-+	if err = removeBeeTree(filepath.Join(s.pending.MountPath, "Bee")); err != nil {
++	commitProgress(ctx, "bee-remove")
++	removeTree, removeErr := openBeeTreeProgress(filepath.Join(s.pending.MountPath, "Bee"), 2, func() { commitProgress(ctx, "bee-remove") })
++	if removeErr != nil {
++		return removeErr
++	}
++	err = errors.Join(removeTree.remove(), removeTree.close())
++	if err != nil {
 +		return err
 +	}
++	commitProgress(ctx, "bee-acl")
 +	if err = setBeeAccess(seed, s.pending.UserSID, false); err != nil {
 +		return err
 +	}
@@ -874,6 +913,9 @@ index 0000000..cb91f15
 +	return nil
 +}
 +func verifyBeeSeed(parent ParentMetadata) error {
++	return verifyBeeSeedProgress(parent, nil)
++}
++func verifyBeeSeedProgress(parent ParentMetadata, progress func()) error {
 +	if parent.CompatibilityKey.Layout == "" {
 +		if parent.BeeSeed != nil {
 +			return ErrOwnershipMismatch
@@ -883,7 +925,7 @@ index 0000000..cb91f15
 +	if parent.CompatibilityKey.Layout != ExternalBeeLayout || parent.BeeSeed == nil {
 +		return ErrOwnershipMismatch
 +	}
-+	tree, err := openBeeTree(filepath.Join(filepath.Dir(parent.VHDXPath), "bee-seed"), 1)
++	tree, err := openBeeTreeProgress(filepath.Join(filepath.Dir(parent.VHDXPath), "bee-seed"), 1, progress)
 +	if err != nil {
 +		return err
 +	}
@@ -900,6 +942,9 @@ index 0000000..cb91f15
 +}
 +func validateBeeSeedForCommit(p *PendingParent, seed *BeeSeed) error {
 +	return verifyBeeSeed(ParentMetadata{CompatibilityKey: p.Key, VHDXPath: p.StagingPath, BeeSeed: seed})
++}
++func validateBeeSeedForCommitProgress(p *PendingParent, seed *BeeSeed, progress func()) error {
++	return verifyBeeSeedProgress(ParentMetadata{CompatibilityKey: p.Key, VHDXPath: p.StagingPath, BeeSeed: seed}, progress)
 +}
 +func createBeeCache(parent ParentMetadata, j LeaseJournal) error {
 +	root, err := beeRoot(j)
@@ -1002,10 +1047,10 @@ index 0000000..cb91f15
 +}
 diff --git a/workspace/bee_tree_windows.go b/workspace/bee_tree_windows.go
 new file mode 100644
-index 0000000..e38ce61
+index 0000000..8508d30
 --- /dev/null
 +++ b/workspace/bee_tree_windows.go
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,326 @@
 +//go:build windows
 +
 +package workspace
@@ -1035,7 +1080,23 @@ index 0000000..e38ce61
 +	info         os.FileInfo
 +	volumeSerial uint32
 +}
-+type beeTree struct{ nodes []beeNode }
++type beeTree struct {
++	nodes    []beeNode
++	progress func()
++}
++
++type progressReader struct {
++	io.Reader
++	progress func()
++}
++
++func (r progressReader) Read(p []byte) (int, error) {
++	n, err := r.Reader.Read(p)
++	if n > 0 && r.progress != nil {
++		r.progress()
++	}
++	return n, err
++}
 +
 +var beeStandardInfo = windows.NewLazySystemDLL("kernel32.dll").NewProc("GetFileInformationByHandleEx")
 +
@@ -1083,7 +1144,10 @@ index 0000000..e38ce61
 +	return err
 +}
 +func openBeeTree(root string, mode int) (*beeTree, error) {
-+	t := &beeTree{}
++	return openBeeTreeProgress(root, mode, nil)
++}
++func openBeeTreeProgress(root string, mode int, progress func()) (*beeTree, error) {
++	t := &beeTree{progress: progress}
 +	var visit func(string) error
 +	visit = func(p string) error {
 +		ptr, err := windows.UTF16PtrFromString(p)
@@ -1136,6 +1200,9 @@ index 0000000..e38ce61
 +			return ErrOwnershipMismatch
 +		}
 +		t.nodes = append(t.nodes, beeNode{p, f, info, id.VolumeSerialNumber})
++		if progress != nil {
++			progress()
++		}
 +		if info.IsDir() {
 +			entries, err := f.ReadDir(-1)
 +			if err != nil {
@@ -1179,7 +1246,7 @@ index 0000000..e38ce61
 +			if _, err = n.file.Seek(0, 0); err != nil {
 +				return "", err
 +			}
-+			if _, err = io.Copy(h, n.file); err != nil {
++			if _, err = io.Copy(h, progressReader{n.file, t.progress}); err != nil {
 +				return "", err
 +			}
 +		}
@@ -1195,6 +1262,9 @@ index 0000000..e38ce61
 +			}
 +			logical += n.info.Size()
 +			allocated += bytes
++			if t.progress != nil {
++				t.progress()
++			}
 +		}
 +	}
 +	return
@@ -1225,7 +1295,7 @@ index 0000000..e38ce61
 +		}
 +		_, err = n.file.Seek(0, 0)
 +		if err == nil {
-+			_, err = io.Copy(out, n.file)
++			_, err = io.Copy(out, progressReader{n.file, t.progress})
 +		}
 +		err = errors.Join(err, out.Sync(), out.Close())
 +		if err != nil {
@@ -1233,6 +1303,9 @@ index 0000000..e38ce61
 +		}
 +		if err = os.Chtimes(dst, n.info.ModTime(), n.info.ModTime()); err != nil {
 +			return err
++		}
++		if t.progress != nil {
++			t.progress()
 +		}
 +	}
 +	return nil
@@ -1254,6 +1327,9 @@ index 0000000..e38ce61
 +			return err
 +		}
 +		n.file = nil
++		if t.progress != nil {
++			t.progress()
++		}
 +	}
 +	return nil
 +}
@@ -1303,19 +1379,66 @@ index 0000000..e38ce61
 +}
 diff --git a/workspace/bee_tree_windows_test.go b/workspace/bee_tree_windows_test.go
 new file mode 100644
-index 0000000..d4cd936
+index 0000000..bfc89d7
 --- /dev/null
 +++ b/workspace/bee_tree_windows_test.go
-@@ -0,0 +1,90 @@
+@@ -0,0 +1,137 @@
 +//go:build windows
 +
 +package workspace
 +
 +import (
++	"bytes"
 +	"os"
 +	"path/filepath"
 +	"testing"
 +)
++
++func TestBeeWorkerProgressPreservesCopyAndDigest(t *testing.T) {
++	root := t.TempDir()
++	source := filepath.Join(root, "source")
++	target := filepath.Join(root, "target")
++	if err := os.Mkdir(source, 0700); err != nil {
++		t.Fatal(err)
++	}
++	payload := bytes.Repeat([]byte("checkpoint"), 10000)
++	if err := os.WriteFile(filepath.Join(source, "payload"), payload, 0600); err != nil {
++		t.Fatal(err)
++	}
++	count := 0
++	tree, err := openBeeTreeProgress(source, 1, func() { count++ })
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer tree.close()
++	opened := count
++	if opened < 2 {
++		t.Fatal("missing open checkpoints")
++	}
++	if err = tree.copyTo(target, false); err != nil {
++		t.Fatal(err)
++	}
++	if count <= opened {
++		t.Fatal("missing copy checkpoints")
++	}
++	copied := count
++	digest, err := tree.digest()
++	if err != nil {
++		t.Fatal(err)
++	}
++	if count <= copied {
++		t.Fatal("missing digest checkpoints")
++	}
++	plain, err := openBeeTree(target, 1)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer plain.close()
++	other, err := plain.digest()
++	if err != nil || digest != other {
++		t.Fatal("checkpoint changed copied bytes or digest", err)
++	}
++}
 +
 +func TestBeeTreeRejectsHardlinksAndReservesBusyFiles(t *testing.T) {
 +	root := t.TempDir()
@@ -1399,21 +1522,81 @@ index 0000000..d4cd936
 +}
 diff --git a/workspace/bee_unsupported.go b/workspace/bee_unsupported.go
 new file mode 100644
-index 0000000..9f61258
+index 0000000..a2e3144
 --- /dev/null
 +++ b/workspace/bee_unsupported.go
-@@ -0,0 +1,6 @@
+@@ -0,0 +1,9 @@
 +//go:build !windows
 +
 +package workspace
 +
 +func validateBeeSeedForCommit(*PendingParent, *BeeSeed) error { return ErrBrokerUnavailable }
-+func beeFileAllocatedBytes(path string) (int64, error)        { return fileAllocatedBytes(path) }
++func validateBeeSeedForCommitProgress(*PendingParent, *BeeSeed, func()) error {
++	return ErrBrokerUnavailable
++}
++func beeFileAllocatedBytes(path string) (int64, error) { return fileAllocatedBytes(path) }
 diff --git a/workspace/broker.go b/workspace/broker.go
-index b31514e..c21f05a 100644
+index b31514e..8502857 100644
 --- a/workspace/broker.go
 +++ b/workspace/broker.go
-@@ -276,7 +276,7 @@ func (b *Broker) handleLocked(ctx context.Context, callerSID string, request Req
+@@ -23,18 +23,24 @@ type BrokerConfig struct {
+ }
+ 
+ type Broker struct {
+-	config   BrokerConfig
+-	store    *Store
+-	native   Native
+-	mu       sync.Mutex
+-	parents  map[string]ParentSession
+-	pending  map[string]*PendingParent
+-	children map[string]ChildSession
+-	requests map[string]Response
+-	inflight map[string]chan struct{}
+-	removals map[string]*retainedRemoval
+-	busyRuns map[string]bool
+-	now      func() time.Time
++	commitProgress  map[string]*CommitObservation
++	brokerSessionID string
++	// Serializes journal creation/session registration with pending recovery.
++	// Finalize does not hold this lock: recovery must remain responsive while
++	// a large parent is being finalized.
++	parentRecoveryMu sync.Mutex
++	config           BrokerConfig
++	store            *Store
++	native           Native
++	mu               sync.Mutex
++	parents          map[string]ParentSession
++	pending          map[string]*PendingParent
++	children         map[string]ChildSession
++	requests         map[string]Response
++	inflight         map[string]chan struct{}
++	removals         map[string]*retainedRemoval
++	busyRuns         map[string]bool
++	now              func() time.Time
+ }
+ 
+ type RecoverySummary struct {
+@@ -59,7 +65,7 @@ func (b *Broker) Recover(ctx context.Context, grace time.Duration) (RecoverySumm
+ 		grace = 30 * time.Second
+ 	}
+ 	currentBootSessionID := b.native.BootSessionID()
+-	preservedPending, quarantinedPending, pendingErr := b.store.RecoverPending(b.now(), grace, b.native.ProcessAlive)
++	preservedPending, quarantinedPending, pendingErr := b.recoverPending(grace)
+ 	if pendingErr != nil {
+ 		return summary, pendingErr
+ 	}
+@@ -182,6 +188,10 @@ func NewBroker(config BrokerConfig, native Native) (*Broker, error) {
+ }
+ 
+ func (b *Broker) Handle(ctx context.Context, callerSID string, request Request) Response {
++	// Observations are authenticated, read-only and never cached as requests.
++	if request.Operation == "observe-parent-commit" {
++		return b.observeCommit(callerSID, request)
++	}
+ 	b.mu.Lock()
+ 	if response, ok := b.requests[request.RequestID]; ok && request.RequestID != "" {
+ 		b.mu.Unlock()
+@@ -276,7 +286,7 @@ func (b *Broker) handleLocked(ctx context.Context, callerSID string, request Req
  	}
  	switch request.Operation {
  	case OperationHello:
@@ -1422,16 +1605,42 @@ index b31514e..c21f05a 100644
  	case OperationBeginParentBuild:
  		return b.beginParent(ctx, request, fail)
  	case OperationCommitParent:
-@@ -357,7 +357,7 @@ func (b *Broker) attachRetained(ctx context.Context, request Request, fail failu
+@@ -357,7 +367,9 @@ func (b *Broker) attachRetained(ctx context.Context, request Request, fail failu
  type failureBuilder func(string, string, string, error) Response
  
  func (b *Broker) beginParent(ctx context.Context, request Request, fail failureBuilder) Response {
 -	if request.ParentKey == nil || request.Source == nil {
++	b.parentRecoveryMu.Lock()
++	defer b.parentRecoveryMu.Unlock()
 +	if request.ParentKey == nil || request.Source == nil || (request.ParentKey.Layout != "" && request.ParentKey.Layout != ExternalBeeLayout) {
  		return fail("invalid-request", "begin-parent", "", ErrInvalidInput)
  	}
  	resolved, err := b.store.ResolveParent(*request.ParentKey)
-@@ -425,8 +425,8 @@ func (b *Broker) commitParent(ctx context.Context, request Request, fail failure
+@@ -404,6 +416,8 @@ func (b *Broker) beginParent(ctx context.Context, request Request, fail failureB
+ }
+ 
+ func (b *Broker) commitParent(ctx context.Context, request Request, fail failureBuilder) Response {
++	ctx, finishProgress := b.trackCommit(ctx, request)
++	defer finishProgress()
+ 	b.mu.Lock()
+ 	session, ok := b.parents[request.TransactionID]
+ 	pending := b.pending[request.TransactionID]
+@@ -412,6 +426,7 @@ func (b *Broker) commitParent(ctx context.Context, request Request, fail failure
+ 		return fail("parent-transaction-not-found", "commit-parent", request.TransactionID, ErrOwnershipMismatch)
+ 	}
+ 	started := b.now()
++	commitProgress(ctx, "finalize")
+ 	evidence, err := session.Finalize(ctx)
+ 	if err != nil {
+ 		return fail("parent-verification-failed", "finalize-parent", pending.StagingPath, err)
+@@ -419,17 +434,19 @@ func (b *Broker) commitParent(ctx context.Context, request Request, fail failure
+ 	// Do not publish a cache that leaves no room for its first differencing
+ 	// child. The finalized transaction remains pending so the client can abort
+ 	// it safely when admission fails.
++	commitProgress(ctx, "capacity")
+ 	if _, err := b.ensureCapacity(1, false); err != nil {
+ 		return fail("storage-capacity-unavailable", "commit-parent-capacity", pending.StagingPath, err)
+ 	}
  	metadata := ParentMetadata{
  		CompatibilityKey: pending.Key, SourceSnapshot: pending.Source, OwnershipToken: pending.OwnershipToken,
  		FileIdentity: evidence.FileIdentity, Volume: evidence.Volume,
@@ -1441,8 +1650,13 @@ index b31514e..c21f05a 100644
 +		VirtualBytes: pending.Key.VirtualBytes, BlockBytes: pending.Key.BlockBytes, SectorBytes: pending.Key.SectorBytes,
  		LogicalBytes: evidence.LogicalBytes, AllocatedBytes: evidence.AllocatedBytes, CommittedSHA256: evidence.SHA256,
  	}
- 	committed, err := b.store.CommitParent(pending, metadata)
-@@ -473,7 +473,11 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+-	committed, err := b.store.CommitParent(pending, metadata)
++	commitProgress(ctx, "publish")
++	committed, err := b.store.commitParentWithProgress(pending, metadata, func() { commitProgress(ctx, "validate-seed") })
+ 	if err != nil {
+ 		return fail("parent-commit-failed", "commit-parent", pending.StagingPath, err)
+ 	}
+@@ -473,7 +490,11 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
  		return fail("parent-corrupt", "verify-parent", resolved.Path, verifyErr)
  	}
  	_ = b.store.TouchParent(*resolved.Metadata)
@@ -1455,7 +1669,7 @@ index b31514e..c21f05a 100644
  		return fail("storage-capacity-unavailable", "admit-child", b.config.StoreRoot, err)
  	}
  	leaseID, err := randomID("lease")
-@@ -489,7 +493,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+@@ -489,7 +510,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
  	}
  	child, _ := b.store.paths.Child(leaseID)
  	token, _ := randomID("owner")
@@ -1464,7 +1678,7 @@ index b31514e..c21f05a 100644
  	if err := b.store.WriteLease(journal); err != nil {
  		return fail("journal-write-failed", "create-lease", child, err)
  	}
-@@ -509,7 +513,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
+@@ -509,7 +530,7 @@ func (b *Broker) acquire(ctx context.Context, request Request, fail failureBuild
  	}
  	session, metrics, err := b.native.AcquireChild(ctx, *resolved.Metadata, journal, transition)
  	if err != nil {
@@ -1473,7 +1687,7 @@ index b31514e..c21f05a 100644
  			_ = b.removeWorkspaceOwner(journal)
  			_ = b.store.RemoveLease(journal)
  		} else {
-@@ -818,6 +822,9 @@ func (b *Broker) removeWorkspaceOwner(journal LeaseJournal) error {
+@@ -818,6 +839,9 @@ func (b *Broker) removeWorkspaceOwner(journal LeaseJournal) error {
  }
  
  func (b *Broker) cleanupOwnedWorkspace(journal LeaseJournal) error {
@@ -1483,6 +1697,182 @@ index b31514e..c21f05a 100644
  	if journal.WorkspaceID == "" || journal.WorkspacePath == "" {
  		return nil
  	}
+diff --git a/workspace/commit_progress.go b/workspace/commit_progress.go
+new file mode 100644
+index 0000000..9089e04
+--- /dev/null
++++ b/workspace/commit_progress.go
+@@ -0,0 +1,86 @@
++package workspace
++
++import (
++	"context"
++	"strings"
++)
++
++// Sequence changes only at worker checkpoints, never merely because a client
++// polls. A responsive observation proves service liveness, not worker progress.
++type CommitObservation struct {
++	Version         int       `json:"version"`
++	BrokerSessionID string    `json:"brokerSessionId"`
++	RequestID       string    `json:"requestId"`
++	TransactionID   string    `json:"transactionId"`
++	State           string    `json:"state"`
++	Phase           string    `json:"phase"`
++	Sequence        uint64    `json:"sequence"`
++	Result          *Response `json:"result,omitempty"`
++}
++
++type commitProgressKey struct{}
++
++func commitProgress(ctx context.Context, phase string) {
++	if notify, ok := ctx.Value(commitProgressKey{}).(func(string)); ok {
++		notify(phase)
++	}
++}
++
++func (b *Broker) trackCommit(ctx context.Context, request Request) (context.Context, func()) {
++	b.mu.Lock()
++	if b.commitProgress == nil {
++		b.commitProgress = map[string]*CommitObservation{}
++	}
++	observation := &CommitObservation{Version: 1, RequestID: request.RequestID, TransactionID: request.TransactionID, State: "running", Phase: "starting", Sequence: 1}
++	b.commitProgress[request.RequestID] = observation
++	b.mu.Unlock()
++	notify := func(phase string) {
++		b.mu.Lock()
++		observation.Sequence++
++		observation.Phase = phase
++		b.mu.Unlock()
++	}
++	return context.WithValue(ctx, commitProgressKey{}, notify), func() { notify("returning") }
++}
++
++func (b *Broker) observeCommit(callerSID string, request Request) Response {
++	fail := func(code string) Response {
++		return Response{SchemaVersion: ProtocolSchemaVersion, RequestID: request.RequestID, Error: &Error{Code: code, Operation: request.Operation, Message: code}}
++	}
++	if request.SchemaVersion != ProtocolSchemaVersion || !identifierPattern.MatchString(request.RequestID) || request.WorkspaceRoot != "" {
++		return fail("invalid-request")
++	}
++	if !strings.EqualFold(callerSID, b.config.UserSID) || (request.UserSID != "" && !strings.EqualFold(request.UserSID, callerSID)) {
++		return fail("unauthorized-client")
++	}
++	if (request.TargetRequestID == "") != (request.TransactionID == "") {
++		return fail("invalid-request")
++	}
++	if request.TargetRequestID != "" && (!identifierPattern.MatchString(request.TargetRequestID) || !identifierPattern.MatchString(request.TransactionID)) {
++		return fail("invalid-request")
++	}
++	b.mu.Lock()
++	defer b.mu.Unlock()
++	if b.brokerSessionID == "" {
++		id, err := randomID("broker")
++		if err != nil {
++			return fail("broker-identity-unavailable")
++		}
++		b.brokerSessionID = id
++	}
++	observation := CommitObservation{Version: 1, BrokerSessionID: b.brokerSessionID, RequestID: request.TargetRequestID, TransactionID: request.TransactionID, State: "unknown"}
++	if request.TargetRequestID == "" {
++		observation.State = "capable"
++	} else if active := b.commitProgress[request.TargetRequestID]; active != nil {
++		if active.TransactionID != request.TransactionID {
++			return fail("transaction-mismatch")
++		}
++		observation = *active
++		observation.BrokerSessionID = b.brokerSessionID
++		if result, ok := b.requests[request.TargetRequestID]; ok {
++			observation.State = "completed"
++			observation.Result = &result
++		}
++	}
++	return Response{SchemaVersion: ProtocolSchemaVersion, RequestID: request.RequestID, OK: true, Provider: Provider, CommitObservation: &observation}
++}
+diff --git a/workspace/commit_progress_test.go b/workspace/commit_progress_test.go
+new file mode 100644
+index 0000000..6fb9a7c
+--- /dev/null
++++ b/workspace/commit_progress_test.go
+@@ -0,0 +1,78 @@
++package workspace
++
++import (
++	"context"
++	"testing"
++	"time"
++)
++
++func TestCommitObservationReadOnlyAuthenticated(t *testing.T) {
++	b, _, _ := testBroker(t, &fakeNative{})
++	query := request("observe-parent-commit", "probe")
++	capable := b.Handle(context.Background(), "S-1-5-21-test", query)
++	if !capable.OK || capable.CommitObservation.State != "capable" || capable.CommitObservation.BrokerSessionID == "" {
++		t.Fatalf("capability=%+v", capable)
++	}
++	if b.Handle(context.Background(), "other-sid", query).OK {
++		t.Fatal("unauthorized observation")
++	}
++	query.TargetRequestID = "missing"
++	query.TransactionID = "transaction"
++	if b.Handle(context.Background(), "S-1-5-21-test", query).CommitObservation.State != "unknown" {
++		t.Fatal("invented request")
++	}
++	if len(b.requests) != 0 || len(b.inflight) != 0 {
++		t.Fatal("observations pollute cache")
++	}
++}
++func TestCommitObservationTracksWorkerNotPolls(t *testing.T) {
++	b, key, workspaces := testBroker(t, &fakeNative{})
++	transaction := beginRecoveryParent(t, b, key, workspaces)
++	session := &gatedRecoverySession{ParentSession: b.parents[transaction], entered: make(chan struct{}), release: make(chan struct{})}
++	b.parents[transaction] = session
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	commit := request(OperationCommitParent, "observed-commit")
++	commit.TransactionID = transaction
++	done := make(chan Response, 1)
++	go func() { done <- b.Handle(ctx, "S-1-5-21-test", commit) }()
++	select {
++	case <-session.entered:
++	case <-ctx.Done():
++		t.Fatal("commit did not start")
++	}
++	query := request("observe-parent-commit", "observation")
++	query.TargetRequestID = commit.RequestID
++	query.TransactionID = transaction
++	first := b.Handle(ctx, "S-1-5-21-test", query).CommitObservation
++	second := b.Handle(ctx, "S-1-5-21-test", query).CommitObservation
++	if first.State != "running" || first.Sequence != second.Sequence || first.Phase != "finalize" {
++		t.Fatal("poll invented progress")
++	}
++	query.TransactionID = "wrong"
++	if b.Handle(ctx, "S-1-5-21-test", query).OK {
++		t.Fatal("wrong transaction accepted")
++	}
++	query.TransactionID = transaction
++	close(session.release)
++	select {
++	case response := <-done:
++		if !response.OK {
++			t.Fatalf("commit=%+v", response.Error)
++		}
++	case <-ctx.Done():
++		t.Fatal("commit did not finish")
++	}
++	final := b.Handle(ctx, "S-1-5-21-test", query).CommitObservation
++	if final.State != "completed" || final.Result == nil || !final.Result.OK || final.Result.RequestID != commit.RequestID || final.Sequence <= first.Sequence {
++		t.Fatalf("final=%+v", final)
++	}
++	restarted, err := NewBroker(b.config, &fakeNative{})
++	if err != nil {
++		t.Fatal(err)
++	}
++	after := restarted.Handle(ctx, "S-1-5-21-test", query).CommitObservation
++	if after.State != "unknown" || after.BrokerSessionID == final.BrokerSessionID {
++		t.Fatal("restart confused identity")
++	}
++}
 diff --git a/workspace/external_bee.go b/workspace/external_bee.go
 new file mode 100644
 index 0000000..4850dbb
@@ -1569,7 +1959,7 @@ index dedd63f..d7fcdb1 100644
  	Volume         VolumeIdentity
  	LogicalBytes   int64
 diff --git a/workspace/native_windows.go b/workspace/native_windows.go
-index f3a7997..9d6d9e2 100644
+index f3a7997..38e5b0f 100644
 --- a/workspace/native_windows.go
 +++ b/workspace/native_windows.go
 @@ -73,6 +73,9 @@ func (native windowsNative) Available(ctx context.Context) error {
@@ -1591,17 +1981,36 @@ index f3a7997..9d6d9e2 100644
  		return nil, ErrInvalidInput
  	}
  	if err := os.MkdirAll(filepath.Dir(pending.StagingPath), 0700); err != nil {
-@@ -173,6 +176,9 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+@@ -173,6 +176,10 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
  	if s.closed {
  		return s.evidence, fmt.Errorf("parent session is closed")
  	}
 +	if err := s.externalizeBee(ctx); err != nil {
 +		return s.evidence, err
 +	}
++	commitProgress(ctx, "vhd-flush-detach")
  	if err := s.attachment.Flush(ctx); err != nil {
  		return s.evidence, err
  	}
-@@ -232,7 +238,7 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+@@ -192,6 +199,7 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+ 	_ = os.Remove(s.pending.MountPath)
+ 
+ 	verifyMount := s.pending.MountPath + ".verify-" + s.pending.TransactionID
++	commitProgress(ctx, "vhd-verify-mount")
+ 	if err := ensureEmptyMount(verifyMount); err != nil {
+ 		return s.evidence, err
+ 	}
+@@ -224,7 +232,8 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
+ 	if err != nil {
+ 		return s.evidence, err
+ 	}
+-	digest, err := hashFile(s.pending.StagingPath)
++	commitProgress(ctx, "vhd-hash")
++	digest, err := hashFileProgress(s.pending.StagingPath, func() { commitProgress(ctx, "vhd-hash") })
+ 	if err != nil {
+ 		return s.evidence, err
+ 	}
+@@ -232,7 +241,7 @@ func (s *windowsParentSession) Finalize(ctx context.Context) (ParentEvidence, er
  	if err != nil {
  		return s.evidence, err
  	}
@@ -1610,7 +2019,7 @@ index f3a7997..9d6d9e2 100644
  		FileIdentity: FileIdentity{FileID: identity}, Volume: volume,
  		LogicalBytes: usage.LogicalBytes, AllocatedBytes: usage.AllocatedBytes, SHA256: digest, FileWriteTime: fileInfo.ModTime().UTC(),
  	}
-@@ -252,11 +258,15 @@ func (s *windowsParentSession) Abort(ctx context.Context) error {
+@@ -252,11 +261,15 @@ func (s *windowsParentSession) Abort(ctx context.Context) error {
  			err = nil
  		}
  	}
@@ -1626,7 +2035,7 @@ index f3a7997..9d6d9e2 100644
  	lease    Lease
  	backend  storage.Lease
  	path     string
-@@ -271,31 +281,74 @@ func (s *windowsChildSession) Usage() (int64, error) {
+@@ -271,31 +284,74 @@ func (s *windowsChildSession) Usage() (int64, error) {
  }
  
  func (s *windowsChildSession) PrepareRemoval(ctx context.Context) (ChildRemoval, error) {
@@ -1706,7 +2115,7 @@ index f3a7997..9d6d9e2 100644
  	metrics := Metrics{CleanupState: CleanupReleased, ChildReleaseMs: time.Since(started).Milliseconds()}
  	if raw.ReleaseWallClockMs != nil {
  		metrics.ChildReleaseMs = *raw.ReleaseWallClockMs
-@@ -313,6 +366,14 @@ func (removal *windowsChildRemoval) Commit(ctx context.Context) (Metrics, error)
+@@ -313,6 +369,14 @@ func (removal *windowsChildRemoval) Commit(ctx context.Context) (Metrics, error)
  }
  
  func (s *windowsChildSession) Release(ctx context.Context, deleteChild bool) (Metrics, error) {
@@ -1721,7 +2130,7 @@ index f3a7997..9d6d9e2 100644
  	started := time.Now()
  	metrics := Metrics{}
  	_, err := s.backend.Release(ctx, deleteChild, nil)
-@@ -337,6 +398,14 @@ func (s *windowsChildSession) Release(ctx context.Context, deleteChild bool) (Me
+@@ -337,6 +401,14 @@ func (s *windowsChildSession) Release(ctx context.Context, deleteChild bool) (Me
  }
  
  func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetadata, journal LeaseJournal, transition func(string, string, string) error) (ChildSession, Metrics, error) {
@@ -1736,7 +2145,7 @@ index f3a7997..9d6d9e2 100644
  	progress := func(value storage.Progress) error {
  		if transition == nil {
  			return nil
-@@ -366,13 +435,17 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
+@@ -366,13 +438,17 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
  	if err != nil {
  		return nil, metrics, err
  	}
@@ -1755,7 +2164,7 @@ index f3a7997..9d6d9e2 100644
  		LeaseID: journal.LeaseID, RunID: journal.RunID, ParentKey: journal.ParentKey,
  		MountPath: journal.MountPath, State: "ready", CreatedAt: journal.CreatedAt,
  		PhysicalPath: info.PhysicalPath, VolumeGUID: info.VolumeGUIDPath,
-@@ -380,6 +453,14 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
+@@ -380,6 +456,14 @@ func (native windowsNative) AcquireChild(ctx context.Context, parent ParentMetad
  }
  
  func (native windowsNative) AttachChild(ctx context.Context, parent ParentMetadata, journal LeaseJournal, transition func(string, string, string) error) (ChildSession, Metrics, error) {
@@ -1770,7 +2179,7 @@ index f3a7997..9d6d9e2 100644
  	identity, err := storage.FileIdentity(journal.ChildPath)
  	if err != nil {
  		return nil, Metrics{}, err
-@@ -418,8 +499,12 @@ func (native windowsNative) AttachChild(ctx context.Context, parent ParentMetada
+@@ -418,8 +502,12 @@ func (native windowsNative) AttachChild(ctx context.Context, parent ParentMetada
  	if err != nil {
  		return nil, metrics, err
  	}
@@ -1784,20 +2193,323 @@ index f3a7997..9d6d9e2 100644
  }
  
  func (windowsNative) HostFreeBytes(path string) (int64, error) {
+@@ -468,13 +556,16 @@ func inspectVolume(ctx context.Context, mountPath, volumeGUID string) (VolumeIde
+ }
+ 
+ func hashFile(path string) (string, error) {
++	return hashFileProgress(path, nil)
++}
++func hashFileProgress(path string, progress func()) (string, error) {
+ 	file, err := os.Open(path)
+ 	if err != nil {
+ 		return "", err
+ 	}
+ 	defer file.Close()
+ 	hash := sha256.New()
+-	if _, err := io.Copy(hash, file); err != nil {
++	if _, err := io.Copy(hash, progressReader{file, progress}); err != nil {
+ 		return "", err
+ 	}
+ 	return hex.EncodeToString(hash.Sum(nil)), nil
+diff --git a/workspace/parent_recovery.go b/workspace/parent_recovery.go
+new file mode 100644
+index 0000000..89f66f4
+--- /dev/null
++++ b/workspace/parent_recovery.go
+@@ -0,0 +1,28 @@
++package workspace
++
++import "time"
++
++// A begin CLI can exit long before copying or finalization completes. Its PID
++// is not the lifetime of the service-owned parent session. Keep matching
++// in-memory ownership protected through publication or explicit abort.
++func (b *Broker) recoverPending(grace time.Duration) (int, int, error) {
++	b.parentRecoveryMu.Lock()
++	defer b.parentRecoveryMu.Unlock()
++
++	b.mu.Lock()
++	owned := make(map[string]PendingParent, len(b.pending))
++	for transaction, pending := range b.pending {
++		if pending != nil && b.parents[transaction] != nil {
++			owned[transaction] = *pending
++		}
++	}
++	b.mu.Unlock()
++
++	// Begin cannot introduce a journal after this snapshot. Commit/abort may
++	// finish concurrently; conservatively preserving their old journal for
++	// one pass is safe. No native calls run under the broker's state mutex.
++	return b.store.recoverPending(b.now(), grace, b.native.ProcessAlive, func(pending *PendingParent) bool {
++		active, ok := owned[pending.TransactionID]
++		return ok && active.Key.Digest == pending.Key.Digest && active.OwnershipToken == pending.OwnershipToken
++	})
++}
+diff --git a/workspace/parent_recovery_test.go b/workspace/parent_recovery_test.go
+new file mode 100644
+index 0000000..3496628
+--- /dev/null
++++ b/workspace/parent_recovery_test.go
+@@ -0,0 +1,208 @@
++package workspace
++
++import (
++	"context"
++	"fmt"
++	"os"
++	"path/filepath"
++	"testing"
++	"time"
++)
++
++func beginRecoveryParent(t *testing.T, broker *Broker, key CompatibilityKey, workspaces string) string {
++	t.Helper()
++	if err := os.Mkdir(filepath.Join(workspaces, "builder"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	req := request(OperationBeginParentBuild, "recovery-begin")
++	req.ParentKey, req.Source, req.WorkspaceID = &key, &SourceSnapshot{}, "builder"
++	req.ClientPID = 12345 // fakeNative reports this exited CLI as dead.
++	response := broker.Handle(context.Background(), "S-1-5-21-test", req)
++	if !response.OK || response.ParentBuild == nil {
++		t.Fatalf("begin=%+v", response)
++	}
++	return response.ParentBuild.TransactionID
++}
++
++func assertPendingPreserved(t *testing.T, broker *Broker) {
++	t.Helper()
++	summary, err := broker.Recover(context.Background(), 30*time.Second)
++	if err != nil || summary.Quarantined != 0 || summary.Preserved != 1 {
++		t.Fatalf("active parent recovery: summary=%+v err=%v", summary, err)
++	}
++}
++
++func TestParentRecoveryPreservesSessionAfterBeginCLIExits(t *testing.T) {
++	broker, key, workspaces := testBroker(t, &fakeNative{})
++	transaction := beginRecoveryParent(t, broker, key, workspaces)
++	broker.now = func() time.Time { return time.Now().Add(time.Hour) }
++	assertPendingPreserved(t, broker)
++	req := request(OperationCommitParent, "recovery-commit")
++	req.TransactionID = transaction
++	response := broker.Handle(context.Background(), "S-1-5-21-test", req)
++	if !response.OK {
++		t.Fatalf("commit=%+v error=%+v", response, response.Error)
++	}
++	if len(broker.pending) != 0 || len(broker.parents) != 0 {
++		t.Fatal("completed session retained")
++	}
++}
++
++type gatedRecoverySession struct {
++	ParentSession
++	entered, release chan struct{}
++}
++
++type gatedRecoveryNative struct {
++	*fakeNative
++	entered, release chan struct{}
++}
++
++func (native *gatedRecoveryNative) BeginParent(ctx context.Context, pending *PendingParent) (ParentSession, error) {
++	close(native.entered)
++	select {
++	case <-native.release:
++		return native.fakeNative.BeginParent(ctx, pending)
++	case <-ctx.Done():
++		return nil, ctx.Err()
++	}
++}
++
++func TestParentRecoveryCannotScanUnregisteredBeginJournal(t *testing.T) {
++	broker, key, workspaces := testBroker(t, &fakeNative{})
++	native := &gatedRecoveryNative{fakeNative: &fakeNative{}, entered: make(chan struct{}), release: make(chan struct{})}
++	broker.native = native
++	broker.now = func() time.Time { return time.Now().Add(time.Hour) }
++	if err := os.Mkdir(filepath.Join(workspaces, "builder"), 0700); err != nil {
++		t.Fatal(err)
++	}
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	done := make(chan Response, 1)
++	go func() {
++		req := request(OperationBeginParentBuild, "slow-begin")
++		req.ParentKey, req.Source, req.WorkspaceID = &key, &SourceSnapshot{}, "builder"
++		done <- broker.Handle(ctx, "S-1-5-21-test", req)
++	}()
++	select {
++	case <-native.entered:
++	case <-ctx.Done():
++		t.Fatal("begin did not start")
++	}
++	// The durable journal exists, but the native session is not registered yet.
++	if broker.parentRecoveryMu.TryLock() {
++		broker.parentRecoveryMu.Unlock()
++		t.Fatal("recovery can enter the journal/session registration gap")
++	}
++	recovered := make(chan error, 1)
++	go func() {
++		summary, err := broker.Recover(ctx, 30*time.Second)
++		if err == nil && (summary.Preserved != 1 || summary.Quarantined != 0) {
++			err = fmt.Errorf("summary=%+v", summary)
++		}
++		recovered <- err
++	}()
++	close(native.release)
++	select {
++	case response := <-done:
++		if !response.OK {
++			t.Fatalf("begin=%+v", response)
++		}
++	case <-ctx.Done():
++		t.Fatal("begin did not finish")
++	}
++	select {
++	case err := <-recovered:
++		if err != nil {
++			t.Fatal(err)
++		}
++	case <-ctx.Done():
++		t.Fatal("recovery did not finish")
++	}
++}
++
++func (session *gatedRecoverySession) Finalize(ctx context.Context) (ParentEvidence, error) {
++	close(session.entered)
++	select {
++	case <-session.release:
++		return session.ParentSession.Finalize(ctx)
++	case <-ctx.Done():
++		return ParentEvidence{}, ctx.Err()
++	}
++}
++
++func TestParentRecoveryDuringFinalizeDoesNotWaitOrQuarantine(t *testing.T) {
++	broker, key, workspaces := testBroker(t, &fakeNative{})
++	transaction := beginRecoveryParent(t, broker, key, workspaces)
++	broker.now = func() time.Time { return time.Now().Add(time.Hour) }
++	session := &gatedRecoverySession{ParentSession: broker.parents[transaction], entered: make(chan struct{}), release: make(chan struct{})}
++	broker.parents[transaction] = session
++	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
++	defer cancel()
++	done := make(chan Response, 1)
++	go func() {
++		req := request(OperationCommitParent, "blocked-commit")
++		req.TransactionID = transaction
++		done <- broker.Handle(ctx, "S-1-5-21-test", req)
++	}()
++	select {
++	case <-session.entered:
++	case <-ctx.Done():
++		t.Fatal("finalize did not start")
++	}
++	assertPendingPreserved(t, broker)
++	close(session.release)
++	select {
++	case response := <-done:
++		if !response.OK {
++			t.Fatalf("commit=%+v error=%+v", response, response.Error)
++		}
++	case <-ctx.Done():
++		t.Fatal("commit did not finish")
++	}
++}
++
++func TestParentRecoveryAfterRestartStillQuarantinesOrphan(t *testing.T) {
++	native := &fakeNative{}
++	broker, key, workspaces := testBroker(t, native)
++	beginRecoveryParent(t, broker, key, workspaces)
++	restarted, err := NewBroker(broker.config, native)
++	if err != nil {
++		t.Fatal(err)
++	}
++	restarted.now = func() time.Time { return time.Now().Add(time.Hour) }
++	summary, err := restarted.Recover(context.Background(), 30*time.Second)
++	if err != nil || summary.Quarantined != 1 {
++		t.Fatalf("summary=%+v err=%v", summary, err)
++	}
++}
++
++func TestParentRecoveryDoesNotProtectMismatchedOwnership(t *testing.T) {
++	broker, key, workspaces := testBroker(t, &fakeNative{})
++	transaction := beginRecoveryParent(t, broker, key, workspaces)
++	active := *broker.pending[transaction]
++	active.OwnershipToken = "different-token"
++	broker.pending[transaction] = &active
++	broker.now = func() time.Time { return time.Now().Add(time.Hour) }
++	summary, err := broker.Recover(context.Background(), 30*time.Second)
++	if err != nil || summary.Quarantined != 1 {
++		t.Fatalf("summary=%+v err=%v", summary, err)
++	}
++}
++
++func TestParentRecoveryPreservesUntilExplicitAbort(t *testing.T) {
++	broker, key, workspaces := testBroker(t, &fakeNative{})
++	transaction := beginRecoveryParent(t, broker, key, workspaces)
++	broker.now = func() time.Time { return time.Now().Add(time.Hour) }
++	assertPendingPreserved(t, broker)
++	req := request(OperationAbortParent, "recovery-abort")
++	req.TransactionID = transaction
++	response := broker.Handle(context.Background(), "S-1-5-21-test", req)
++	if !response.OK {
++		t.Fatalf("abort=%+v", response)
++	}
++	summary, err := broker.Recover(context.Background(), 30*time.Second)
++	if err != nil || summary.Preserved != 0 || summary.Quarantined != 0 {
++		t.Fatalf("summary=%+v err=%v", summary, err)
++	}
++}
 diff --git a/workspace/protocol.go b/workspace/protocol.go
-index 4c6cbd1..e2ff56c 100644
+index 4c6cbd1..49bb063 100644
 --- a/workspace/protocol.go
 +++ b/workspace/protocol.go
-@@ -92,6 +92,7 @@ type Metrics struct {
+@@ -23,6 +23,7 @@ const (
+ )
+ 
+ type Request struct {
++	TargetRequestID        string            `json:"targetRequestId,omitempty"`
+ 	SchemaVersion          int               `json:"schemaVersion"`
+ 	Operation              string            `json:"operation"`
+ 	RequestID              string            `json:"requestId"`
+@@ -92,20 +93,22 @@ type Metrics struct {
  }
  
  type Response struct {
-+	ParentLayouts []string        `json:"parentLayouts,omitempty"`
- 	SchemaVersion int             `json:"schemaVersion"`
- 	RequestID     string          `json:"requestId"`
- 	OK            bool            `json:"ok"`
+-	SchemaVersion int             `json:"schemaVersion"`
+-	RequestID     string          `json:"requestId"`
+-	OK            bool            `json:"ok"`
+-	Provider      string          `json:"provider,omitempty"`
+-	BrokerVersion string          `json:"brokerVersion,omitempty"`
+-	WorkspaceRoot string          `json:"workspaceRoot,omitempty"`
+-	StoreRoot     string          `json:"storeRoot,omitempty"`
+-	Parent        *ParentMetadata `json:"parent,omitempty"`
+-	ParentBuild   *ParentBuild    `json:"parentBuild,omitempty"`
+-	Lease         *Lease          `json:"lease,omitempty"`
+-	Removal       *Removal        `json:"removal,omitempty"`
+-	Metrics       *Metrics        `json:"metrics,omitempty"`
+-	Status        *Status         `json:"status,omitempty"`
+-	Error         *Error          `json:"error,omitempty"`
++	CommitObservation *CommitObservation `json:"commitObservation,omitempty"`
++	ParentLayouts     []string           `json:"parentLayouts,omitempty"`
++	SchemaVersion     int                `json:"schemaVersion"`
++	RequestID         string             `json:"requestId"`
++	OK                bool               `json:"ok"`
++	Provider          string             `json:"provider,omitempty"`
++	BrokerVersion     string             `json:"brokerVersion,omitempty"`
++	WorkspaceRoot     string             `json:"workspaceRoot,omitempty"`
++	StoreRoot         string             `json:"storeRoot,omitempty"`
++	Parent            *ParentMetadata    `json:"parent,omitempty"`
++	ParentBuild       *ParentBuild       `json:"parentBuild,omitempty"`
++	Lease             *Lease             `json:"lease,omitempty"`
++	Removal           *Removal           `json:"removal,omitempty"`
++	Metrics           *Metrics           `json:"metrics,omitempty"`
++	Status            *Status            `json:"status,omitempty"`
++	Error             *Error             `json:"error,omitempty"`
+ }
+ 
+ // Client is the unprivileged broker boundary used by the run service. A pipe
 diff --git a/workspace/store.go b/workspace/store.go
-index 139d006..99f95a1 100644
+index 139d006..fc55499 100644
 --- a/workspace/store.go
 +++ b/workspace/store.go
 @@ -89,6 +89,12 @@ func (s *Store) ResolveParent(key CompatibilityKey) (ParentResolution, error) {
@@ -1813,7 +2525,24 @@ index 139d006..99f95a1 100644
  	if err := validateRegular(parentPath); err != nil {
  		return ParentResolution{Status: ParentStatusCorrupt, Path: parentPath, Metadata: &metadata, Reason: err.Error()}, nil
  	}
-@@ -155,7 +161,7 @@ func (s *Store) RecoverPending(now time.Time, grace time.Duration, processAlive
+@@ -134,6 +140,10 @@ func (s *Store) BeginParent(userSID string, key CompatibilityKey, source SourceS
+ }
+ 
+ func (s *Store) RecoverPending(now time.Time, grace time.Duration, processAlive func(int) bool) (preserved, quarantined int, err error) {
++	return s.recoverPending(now, grace, processAlive, nil)
++}
++
++func (s *Store) recoverPending(now time.Time, grace time.Duration, processAlive func(int) bool, owned func(*PendingParent) bool) (preserved, quarantined int, err error) {
+ 	entries, err := os.ReadDir(s.paths.Pending)
+ 	if os.IsNotExist(err) {
+ 		return 0, 0, nil
+@@ -150,12 +160,12 @@ func (s *Store) RecoverPending(now time.Time, grace time.Duration, processAlive
+ 			preserved++
+ 			continue
+ 		}
+-		if pending.UpdatedAt.After(now.Add(-grace)) || (processAlive != nil && processAlive(pending.ClientPID)) {
++		if (owned != nil && owned(pending)) || pending.UpdatedAt.After(now.Add(-grace)) || (processAlive != nil && processAlive(pending.ClientPID)) {
+ 			preserved++
  			continue
  		}
  		dir := filepath.Dir(pending.StagingPath)
@@ -1822,7 +2551,18 @@ index 139d006..99f95a1 100644
  			if removeErr := os.Remove(filepath.Join(dir, "pending.json")); removeErr != nil {
  				return preserved, quarantined, removeErr
  			}
-@@ -204,6 +210,18 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
+@@ -197,6 +207,10 @@ func (s *Store) ReadPending(keyDigest string) (*PendingParent, error) {
+ // VHDX has been verified by the platform backend. The VHDX rename occurs first;
+ // without COMPLETE a crash leaves an invalid, non-resolvable parent.
+ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*ParentMetadata, error) {
++	return s.commitParentWithProgress(pending, metadata, nil)
++}
++
++func (s *Store) commitParentWithProgress(pending *PendingParent, metadata ParentMetadata, progress func()) (*ParentMetadata, error) {
+ 	if pending == nil || metadata.OwnershipToken != pending.OwnershipToken || metadata.CompatibilityKey.Digest != pending.Key.Digest {
+ 		return nil, ErrOwnershipMismatch
+ 	}
+@@ -204,6 +218,18 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
  	if err != nil || actual.TransactionID != pending.TransactionID || actual.OwnershipToken != pending.OwnershipToken {
  		return nil, ErrOwnershipMismatch
  	}
@@ -1833,7 +2573,7 @@ index 139d006..99f95a1 100644
 +		if metadata.BeeSeed.SHA256 == "" || metadata.BeeSeed.AllocatedBytes < 0 {
 +			return nil, ErrOwnershipMismatch
 +		}
-+		if err := validateBeeSeedForCommit(pending, metadata.BeeSeed); err != nil {
++		if err := validateBeeSeedForCommitProgress(pending, metadata.BeeSeed, progress); err != nil {
 +			return nil, err
 +		}
 +		return s.commitBeeParent(pending, metadata)
@@ -1841,7 +2581,7 @@ index 139d006..99f95a1 100644
  	parentDir, _ := s.paths.Parent(pending.Key.Digest)
  	if err := os.Mkdir(parentDir, 0700); err != nil {
  		return nil, err
-@@ -221,9 +239,7 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
+@@ -221,9 +247,7 @@ func (s *Store) CommitParent(pending *PendingParent, metadata ParentMetadata) (*
  		_ = os.Chmod(finalPath, 0600)
  		_ = os.Remove(filepath.Join(parentDir, "COMPLETE"))
  		_ = os.Remove(filepath.Join(parentDir, "metadata.json"))
@@ -1852,7 +2592,7 @@ index 139d006..99f95a1 100644
  	}
  	if err := os.Chmod(finalPath, 0400); err != nil {
  		return nil, rollback(err)
-@@ -675,10 +691,23 @@ func allocatedVHDXBytes(root string) (int64, error) {
+@@ -675,10 +699,23 @@ func allocatedVHDXBytes(root string) (int64, error) {
  		if walkErr != nil {
  			return walkErr
  		}
@@ -1878,7 +2618,7 @@ index 139d006..99f95a1 100644
  		if err != nil {
  			return err
  		}
-@@ -720,6 +749,9 @@ func (s *Store) RemoveParentIfUnused(key string, active map[string]bool) (int64,
+@@ -720,6 +757,9 @@ func (s *Store) RemoveParentIfUnused(key string, active map[string]bool) (int64,
  		return 0, errors.Join(err, ErrOwnershipMismatch)
  	}
  	allocated := resolution.Metadata.AllocatedBytes
@@ -1915,3 +2655,156 @@ index f110474..03b36a1 100644
  	SchemaVersion  int          `json:"schemaVersion"`
  	LeaseID        string       `json:"leaseId"`
  	RunID          string       `json:"runId"`
+diff --git a/storage/lifecycle_windows.go b/storage/lifecycle_windows.go
+--- a/storage/lifecycle_windows.go
++++ b/storage/lifecycle_windows.go
+@@ -584,8 +584,8 @@ func (a *Attachment) VerifyParent(expectedParent string) error {
+ 	}
+ 	resolved := *(*uint32)(unsafe.Pointer(&buffer[8])) != 0
+ 	words := unsafe.Slice((*uint16)(unsafe.Pointer(&buffer[12])), (len(buffer)-12)/2)
+-	parent := filepath.Clean(syscall.UTF16ToString(words))
+-	if !resolved || !strings.EqualFold(parent, filepath.Clean(expectedParent)) {
++	parent := syscall.UTF16ToString(words)
++	if !resolved || !sameParentPath(parent, expectedParent) {
+ 		return newError(CodeParentInvalid, "verify-differencing-parent", a.path, fmt.Errorf("resolved=%t parent=%q expected=%q", resolved, parent, expectedParent))
+ 	}
+ 	return nil
+diff --git a/storage/parent_path_windows.go b/storage/parent_path_windows.go
+new file mode 100644
+--- /dev/null
++++ b/storage/parent_path_windows.go
+@@ -0,0 +1,51 @@
++//go:build windows
++
++package storage
++
++import (
++	"path/filepath"
++	"strings"
++)
++
++// sameParentPath accepts the extended local-drive spelling returned by VirtDisk,
++// but never translates device/UNC namespaces or ambiguous Win32 components.
++func sameParentPath(actual, expected string) bool {
++	if !strings.HasPrefix(actual, "\\\\?\\") && !strings.HasPrefix(expected, "\\\\?\\") {
++		return strings.EqualFold(filepath.Clean(actual), filepath.Clean(expected))
++	}
++	a, ok := plainParentPath(actual)
++	if !ok {
++		return false
++	}
++	b, ok := plainParentPath(expected)
++	return ok && strings.EqualFold(a, b)
++}
++
++func plainParentPath(path string) (string, bool) {
++	path = strings.TrimPrefix(path, "\\\\?\\")
++	if len(path) < 4 || path[1:3] != ":\\" ||
++		!((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
++		return "", false
++	}
++	for _, part := range strings.Split(path[3:], "\\") {
++		if part == "" || strings.HasSuffix(part, ".") || strings.HasSuffix(part, " ") ||
++			strings.ContainsAny(part, "/<>:\"|?*") {
++			return "", false
++		}
++		for _, ch := range part {
++			if ch < 32 {
++				return "", false
++			}
++		}
++		name := strings.ToUpper(strings.SplitN(part, ".", 2)[0])
++		switch name {
++		case "CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$":
++			return "", false
++		}
++		if len(name) == 4 && (strings.HasPrefix(name, "COM") || strings.HasPrefix(name, "LPT")) &&
++			name[3] >= '0' && name[3] <= '9' {
++			return "", false
++		}
++	}
++	return path, true
++}
+diff --git a/storage/parent_path_windows_test.go b/storage/parent_path_windows_test.go
+new file mode 100644
+--- /dev/null
++++ b/storage/parent_path_windows_test.go
+@@ -0,0 +1,78 @@
++//go:build windows
++
++package storage
++
++import (
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++)
++
++func TestParentPathSpellings(t *testing.T) {
++	const ordinary = "C:\\store\\parent.vhdx"
++	const extended = "\\\\?\\C:\\store\\parent.vhdx"
++	for _, pair := range [][2]string{
++		{ordinary, extended}, {extended, ordinary}, {extended, extended},
++		{extended, "c:\\STORE\\parent.vhdx"},
++	} {
++		if !sameParentPath(pair[0], pair[1]) {
++			t.Errorf("equivalent paths rejected: %q", pair)
++		}
++	}
++	for _, other := range []string{
++		"C:\\store\\other.vhdx", "D:\\store\\parent.vhdx",
++		"C:store\\parent.vhdx", "\\store\\parent.vhdx",
++		"\\\\server\\store\\parent.vhdx", "\\\\?\\UNC\\server\\store\\parent.vhdx",
++		"\\\\.\\C:\\store\\parent.vhdx", "\\\\?\\GLOBALROOT\\store\\parent.vhdx",
++		"C:\\store\\.\\parent.vhdx", "C:\\store\\x\\..\\parent.vhdx",
++		"C:\\store\\parent.vhdx.", "C:\\store\\parent.vhdx ",
++		"C:/store/parent.vhdx", "C:\\store\\\\parent.vhdx",
++		"C:\\store\\parent.vhdx:stream", "", "C:\\store\\NUL.vhdx",
++	} {
++		if sameParentPath(extended, other) || sameParentPath(other, extended) {
++			t.Errorf("different or ambiguous path accepted: %q", other)
++		}
++	}
++}
++
++func TestDifferencingParentLongPath(t *testing.T) {
++	if os.Getenv("UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST") != "1" {
++		t.Skip("set UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST=1 on Windows NTFS")
++	}
++	root := t.TempDir()
++	for len(root) < 280 {
++		root = filepath.Join(root, strings.Repeat("long-parent-", 4))
++	}
++	if err := os.MkdirAll(root, 0700); err != nil {
++		t.Fatal(err)
++	}
++	parent := filepath.Join(root, "parent.vhdx")
++	child := filepath.Join(root, "child.vhdx")
++	wrong := filepath.Join(root, "wrong.vhdx")
++	for _, path := range []string{parent, wrong} {
++		if err := CreateDynamicWithOptions(path, CreateOptions{MaximumSize: 64 << 20, BlockSizeInBytes: 2 << 20, SectorSizeInBytes: 4096}); err != nil {
++			t.Fatal(err)
++		}
++	}
++	if err := CreateDifferencing(child, parent); err != nil {
++		t.Fatal(err)
++	}
++	a, err := Open(child, true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	defer func() {
++		if err := a.CloseHandle(); err != nil {
++			t.Error(err)
++		}
++	}()
++	for _, path := range []string{parent, "\\\\?\\" + parent} {
++		if err := a.VerifyParent(path); err != nil {
++			t.Fatalf("long parent rejected (%d characters): %v", len(path), err)
++		}
++	}
++	if err := a.VerifyParent(wrong); err == nil {
++		t.Fatal("different existing parent was accepted")
++	}
++}

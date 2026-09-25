@@ -21,6 +21,7 @@ export const operationError = (reason: unknown): OperationError =>
         remediation: [],
       };
 export const errorGuidance = (code: string, upstreamCode?: string): MessageKey => {
+  if (code === "storage.commit-outcome-unknown") return "cacheCommitUnknownHelp";
   if (
     code === "storage.mount-identity-mismatch" ||
     upstreamCode === "retained-mount-identity-mismatch"

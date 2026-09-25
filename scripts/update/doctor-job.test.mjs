@@ -1,3 +1,4 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
@@ -6,7 +7,6 @@ import path from "node:path";
 import process from "node:process";
 import { setTimeout } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
 import { packageTool } from "./prepare-release.mjs";
 import { runDoctorProcess } from "./version-health.mjs";
 const gone = (pid) => {
@@ -34,7 +34,7 @@ for (const mode of [
   "pipe-holder",
   "overflow",
 ])
-  test(`Doctor job removes descendants after ${mode}`, { timeout: 15000 }, async (t) => {
+  windowsTest(`Doctor job removes descendants after ${mode}`, { timeout: 15000 }, async (t) => {
     const base = path.resolve("output/doctor-job-tests");
     await mkdir(base, { recursive: true });
     const cwd = await mkdtemp(path.join(base, "case-")),

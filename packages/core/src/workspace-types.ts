@@ -183,6 +183,11 @@ export interface WorkspaceStoragePort {
     compatibilityKey: string,
     layout?: "external-bee-dag-v1",
   ): Promise<StorageParentBuild>;
+  /**
+   * Reject with storage.commit-outcome-unknown when completion cannot be confirmed.
+   * The caller must not abort that transaction: service finalization may still be running.
+   * Other rejections must establish that commit is no longer running and cleanup is safe.
+   */
   commitParent(command: StorageCommand, transactionId: string): Promise<StorageParentBuild>;
   abortParent(command: StorageCommand, transactionId: string): Promise<void>;
   acquire(

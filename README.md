@@ -71,6 +71,39 @@ or on `PATH`. `HONEYBEE_WORKSPACE_STORAGE` or `--storage-command` may supply an 
 path. Run `cache prepare` only after Unity has produced a source `Library` and Unity is closed.
 `Library` must be ignored by Git.
 
+Parent commit has **no total execution-time limit**. HoneyBee requires the hb15 commit-observation
+protocol and checks the exact request/transaction every 5 seconds. Each query has a 10-second
+transport deadline. A service response is a heartbeat, not proof that the worker is progressing:
+only worker checkpoints advance its progress counter. Other storage commands keep their 2-minute
+limit. The preceding Library copy is outside this commit monitoring contract.
+
+After 30 seconds without a valid heartbeat, a service-session change, or 120 seconds without
+worker progress, HoneyBee performs one final read-only reconciliation. If it cannot establish
+the result, it returns `storage.commit-outcome-unknown`, never a presumed commit failure.
+Blocking native calls may legitimately exceed the idle interval; this is still uncertainty,
+not permission to abort. To change only the progress-idle threshold before launching CLI/Desktop:
+
+```powershell
+$env:HONEYBEE_PARENT_COMMIT_IDLE_TIMEOUT_MS = '300000'
+honeybee cache prepare --project <id>
+```
+
+The value must be an integer from `1` to `2147483647` milliseconds. Unset means 120 seconds;
+empty, zero, negative, fractional, and out-of-range values are rejected before parent creation.
+The setting is captured on first parent use by each storage instance. Fully exit Desktop and
+launch it again from the environment containing the setting to apply a change.
+The former `HONEYBEE_PARENT_COMMIT_TIMEOUT_MS` setting is rejected; remove it from the environment.
+
+`storage.commit-outcome-unknown` means the client could not confirm completion, including when
+its wait expired. The service may still finish the commit. HoneyBee skips automatic abort and
+keeps the previously registered cache. Preserve the error details (request ID, transaction ID,
+idle threshold, last observed phase, and elapsed time), and run `honeybee doctor` for read-only health diagnostics. Doctor does
+not determine the outcome of that individual transaction. Obtain transaction-specific diagnosis
+before retrying or recovering; do not immediately abort, delete storage files, or restart the
+service. Live read-only reconciliation is supported; automatic retry, cleanup, or recovery across
+service restarts is not. A completed broker result is accepted only for the same service session,
+request, and transaction. Starting another commit is never part of the observation protocol.
+
 Add `--json` to every project, cache, or Workspace command for machine-readable output. CLI response
 envelopes use `schemaVersion: 1`; status DTOs deliberately omit storage executable paths, lease IDs,
 and broker internals. Errors are JSON on stderr with `schemaVersion`, `ok: false`, `code`, and

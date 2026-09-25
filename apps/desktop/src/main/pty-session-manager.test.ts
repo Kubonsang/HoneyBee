@@ -4,7 +4,7 @@ import path from "node:path";
 
 import { expect, it } from "vitest";
 
-import { DesktopPtySessionManager } from "./pty-session-manager.js";
+import type { DesktopPtySessionManager } from "./pty-session-manager.js";
 
 const delay = (milliseconds: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -31,6 +31,7 @@ const waitForOutput = async (
 it.runIf(process.platform === "win32")(
   "opens an interactive PowerShell in the selected Workspace",
   async () => {
+    const { DesktopPtySessionManager } = await import("./pty-session-manager.js");
     const cwd = await realpath(await mkdtemp(path.join(tmpdir(), "honeybee-workbench-pty-")));
     const manager = new DesktopPtySessionManager();
     try {

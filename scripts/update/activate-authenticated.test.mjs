@@ -1,9 +1,9 @@
+import { windowsTest } from "../test-support/windows-test.mjs";
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { generateKeyPairSync } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import test from "node:test";
 import { fixture } from "./prepare-fixture.mjs";
 import { sha256 } from "./release-manifest.mjs";
 import { signReleaseManifest } from "./release-authentication.mjs";
@@ -133,7 +133,7 @@ async function setup(service = false) {
   };
 }
 for (const outcome of ["cancel", "signature-changed", "source-changed", "target-changed"])
-  test(`authenticated activation ${outcome} validates before shutdown`, async () => {
+  windowsTest(`authenticated activation ${outcome} validates before shutdown`, async () => {
     const f = await setup();
     let called = false;
     if (outcome === "signature-changed")
@@ -162,28 +162,31 @@ for (const outcome of ["cancel", "signature-changed", "source-changed", "target-
   });
 
 for (const change of [null, "signature", "source", "target"])
-  test(`external combined runner is reached only after authentication: ${change ?? "valid"}`, async () => {
-    const f = await setup(true);
-    if (change === "signature") await writeFile(path.join(f.stage, "release.sig.json"), "{}");
-    if (change === "source")
-      await writeFile(path.join(f.root, "versions/0.1.0-beta.11/launch.json"), "changed");
-    if (change === "target")
-      await writeFile(path.join(f.root, "versions", f.target, "runtime/node.exe"), "changed");
-    let calls = 0;
-    const operation = activateAuthenticatedUpdate(
-      { installationRoot: f.root, runtime: f.runtime, request: f.request },
-      {
-        observe: f.observe,
-        activateCombined: async ({ sourceBytes, release }) => {
-          calls++;
-          assert.equal(sha256(sourceBytes), sha256(f.pointer));
-          assert.equal(release.manifest.version, f.target);
-          return { state: "Cancelled" };
+  windowsTest(
+    `external combined runner is reached only after authentication: ${change ?? "valid"}`,
+    async () => {
+      const f = await setup(true);
+      if (change === "signature") await writeFile(path.join(f.stage, "release.sig.json"), "{}");
+      if (change === "source")
+        await writeFile(path.join(f.root, "versions/0.1.0-beta.11/launch.json"), "changed");
+      if (change === "target")
+        await writeFile(path.join(f.root, "versions", f.target, "runtime/node.exe"), "changed");
+      let calls = 0;
+      const operation = activateAuthenticatedUpdate(
+        { installationRoot: f.root, runtime: f.runtime, request: f.request },
+        {
+          observe: f.observe,
+          activateCombined: async ({ sourceBytes, release }) => {
+            calls++;
+            assert.equal(sha256(sourceBytes), sha256(f.pointer));
+            assert.equal(release.manifest.version, f.target);
+            return { state: "Cancelled" };
+          },
         },
-      },
-    );
-    if (change) await assert.rejects(operation);
-    else assert.equal((await operation).state, "Cancelled");
-    assert.equal(calls, change ? 0 : 1);
-    assert.equal(await readFile(path.join(f.root, "current.json"), "utf8"), f.pointer);
-  });
+      );
+      if (change) await assert.rejects(operation);
+      else assert.equal((await operation).state, "Cancelled");
+      assert.equal(calls, change ? 0 : 1);
+      assert.equal(await readFile(path.join(f.root, "current.json"), "utf8"), f.pointer);
+    },
+  );

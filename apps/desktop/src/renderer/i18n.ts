@@ -55,6 +55,8 @@ const en = {
   repairHelp: "Repair this Workspace and confirm it is ready before opening tools.",
   capacityHelp: "Free space on the storage drive, then retry the operation.",
   operationHelp: "Review the error details, resolve the reported problem, then try again.",
+  cacheCommitUnknownHelp:
+    "Cache preparation could not be confirmed. Storage may still be working. Keep the diagnostic details and confirm the transaction outcome before retrying or cleaning up.",
   terminalLimitHelp:
     "The app has 16 terminals. Close an existing session from App terminals before opening another.",
   diffLoading: "Reading diff…",
@@ -256,6 +258,8 @@ const ko: Record<MessageKey, string> = {
   repairHelp: "워크스페이스를 복구하고 준비됨 상태를 확인한 뒤 도구를 여세요.",
   capacityHelp: "스토리지 드라이브의 여유 공간을 확보한 뒤 다시 시도하세요.",
   operationHelp: "오류 상세를 확인하고 원인을 해결한 뒤 다시 시도하세요.",
+  cacheCommitUnknownHelp:
+    "캐시 준비 완료 여부를 확인하지 못했습니다. 저장소 작업이 계속될 수 있습니다. 진단 정보를 보존하고 해당 작업의 결과를 확인한 뒤 재시도하거나 정리하세요.",
   terminalLimitHelp:
     "앱 터미널이 16개입니다. 앱 터미널 목록에서 기존 세션을 종료한 뒤 새로 여세요.",
   diffLoading: "Diff 읽는 중…",

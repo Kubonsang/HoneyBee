@@ -1,11 +1,24 @@
 import assert from "node:assert/strict";
 import { Buffer } from "node:buffer";
 import { createHash } from "node:crypto";
-import { mkdtemp, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
+import { URL } from "node:url";
 import { bindCandidateTools } from "./candidate-tools.mjs";
+
+test("production compatibility declares the pinned storage overlay version", async () => {
+  const root = new URL("../../", import.meta.url);
+  const read = async (file) => JSON.parse(await readFile(new URL(file, root), "utf8"));
+  const overlay = await read("integrations/storage/external-bee-overlay.json");
+  const compatibility = await read("apps/desktop/resources/component-compatibility-v1.json");
+  const desktop = await read("apps/desktop/package.json");
+  assert.equal(compatibility.honeybeeVersion, desktop.version);
+  assert.equal(compatibility.workspaceStorage.length, 1);
+  assert.equal(compatibility.workspaceStorage[0].version, overlay.componentVersion);
+  assert.equal(compatibility.workspaceStorage[0].honeybeeVersion, desktop.version);
+});
 
 async function fixture(t, qa = false) {
   const directory = await mkdtemp(path.join(os.tmpdir(), "hb-candidate-tools-"));
@@ -45,6 +58,37 @@ test("modified tool bytes are rejected", async (t) => {
     bindCandidateTools(f.directory, f.compatibility, false),
     /Tool digest mismatch/,
   );
+});
+
+test("hb15 production candidate binds the heartbeat service payload", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb15";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  const result = await bindCandidateTools(f.directory, f.compatibility, false);
+  assert.equal(result.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
+  assert.equal(result.workspaceStorage[0].payloads[0].sha256, f.manifest.files["host.exe"].sha256);
+});
+
+test("hb15 qualification payload cannot masquerade as a production build", async (t) => {
+  const f = await fixture(t, true);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb15";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
+});
+
+test("hb16 production candidate binds the long-parent-path fix", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb16";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  const result = await bindCandidateTools(f.directory, f.compatibility, false);
+  assert.equal(result.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
+});
+
+test("an unreviewed future component version is rejected", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb17";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
 });
 test("QA tools cannot enter a production candidate", async (t) => {
   const f = await fixture(t, true);

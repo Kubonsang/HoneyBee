@@ -49,21 +49,24 @@ it("keeps portable and legacy installs explicitly unleased", async () => {
   expect(await acquireInstalledActivity(path.resolve("portable"))).toBeUndefined();
   expect(await acquireInstalledActivity((await fixture(false)).release)).toBeUndefined();
 });
-it("shared application leases coexist and release idempotently", async () => {
-  const f = await fixture(),
-    first = await acquireInstalledActivity(f.release),
-    second = await acquireInstalledActivity(f.release);
-  try {
-    expect(first).toBeDefined();
-    first?.assertHeld();
-    second?.assertHeld();
-  } finally {
-    await first?.release();
-    await first?.release();
-    await second?.release();
-  }
-  expect(() => first?.assertHeld()).toThrow();
-});
+it.runIf(process.platform === "win32")(
+  "shared application leases coexist and release idempotently",
+  async () => {
+    const f = await fixture(),
+      first = await acquireInstalledActivity(f.release),
+      second = await acquireInstalledActivity(f.release);
+    try {
+      expect(first).toBeDefined();
+      first?.assertHeld();
+      second?.assertHeld();
+    } finally {
+      await first?.release();
+      await first?.release();
+      await second?.release();
+    }
+    expect(() => first?.assertHeld()).toThrow();
+  },
+);
 it("a modified helper is refused before execution", async () => {
   const f = await fixture();
   await writeFile(path.join(f.release, "runtime/honeybee-lifecycle.exe"), "modified");
@@ -71,46 +74,50 @@ it("a modified helper is refused before execution", async () => {
     code: "installation.activity-invalid",
   });
 });
-it("real CLI entry refuses an exclusive updater and runs after release", async () => {
-  const f = await fixture(),
-    cli = path.join(f.release, "cli");
-  await mkdir(path.join(cli, "node_modules/@honeybee"), { recursive: true });
-  await cp(path.resolve("apps/cli/dist"), path.join(cli, "dist"), { recursive: true });
-  await writeFile(path.join(cli, "package.json"), JSON.stringify({ type: "module" }));
-  await symlink(
-    path.resolve("packages/core"),
-    path.join(cli, "node_modules/@honeybee/core"),
-    "junction",
-  );
-  const child = spawn(helper, ["activity", path.join(f.root, "update"), "exclusive", "10000"], {
-    windowsHide: true,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
-  const exited = once(child, "exit");
-  let output = "";
-  try {
-    await new Promise<void>((resolve, reject) => {
-      child.stdout.on("data", (bytes: Buffer) => {
-        output += bytes.toString();
-        if (output.includes("HELD")) resolve();
-      });
-      child.once("error", reject);
-      child.once("exit", () => reject(new Error("helper exited")));
+it.runIf(process.platform === "win32")(
+  "real CLI entry refuses an exclusive updater and runs after release",
+  async () => {
+    const f = await fixture(),
+      cli = path.join(f.release, "cli");
+    await mkdir(path.join(cli, "node_modules/@honeybee"), { recursive: true });
+    await cp(path.resolve("apps/cli/dist"), path.join(cli, "dist"), { recursive: true });
+    await writeFile(path.join(cli, "package.json"), JSON.stringify({ type: "module" }));
+    await symlink(
+      path.resolve("packages/core"),
+      path.join(cli, "node_modules/@honeybee/core"),
+      "junction",
+    );
+    const child = spawn(helper, ["activity", path.join(f.root, "update"), "exclusive", "10000"], {
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
     });
-    await expect(
-      promisify(execFile)(process.execPath, [path.join(cli, "dist/cli.js"), "--version"], {
-        windowsHide: true,
-        timeout: 10000,
-      }),
-    ).rejects.toMatchObject({ code: 1 });
-  } finally {
-    child.stdin.end();
-    await exited;
-  }
-  const result = await promisify(execFile)(
-    process.execPath,
-    [path.join(cli, "dist/cli.js"), "--version"],
-    { windowsHide: true, timeout: 10000 },
-  );
-  expect(result.stdout.trim()).toBe("0.1.0-beta.11");
-}, 20000);
+    const exited = once(child, "exit");
+    let output = "";
+    try {
+      await new Promise<void>((resolve, reject) => {
+        child.stdout.on("data", (bytes: Buffer) => {
+          output += bytes.toString();
+          if (output.includes("HELD")) resolve();
+        });
+        child.once("error", reject);
+        child.once("exit", () => reject(new Error("helper exited")));
+      });
+      await expect(
+        promisify(execFile)(process.execPath, [path.join(cli, "dist/cli.js"), "--version"], {
+          windowsHide: true,
+          timeout: 10000,
+        }),
+      ).rejects.toMatchObject({ code: 1 });
+    } finally {
+      child.stdin.end();
+      await exited;
+    }
+    const result = await promisify(execFile)(
+      process.execPath,
+      [path.join(cli, "dist/cli.js"), "--version"],
+      { windowsHide: true, timeout: 10000 },
+    );
+    expect(result.stdout.trim()).toBe("0.1.0-beta.11");
+  },
+  20000,
+);

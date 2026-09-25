@@ -17,9 +17,23 @@ import {
 } from "./workspace-types.js";
 
 const COMMAND_TIMEOUT_MS = 120_000;
+const COMMIT_POLL_MS = 5_000;
+const COMMIT_QUERY_MS = 10_000;
+const COMMIT_HEARTBEAT_MS = 30_000;
+const COMMIT_IDLE_MS = 120_000;
+const COMMIT_IDLE_ENV = "HONEYBEE_PARENT_COMMIT_IDLE_TIMEOUT_MS";
+// Only these broker responses establish that finalization has returned and
+// this transaction can be aborted. Transport/CLI errors do not establish that.
+const COMPLETED_COMMIT_FAILURES = new Set([
+  "parent-verification-failed",
+  "storage-capacity-unavailable",
+  "parent-commit-failed",
+]);
 const WORKSPACE_ID = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
 
 type JsonObject = Record<string, unknown>;
+
+class StorageResponseError extends WorkspaceCoreError {}
 
 const object = (value: unknown, label: string): JsonObject => {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -48,6 +62,9 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
     });
   }
   const response = object(value, label);
+  if (response.ok !== true && response.ok !== false) {
+    throw new WorkspaceCoreError("storage.invalid-response", `${label} is missing ok.`);
+  }
   if (response.ok !== true) {
     const body =
       typeof response.error === "object" && response.error !== null
@@ -60,7 +77,7 @@ const parseResponse = (stdout: string, label: string): JsonObject => {
       (upstreamCode === "retained-attach-failed" &&
         typeof body.message === "string" &&
         body.message.includes("validate-stale-mount-target:"));
-    throw new WorkspaceCoreError(
+    throw new StorageResponseError(
       upstreamCode === "retained-not-found"
         ? "storage.retained-not-found"
         : mountIdentityMismatch
@@ -95,56 +112,130 @@ const run = (
   command: StorageCommand,
   args: readonly string[],
   input?: string,
+  timeoutMs: number | null = COMMAND_TIMEOUT_MS,
+  options: { control?: boolean; signal?: AbortSignal } = {},
 ): Promise<JsonObject> =>
   new Promise((resolve, reject) => {
-    const child = execFile(
-      storageToolPair(command).clientCommand,
-      [...args],
-      {
-        encoding: "utf8",
-        timeout: COMMAND_TIMEOUT_MS,
-        windowsHide: true,
-        maxBuffer: 4 * 1024 * 1024,
-      },
-      (error, stdout, stderr) => {
-        if (error !== null) {
-          if (stdout.trim().length > 0) {
-            try {
-              parseResponse(stdout, args.join(" "));
-            } catch (responseError) {
-              if (responseError instanceof WorkspaceCoreError) {
-                reject(responseError);
-                return;
+    const controller = new AbortController();
+    let timedOut = false;
+    const timer =
+      timeoutMs === null
+        ? undefined
+        : setTimeout(() => {
+            timedOut = true;
+            controller.abort();
+          }, timeoutMs);
+    const abort = () => controller.abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted === true) abort();
+    const cleanup = () => {
+      clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
+    };
+    try {
+      const child = execFile(
+        options.control === true
+          ? storageToolPair(command).controlCommand
+          : storageToolPair(command).clientCommand,
+        [...args],
+        {
+          encoding: "utf8",
+          signal: controller.signal,
+          windowsHide: true,
+          maxBuffer: 4 * 1024 * 1024,
+        },
+        (error, stdout, stderr) => {
+          cleanup();
+          if (timedOut) {
+            reject(
+              new WorkspaceCoreError(
+                "storage.command-timeout",
+                `${args.slice(0, 2).join(" ")} exceeded ${timeoutMs}ms.`,
+                { cause: error },
+              ),
+            );
+            return;
+          }
+          if (error !== null) {
+            if (stdout.trim().length > 0) {
+              try {
+                parseResponse(stdout, args.join(" "));
+              } catch (responseError) {
+                if (responseError instanceof WorkspaceCoreError) {
+                  reject(responseError);
+                  return;
+                }
               }
             }
+            reject(
+              new WorkspaceCoreError(
+                (error as NodeJS.ErrnoException).code === "ENOENT"
+                  ? "storage.command-not-found"
+                  : (error as NodeJS.ErrnoException).syscall?.startsWith("spawn") === true
+                    ? "storage.command-start-failed"
+                    : "storage.operation-failed",
+                stderr.trim().length > 0 ? stderr.trim() : error.message,
+                { cause: error },
+              ),
+            );
+            return;
           }
-          reject(
-            new WorkspaceCoreError(
-              (error as NodeJS.ErrnoException).code === "ENOENT"
-                ? "storage.command-not-found"
-                : "storage.operation-failed",
-              stderr.trim().length > 0 ? stderr.trim() : error.message,
-              { cause: error },
-            ),
-          );
-          return;
-        }
-        try {
-          resolve(parseResponse(stdout, args.join(" ")));
-        } catch (parseError) {
-          reject(parseError);
-        }
-      },
-    );
-    if (input !== undefined) child.stdin?.end(input);
+          try {
+            resolve(parseResponse(stdout, args.join(" ")));
+          } catch (parseError) {
+            reject(parseError);
+          }
+        },
+      );
+      if (input !== undefined) {
+        child.stdin?.on?.("error", (error: Error) => {
+          cleanup();
+          reject(error);
+          controller.abort();
+        });
+        child.stdin?.end(input);
+      }
+    } catch (error) {
+      cleanup();
+      reject(error);
+    }
   });
 
 export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
+  #parentCommitTimeoutMs: number | undefined;
+
+  #commitTimeout(): number {
+    if (this.#parentCommitTimeoutMs !== undefined) return this.#parentCommitTimeoutMs;
+    if (process.env.HONEYBEE_PARENT_COMMIT_TIMEOUT_MS !== undefined) {
+      throw new WorkspaceCoreError(
+        "storage.invalid-timeout",
+        `HONEYBEE_PARENT_COMMIT_TIMEOUT_MS is no longer supported. Commits have no total deadline; use ${COMMIT_IDLE_ENV} only for stalled progress.`,
+      );
+    }
+    const raw = process.env[COMMIT_IDLE_ENV]?.trim();
+    const value = raw === undefined ? COMMIT_IDLE_MS : Number(raw);
+    if (
+      (raw !== undefined && !/^\d+$/u.test(raw)) ||
+      !Number.isSafeInteger(value) ||
+      value < 1 ||
+      value > 2_147_483_647
+    ) {
+      throw new WorkspaceCoreError(
+        "storage.invalid-timeout",
+        `${COMMIT_IDLE_ENV} must be an integer from 1 to 2147483647 milliseconds.`,
+      );
+    }
+    this.#parentCommitTimeoutMs = value;
+    return value;
+  }
+
   public async beginParent(
     command: StorageCommand,
     compatibilityKey: string,
     layout?: "external-bee-dag-v1",
   ): Promise<StorageParentBuild> {
+    // Validate before creating a pending transaction or copying the Library.
+    this.#commitTimeout();
     const response = await run(command, [
       "parent",
       "begin",
@@ -178,21 +269,197 @@ export class WindowsWorkspaceStorage implements WorkspaceStoragePort {
     command: StorageCommand,
     transactionId: string,
   ): Promise<StorageParentBuild> {
-    const response = await run(command, [
-      "parent",
-      "commit",
-      "--transaction-id",
-      transactionId,
-      "--request-id",
-      `hb-parent-commit-${randomUUID()}`,
-    ]);
-    const parent = object(response.parent, "parent");
-    return {
-      parentId: text(parent.parentId, "parent.parentId"),
-      ...(typeof parent.allocatedBytes === "number"
-        ? { allocatedBytes: parent.allocatedBytes }
-        : {}),
+    const idleTimeoutMs = this.#commitTimeout();
+    const requestId = `hb-parent-commit-${randomUUID()}`;
+    const started = performance.now();
+    const observe = async (target = true, signal?: AbortSignal): Promise<JsonObject> => {
+      const queryId = `hb-commit-observe-${randomUUID()}`;
+      const response = await run(
+        command,
+        ["control"],
+        JSON.stringify({
+          schemaVersion: 3,
+          operation: "observe-parent-commit",
+          requestId: queryId,
+          ...(target ? { targetRequestId: requestId, transactionId } : {}),
+        }) + "\n",
+        COMMIT_QUERY_MS,
+        { control: true, ...(signal === undefined ? {} : { signal }) },
+      );
+      if (response.requestId !== queryId)
+        throw new Error("Commit observation request identity mismatch.");
+      const observation = object(response.commitObservation, "commitObservation");
+      if (
+        observation.version !== 1 ||
+        typeof observation.brokerSessionId !== "string" ||
+        observation.brokerSessionId.length === 0 ||
+        observation.requestId !== (target ? requestId : "") ||
+        observation.transactionId !== (target ? transactionId : "")
+      ) {
+        throw new Error("Invalid commit heartbeat identity or protocol.");
+      }
+      return observation;
     };
+    // A capability failure precedes submission and is safe for ordinary cleanup.
+    const capability = await observe(false).catch((cause: unknown) => {
+      throw new WorkspaceCoreError(
+        "storage.heartbeat-unavailable",
+        "Storage service does not provide the required commit heartbeat protocol. Update the storage service before preparing a cache.",
+        { cause },
+      );
+    });
+    if (capability.state !== "capable")
+      throw new WorkspaceCoreError(
+        "storage.heartbeat-unavailable",
+        "Storage commit heartbeat capability is unavailable.",
+      );
+    const controller = new AbortController();
+    const watching = new AbortController();
+    let phase = "awaiting-service";
+    const check = (observation: JsonObject): JsonObject | undefined => {
+      if (observation.brokerSessionId !== capability.brokerSessionId)
+        throw new Error("Storage service session changed; commit outcome is unknown.");
+      if (observation.state === "completed") {
+        const result = object(observation.result, "commit result");
+        if (result.requestId !== requestId) throw new Error("Completed commit identity mismatch.");
+        const parsed = parseResponse(JSON.stringify(result), "parent commit");
+        const parent = object(parsed.parent, "parent");
+        const key = object(parent.compatibilityKey, "parent.compatibilityKey");
+        return {
+          parent: {
+            parentId: text(key.digest, "parent digest"),
+            allocatedBytes: parent.allocatedBytes,
+          },
+        };
+      }
+      if (observation.state !== "running" && observation.state !== "unknown")
+        throw new Error("Invalid commit observation state.");
+      return undefined;
+    };
+    const monitor = async (): Promise<JsonObject> => {
+      let lastHeartbeat = performance.now();
+      let lastProgress = lastHeartbeat;
+      let sequence = -1;
+      while (!watching.signal.aborted) {
+        await new Promise<void>((resolve) => {
+          const stop = () => {
+            clearTimeout(timer);
+            watching.signal.removeEventListener("abort", stop);
+            resolve();
+          };
+          const timer = setTimeout(stop, COMMIT_POLL_MS);
+          watching.signal.addEventListener("abort", stop, { once: true });
+        });
+        if (watching.signal.aborted) break;
+        let observation: JsonObject;
+        try {
+          observation = await observe(true, watching.signal);
+        } catch (error) {
+          if (watching.signal.aborted) break;
+          if (performance.now() - lastHeartbeat >= COMMIT_HEARTBEAT_MS) throw error;
+          continue;
+        }
+        const completed = check(observation);
+        if (completed !== undefined) return completed;
+        lastHeartbeat = performance.now();
+        if (observation.state === "running") {
+          const next = observation.sequence;
+          if (
+            typeof next !== "number" ||
+            !Number.isSafeInteger(next) ||
+            next < 1 ||
+            next < sequence ||
+            typeof observation.phase !== "string"
+          )
+            throw new Error("Invalid or regressed worker progress.");
+          phase = observation.phase;
+          if (next > sequence) {
+            sequence = next;
+            lastProgress = lastHeartbeat;
+          }
+        }
+        if (performance.now() - lastProgress >= idleTimeoutMs)
+          throw new Error(
+            `Parent commit progress stalled for ${idleTimeoutMs}ms (phase=${phase}).`,
+          );
+      }
+      return new Promise<JsonObject>(() => {});
+    };
+    try {
+      const commit = run(
+        command,
+        ["parent", "commit", "--transaction-id", transactionId, "--request-id", requestId],
+        undefined,
+        null,
+        { signal: controller.signal },
+      );
+      let response: JsonObject;
+      try {
+        response = await Promise.race([commit, monitor()]);
+      } catch (error) {
+        const definite =
+          error instanceof StorageResponseError &&
+          COMPLETED_COMMIT_FAILURES.has(error.upstreamCode ?? "");
+        const notStarted =
+          error instanceof WorkspaceCoreError &&
+          ["storage.command-not-found", "storage.command-start-failed"].includes(error.code);
+        if (definite || notStarted) throw error;
+        watching.abort();
+        // One read-only final reconciliation, never resubmit commit or abort.
+        let completed: JsonObject | undefined;
+        try {
+          completed = check(await observe());
+        } catch (queryError) {
+          if (
+            queryError instanceof StorageResponseError &&
+            COMPLETED_COMMIT_FAILURES.has(queryError.upstreamCode ?? "")
+          )
+            throw queryError;
+        }
+        if (completed === undefined) throw error;
+        response = completed;
+      }
+      const parent = object(response.parent, "parent");
+      return {
+        parentId: text(parent.parentId, "parent.parentId"),
+        ...(typeof parent.allocatedBytes === "number"
+          ? { allocatedBytes: parent.allocatedBytes }
+          : {}),
+      };
+    } catch (error) {
+      const confirmedFailure =
+        error instanceof StorageResponseError &&
+        COMPLETED_COMMIT_FAILURES.has(error.upstreamCode ?? "");
+      const notStarted =
+        error instanceof WorkspaceCoreError &&
+        ["storage.command-not-found", "storage.command-start-failed"].includes(error.code);
+      const details = `parent commit; requestId=${requestId}; transactionId=${transactionId}; idleTimeoutMs=${idleTimeoutMs}; phase=${phase}; elapsedMs=${Math.round(performance.now() - started)}`;
+      if ((confirmedFailure || notStarted) && error instanceof WorkspaceCoreError) {
+        throw new WorkspaceCoreError(error.code, `${error.message} (${details})`, {
+          cause: error,
+          remediation: error.remediation,
+          ...(error.upstreamCode === undefined ? {} : { upstreamCode: error.upstreamCode }),
+        });
+      }
+      throw new WorkspaceCoreError(
+        "storage.commit-outcome-unknown",
+        `Parent commit completion could not be confirmed. Storage may still be working; do not retry or clean up before transaction-specific diagnosis. ${error instanceof Error ? error.message : String(error)} (${details})`,
+        {
+          cause: error,
+          ...(error instanceof WorkspaceCoreError && error.upstreamCode !== undefined
+            ? { upstreamCode: error.upstreamCode }
+            : {}),
+          remediation: [
+            "The storage service may still be committing. Automatic parent cleanup was skipped; the registered cache is unchanged.",
+            "Keep these request and transaction IDs. Do not immediately retry, abort, delete storage files, or restart the service.",
+            "Run honeybee doctor for read-only health diagnostics and seek transaction-specific diagnosis before recovery. Doctor cannot confirm this commit's outcome.",
+          ],
+        },
+      );
+    } finally {
+      watching.abort();
+      controller.abort();
+    }
   }
 
   public async abortParent(command: StorageCommand, transactionId: string): Promise<void> {
