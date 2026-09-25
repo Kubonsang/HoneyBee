@@ -109,7 +109,7 @@ test("one-pass preflight refuses changed evidence before creating a run", async 
   await writeFile(path.join(f.root, "config.json"), JSON.stringify({ candidate }));
   await writeFile(path.join(f.root, "acceptance.json"), JSON.stringify(f.acceptance));
   for (const lane of ["docker", "windows", "native"]) {
-    const receipt = structuredClone(f.receipts[lane]);
+    const receipt = globalThis.structuredClone(f.receipts[lane]);
     if (lane === "windows") receipt.attachments[0].sha256 = digest("changed");
     await writeFile(path.join(f.root, `${lane}.json`), JSON.stringify(receipt));
   }
