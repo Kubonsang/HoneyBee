@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { isUtf8 } from "node:buffer";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { readFile, lstat, realpath, readdir, unlink, writeFile, statfs } from "node:fs/promises";
 import path from "node:path";
 import { fixedAcceptanceGates, summarizeFinalAcceptance } from "./final-acceptance.mjs";
@@ -23,6 +24,11 @@ export const policy = Object.freeze({
   automaticExpansionAllowed: false,
 });
 export const digest = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export const digestFile = async (file) => {
+  const hash = createHash("sha256");
+  for await (const chunk of createReadStream(file)) hash.update(chunk);
+  return hash.digest("hex");
+};
 export const sourceDigest = (bytes) =>
   digest(isUtf8(bytes) ? bytes.toString("utf8").replaceAll("\r\n", "\n") : bytes);
 export const readJson = async (file) =>
@@ -89,29 +95,54 @@ export async function inventory(root) {
   };
 }
 
+// Every candidate has new distribution bytes/URLs, but historical interactive
+// journeys are invalidated only by the behavior that changed.
 const routine = ["discovery-download", "artifact-integrity", "signed-setup-winget"];
+const storageGates = [
+  "service-migration",
+  "workspace-preservation",
+  "drain-duplicates",
+  "capacity-locks",
+  "interruption-matrix",
+];
+const publicationGates = ["discovery-download", "artifact-integrity", "signed-setup-winget"];
 export function impact(files) {
   const gates = new Set(routine);
   const reasons = [];
+  const unclassified = [];
   for (const file of files) {
-    if (/^(docs\/|tests\/|scripts\/(qualification|test-support)\/)|\.(md|test\.[^/]+)$/u.test(file))
+    if (
+      /^(docs\/|tests\/|\.github\/|scripts\/(qualification|test-support)\/)|(^|\/)(README\.md|[^/]+\.test\.[^/]+|[^/]+_test\.go)$|^\.(gitattributes|gitignore)$/u.test(
+        file,
+      )
+    )
       continue;
     if (
       /^(integrations\/storage\/|tools\/workspace-storage-host\/)|^packages\/core\/src\/workspace-(storage|core|types)/u.test(
         file,
       )
     ) {
-      [
-        "service-migration",
-        "workspace-preservation",
-        "service-rollback",
-        "drain-duplicates",
-        "compatibility-floors",
-        "capacity-locks",
-        "repair",
-        "interruption-matrix",
-      ].forEach((gate) => gates.add(gate));
+      storageGates.forEach((gate) => gates.add(gate));
       reasons.push({ file, scope: "storage" });
+    } else if (
+      /^apps\/desktop\/resources\/component-compatibility-v1\.json$|^apps\/desktop\/scripts\/prepare-tools\.mjs$/u.test(
+        file,
+      )
+    ) {
+      ["compatibility-floors", "artifact-integrity", "signed-setup-winget"].forEach((gate) =>
+        gates.add(gate),
+      );
+      reasons.push({ file, scope: "component-packaging" });
+    } else if (/^apps\/desktop\/src\/renderer\/(operation-errors|i18n)\.ts$/u.test(file)) {
+      gates.add("interruption-matrix");
+      reasons.push({ file, scope: "commit-guidance" });
+    } else if (
+      /^scripts\/installation\/(beta32-delivery-approval|complete-public-beta|publish-beta|review-distribution)\.mjs$/u.test(
+        file,
+      )
+    ) {
+      publicationGates.forEach((gate) => gates.add(gate));
+      reasons.push({ file, scope: "publication" });
     } else if (
       /^scripts\/(installation|update|recovery)\/|^tools\/honeybee-(launcher|update-package)\//u.test(
         file,
@@ -119,17 +150,23 @@ export function impact(files) {
     ) {
       fixedAcceptanceGates.forEach((gate) => gates.add(gate));
       reasons.push({ file, scope: "installation-update" });
+    } else if (/^apps\/cli\/scripts\/smoke\.mjs$/u.test(file)) {
+      continue;
     } else if (/^(apps\/|packages\/)/u.test(file)) {
       gates.add("workspace-preservation");
       reasons.push({ file, scope: "application" });
+    } else if (file === "package.json" || file.endsWith("/package.json")) {
+      gates.add("artifact-integrity");
+      reasons.push({ file, scope: "build-manifest" });
     } else {
-      fixedAcceptanceGates.forEach((gate) => gates.add(gate));
-      reasons.push({ file, scope: "unknown-conservative" });
+      unclassified.push(file);
+      reasons.push({ file, scope: "unclassified-production" });
     }
   }
   return {
     rerunGates: [...gates],
     reasons,
+    unclassified,
     always: ["docker", "windows", "native-update-launch", "distribution"],
   };
 }
@@ -146,6 +183,12 @@ export function versionOnlyManifestChange(before, after) {
   } catch {
     return false;
   }
+}
+
+export function policyOnlySourceChange(files) {
+  return (
+    files.length > 0 && files.every((file) => /^(scripts\/qualification\/|docs\/)/u.test(file))
+  );
 }
 
 export function capacity(snapshot, expectedGrowthBytes = 0) {
@@ -192,6 +235,62 @@ export async function makePlan(root, config) {
   // All candidates in this series must retain the user's beta.35 source floor.
   git(root, ["merge-base", "--is-ancestor", "v0.1.0-beta.35", config.sourceCommit]);
   const source = await inventory(root);
+  let sourceEquivalence;
+  if (config.sourceEquivalence) {
+    const previous = config.sourceEquivalence;
+    assert(/^[a-f0-9]{40}$/u.test(previous.commit), "Equivalent source commit required");
+    assert(
+      /^[a-f0-9]{64}$/u.test(previous.inventorySha256),
+      "Equivalent source inventory required",
+    );
+    git(root, ["merge-base", "--is-ancestor", previous.commit, config.sourceCommit]);
+    const changed = git(root, ["diff", "--name-only", previous.commit, config.sourceCommit, "--"])
+      .split("\n")
+      .filter(Boolean);
+    assert(
+      policyOnlySourceChange(changed),
+      "Equivalent source changed a product or packaging input",
+    );
+    assert(config.candidate, "Equivalent source requires frozen candidate hashes");
+    const distribution = path.resolve(root, previous.distributionDirectory ?? "");
+    assert(
+      distribution.startsWith(path.join(root, "output") + path.sep),
+      "Equivalent source distribution must be under output",
+    );
+    assert((await lstat(distribution)).isDirectory(), "Equivalent source distribution missing");
+    assert(
+      (await realpath(distribution)).startsWith(
+        (await realpath(path.join(root, "output"))) + path.sep,
+      ),
+      "Equivalent source distribution resolves outside output",
+    );
+    const setupPath = path.join(distribution, "HoneyBeeSetup.exe");
+    const manifestPath = path.join(distribution, "release.json");
+    const applicationPath = path.join(distribution, "application.zip");
+    for (const file of [setupPath, manifestPath, applicationPath])
+      assert((await lstat(file)).isFile(), "Equivalent source artifact missing or linked");
+    assert.equal(
+      await digestFile(setupPath),
+      config.candidate.setupSha256,
+      "Equivalent Setup changed",
+    );
+    assert.equal(
+      await digestFile(manifestPath),
+      config.candidate.manifestSha256,
+      "Equivalent manifest changed",
+    );
+    const manifest = await readJson(manifestPath);
+    assert.equal(
+      await digestFile(applicationPath),
+      manifest.packages?.application?.sha256,
+      "Equivalent application changed",
+    );
+    sourceEquivalence = {
+      from: { commit: previous.commit, inventorySha256: previous.inventorySha256 },
+      to: { commit: config.sourceCommit, inventorySha256: source.sha256 },
+      changed,
+    };
+  }
   const changedFiles = [
     ...new Set(
       [
@@ -222,7 +321,9 @@ export async function makePlan(root, config) {
     version: config.version,
     releaseMode: config.releaseMode ?? "signed",
     source: { commit: config.sourceCommit, inventorySha256: source.sha256 },
+    ...(sourceEquivalence ? { sourceEquivalence } : {}),
     baselineCommit,
+    baselineRef: config.baselineRef,
     candidate: config.candidate ?? null,
     dirty: git(root, ["status", "--porcelain", "--untracked-files=normal"]).length > 0,
     inventory: source,
@@ -255,6 +356,7 @@ export async function summarizeRun(plan, receipts, acceptance, base) {
   if (plan.dirty) blockers.push("release-source-is-dirty");
   if (!plan.candidate) blockers.push("candidate-not-frozen");
   if (plan.inventory.unclassified.length) blockers.push("unclassified-tests");
+  if (plan.impact.unclassified?.length) blockers.push("unclassified-production-change");
   const lanes = [];
   for (const lane of ["docker", "windows", "native"]) {
     const receipt = receipts[lane];
@@ -263,7 +365,13 @@ export async function summarizeRun(plan, receipts, acceptance, base) {
       assert(receipt, "not executed/imported");
       assert.equal(receipt.schemaVersion, 1);
       assert.equal(receipt.lane, lane);
-      assert.deepEqual(receipt.source, plan.source, "source mismatch");
+      const equivalentNative =
+        lane === "native" &&
+        plan.sourceEquivalence &&
+        JSON.stringify(plan.sourceEquivalence.from) === JSON.stringify(receipt.source) &&
+        JSON.stringify(plan.sourceEquivalence.to) === JSON.stringify(plan.source) &&
+        JSON.stringify(receipt.candidate) === JSON.stringify(plan.candidate);
+      if (!equivalentNative) assert.deepEqual(receipt.source, plan.source, "source mismatch");
       assert.equal(receipt.status, "passed", "lane not passed");
       assert.equal(receipt.unexpectedSkips, 0, "unowned skips");
       if (lane !== "native") {
@@ -305,11 +413,30 @@ export async function summarizeRun(plan, receipts, acceptance, base) {
     const final = summarizeFinalAcceptance(acceptance);
     const readiness = distributionReadiness({ releaseMode: plan.releaseMode ?? "signed" }, final);
     for (const gate of acceptance.gates) {
+      const affected = plan.impact.rerunGates.includes(gate.id);
+      if (["passed", "partial"].includes(gate.status) && (affected || !gate.reuse)) {
+        await verifyAttachments(gate.attachments, base);
+        assert(
+          gate.attachments.some((item) => gate.evidence.includes(item.path)),
+          "current gate evidence does not name a hashed attachment",
+        );
+      }
       if (!gate.reuse) continue;
-      assert(
-        !plan.impact.rerunGates.includes(gate.id),
-        `affected gate cannot be reused: ${gate.id}`,
-      );
+      if (affected) {
+        assert(gate.delta, `affected gate cannot be reused alone: ${gate.id}`);
+        assert.deepEqual(gate.delta.source, plan.source, "delta source mismatch");
+        assert.deepEqual(gate.delta.candidate, plan.candidate, "delta candidate mismatch");
+        assert(
+          Array.isArray(gate.delta.evidence) &&
+            gate.delta.evidence.length > 0 &&
+            gate.delta.evidence.every(
+              (item) =>
+                gate.evidence.includes(item) &&
+                gate.attachments.some((attachment) => attachment.path === item),
+            ),
+          "affected gate needs current evidence",
+        );
+      }
       assert(gate.reuse.reason && gate.reuse.environment, "reuse rationale/environment required");
       await verifyAttachments([gate.reuse.original], base);
       const original = await readJson(path.resolve(base, gate.reuse.original.path));
@@ -318,7 +445,47 @@ export async function summarizeRun(plan, receipts, acceptance, base) {
           "passed",
         "original gate did not pass",
       );
-      assert.equal(original.sourceCommit, plan.baselineCommit, "reuse baseline mismatch");
+      assert.deepEqual(original.candidate, gate.reuse.candidate, "reuse candidate mismatch");
+      if (original.sourceCommit) {
+        assert.equal(original.sourceCommit, plan.baselineCommit, "reuse baseline mismatch");
+      } else {
+        // Older accepted ledgers did not record sourceCommit. Never rewrite the
+        // original: require a separately hashed, reviewed provenance record.
+        assert(gate.reuse.baseline, "historical reuse provenance missing");
+        await verifyAttachments([gate.reuse.baseline], base);
+        const binding = await readJson(path.resolve(base, gate.reuse.baseline.path));
+        assert.equal(binding.schemaVersion, 1);
+        assert.equal(binding.sourceCommit, plan.baselineCommit, "reuse baseline mismatch");
+        assert.equal(binding.tag, plan.baselineRef, "reuse baseline tag mismatch");
+        assert.deepEqual(
+          binding.candidate,
+          original.candidate,
+          "reuse provenance candidate mismatch",
+        );
+        assert.equal(
+          binding.acceptanceSha256,
+          gate.reuse.original.sha256,
+          "reuse provenance acceptance mismatch",
+        );
+        assert(binding.reviewedBy && binding.reason, "reuse provenance review missing");
+        assert(binding.releaseCompletion, "reuse publication provenance missing");
+        await verifyAttachments(
+          [binding.releaseCompletion],
+          path.dirname(path.resolve(base, gate.reuse.baseline.path)),
+        );
+        const completion = await readJson(
+          path.resolve(
+            path.dirname(path.resolve(base, gate.reuse.baseline.path)),
+            binding.releaseCompletion.path,
+          ),
+        );
+        assert.equal(completion.releaseCompleted, true, "baseline publication incomplete");
+        assert.deepEqual(
+          completion.candidate,
+          original.candidate,
+          "baseline publication candidate mismatch",
+        );
+      }
     }
     // Validate reuse even when delivery checks are pending. Otherwise a
     // prepublication-only admission could hide invalid reused evidence.

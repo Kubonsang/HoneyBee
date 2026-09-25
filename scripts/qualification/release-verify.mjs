@@ -47,6 +47,15 @@ export async function requireReleaseVerification(
   const supplied = await readJson(reportPath);
   const current = await reportRun(path.dirname(reportPath));
   assert.deepEqual(supplied, current, "Verification report changed or is stale");
+  const storedPlan = await readJson(path.join(path.dirname(reportPath), "plan.json"));
+  if (storedPlan.sourceEquivalence) {
+    const storedConfig = await readJson(path.join(path.dirname(reportPath), "config.json"));
+    assert.deepEqual(
+      storedPlan,
+      await makePlan(root, storedConfig),
+      "Source equivalence or frozen artifacts changed since planning",
+    );
+  }
   assert.deepEqual(current.candidate, candidate, "Verification candidate mismatch");
   assert.equal(current.source.commit, sourceCommit, "Verification commit mismatch");
   assert.equal(current.releaseMode, releaseMode, "Verification release-mode mismatch");
@@ -111,6 +120,15 @@ export async function main(args) {
     await readJson(path.join(directory, "config.json")),
     "Configuration changed; create a new plan",
   );
+  if (action === "report") {
+    const existingPlan = await readJson(path.join(directory, "plan.json"));
+    if (existingPlan.sourceEquivalence)
+      assert.deepEqual(
+        existingPlan,
+        await makePlan(root, config),
+        "Source equivalence or frozen artifacts changed since planning",
+      );
+  }
   const lock = await open(path.join(directory, "run.lock"), "wx");
   try {
     if (action === "run") {
@@ -158,7 +176,14 @@ export async function main(args) {
         }));
       }
       assert.equal(receipt.lane, lane);
-      assert.deepEqual(receipt.source, plan.source, "Imported source identity mismatch");
+      const equivalentNative =
+        lane === "native" &&
+        plan.sourceEquivalence &&
+        JSON.stringify(receipt.source) === JSON.stringify(plan.sourceEquivalence.from) &&
+        JSON.stringify(plan.source) === JSON.stringify(plan.sourceEquivalence.to) &&
+        JSON.stringify(receipt.candidate) === JSON.stringify(plan.candidate);
+      if (!equivalentNative)
+        assert.deepEqual(receipt.source, plan.source, "Imported source identity mismatch");
       if (previous) {
         // Preserve failed attempts; successful evidence cannot be silently replaced.
         assert.notEqual(

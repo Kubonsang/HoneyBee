@@ -17,13 +17,43 @@ import {
   sourceDigest,
   safeFile,
   versionOnlyManifestChange,
+  policyOnlySourceChange,
 } from "./release-verification.mjs";
 import { fixedAcceptanceGates } from "./final-acceptance.mjs";
 import { requireReleaseVerification } from "./release-verify.mjs";
+import { runDelta } from "./release-delta.mjs";
+import { composeBeta36Native } from "./compose-beta36-native.mjs";
 import { beta36DeliveryApprovalId } from "../installation/beta32-delivery-approval.mjs";
 
 const candidate = { setupSha256: "a".repeat(64), manifestSha256: "b".repeat(64) };
 const source = { commit: "c".repeat(40), inventorySha256: "d".repeat(64) };
+test("one-pass import requires all four distinct evidence inputs before writing", async () => {
+  await assert.rejects(runDelta([]), /Usage:/u);
+  await assert.rejects(
+    runDelta([
+      "config.json",
+      "output/run",
+      "--docker",
+      "docker.json",
+      "--windows",
+      "windows.json",
+      "--native",
+      "native.json",
+      "--native",
+      "again.json",
+    ]),
+    /Duplicate or missing evidence input/u,
+  );
+});
+test("native composer refuses evidence paths outside owned output", async () => {
+  await assert.rejects(
+    composeBeta36Native(
+      path.join(tmpdir(), "unowned-input.json"),
+      path.join(tmpdir(), "unowned-output.json"),
+    ),
+    /Evidence paths must stay under output/u,
+  );
+});
 async function fixture() {
   const root = await mkdtemp(path.join(tmpdir(), "hb-verification-"));
   await writeFile(path.join(root, "log.txt"), "real diagnostic log");
@@ -34,6 +64,7 @@ async function fixture() {
     candidate,
     source,
     baselineCommit: "e".repeat(40),
+    baselineRef: "v0.1.0-beta.35",
     dirty: false,
     inventory: { unclassified: [] },
     impact: impact([]),
@@ -68,10 +99,58 @@ async function fixture() {
       scope: "final",
       status: "passed",
       evidence: ["log.txt"],
+      attachments,
     })),
   };
   return { root, plan, receipts, acceptance };
 }
+test("one-pass preflight refuses changed evidence before creating a run", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.root, "config.json"), JSON.stringify({ candidate }));
+  await writeFile(path.join(f.root, "acceptance.json"), JSON.stringify(f.acceptance));
+  for (const lane of ["docker", "windows", "native"]) {
+    const receipt = structuredClone(f.receipts[lane]);
+    if (lane === "windows") receipt.attachments[0].sha256 = digest("changed");
+    await writeFile(path.join(f.root, `${lane}.json`), JSON.stringify(receipt));
+  }
+  const target = path.join(f.root, "run");
+  await assert.rejects(
+    runDelta([
+      path.join(f.root, "config.json"),
+      target,
+      "--docker",
+      path.join(f.root, "docker.json"),
+      "--windows",
+      path.join(f.root, "windows.json"),
+      "--native",
+      path.join(f.root, "native.json"),
+      "--acceptance",
+      path.join(f.root, "acceptance.json"),
+    ]),
+    /Evidence changed/u,
+  );
+  await assert.rejects(readFile(path.join(target, "plan.json")), { code: "ENOENT" });
+});
+test("one-pass evidence import refuses automatic cleanup", async () => {
+  const f = await fixture();
+  const config = path.join(f.root, "config.json");
+  await writeFile(config, JSON.stringify({ candidate, cleanupManifest: [] }));
+  await assert.rejects(
+    runDelta([
+      config,
+      path.join(f.root, "run"),
+      "--docker",
+      path.join(f.root, "docker.json"),
+      "--windows",
+      path.join(f.root, "windows.json"),
+      "--native",
+      path.join(f.root, "native.json"),
+      "--acceptance",
+      path.join(f.root, "acceptance.json"),
+    ]),
+    /never performs cleanup/u,
+  );
+});
 
 test("classification retains Windows-specific Go and rejects unknown PowerShell suites", () => {
   assert.equal(classifyTest("tools/workspace-storage-host/service_windows_test.go"), "windows");
@@ -105,14 +184,43 @@ test("version-only increments do not invalidate service recovery evidence", () =
     ),
   );
 });
-test("storage and unknown changes conservatively select recovery checks", () => {
+test("source equivalence refuses product and package changes", () => {
   assert(
-    impact(["integrations/storage/external-bee.patch"]).rerunGates.includes("interruption-matrix"),
+    policyOnlySourceChange([
+      "scripts/qualification/release-verification.mjs",
+      "docs/operations/release-verification.md",
+    ]),
   );
+  assert(!policyOnlySourceChange([]));
+  assert(!policyOnlySourceChange(["packages/core/src/workspace-storage.ts"]));
+  assert(
+    !policyOnlySourceChange(["scripts/qualification/release-verification.mjs", "package.json"]),
+  );
+});
+test("change impact selects behavior, while unknown production changes block admission", () => {
+  const storage = impact(["integrations/storage/external-bee.patch"]);
+  assert(storage.rerunGates.includes("interruption-matrix"));
+  assert(storage.rerunGates.includes("capacity-locks"));
+  assert(!storage.rerunGates.includes("git-uac"));
+  assert(!storage.rerunGates.includes("repair"));
+  const publication = impact(["scripts/installation/publish-beta.mjs"]);
   assert.deepEqual(
-    new Set(impact(["new-build-system.config"]).rerunGates),
-    new Set(fixedAcceptanceGates),
+    new Set(publication.rerunGates),
+    new Set(["discovery-download", "artifact-integrity", "signed-setup-winget"]),
   );
+  const metadata = impact([
+    ".gitattributes",
+    ".github/workflows/windows.yml",
+    "docs/operations/release-verification.md",
+  ]);
+  assert.deepEqual(metadata.unclassified, []);
+  assert.deepEqual(
+    new Set(metadata.rerunGates),
+    new Set(["discovery-download", "artifact-integrity", "signed-setup-winget"]),
+  );
+  const unknown = impact(["new-build-system.config"]);
+  assert.deepEqual(unknown.unclassified, ["new-build-system.config"]);
+  assert(!unknown.rerunGates.includes("interruption-matrix"));
 });
 test("capacity admission includes expected growth, guest service floor and child reserve", () => {
   const base = { hostFreeBytes: 60 * GiB, guestFreeBytes: 30 * GiB, vmBytes: 29 * GiB };
@@ -176,11 +284,40 @@ test("changed evidence blocks release", async () => {
   await writeFile(path.join(f.root, "log.txt"), "modified");
   assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
 });
+test("unhashed or changed current acceptance evidence blocks release", async () => {
+  const f = await fixture();
+  const gate = f.acceptance.gates.find((item) => item.id === "artifact-integrity");
+  delete gate.attachments;
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
+  gate.attachments = [{ path: "log.txt", sha256: digest("different") }];
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
+});
 test("affected acceptance gate cannot reuse old evidence", async () => {
   const f = await fixture();
   f.acceptance.gates.find((gate) => gate.id === "artifact-integrity").reuse = {
     reason: "same version",
   };
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
+});
+test("affected composite gate requires candidate-bound delta evidence", async () => {
+  const f = await fixture();
+  f.plan.impact = impact(["integrations/storage/external-bee.patch"]);
+  const original = globalThis.structuredClone(f.acceptance);
+  original.sourceCommit = f.plan.baselineCommit;
+  original.candidate = { setupSha256: "1".repeat(64), manifestSha256: "2".repeat(64) };
+  for (const gate of original.gates) gate.candidate = original.candidate;
+  const bytes = JSON.stringify(original);
+  await writeFile(path.join(f.root, "baseline.json"), bytes);
+  const gate = f.acceptance.gates.find((item) => item.id === "interruption-matrix");
+  gate.reuse = {
+    reason: "unchanged interruption points",
+    environment: "same supported Windows configuration",
+    candidate: original.candidate,
+    original: { path: "baseline.json", sha256: digest(bytes) },
+  };
+  gate.delta = { source: f.plan.source, candidate, evidence: ["log.txt"] };
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, true);
+  gate.delta.candidate = original.candidate;
   assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
 });
 test("unaffected gate reuse keeps original candidate and verified baseline binding", async () => {
@@ -195,9 +332,60 @@ test("unaffected gate reuse keeps original candidate and verified baseline bindi
     reason: "service and updater unchanged",
     environment: "same supported Windows configuration",
     original: { path: "baseline.json", sha256: digest(bytes) },
+    candidate: original.candidate,
   };
   assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, true);
   assert.notDeepEqual(original.candidate, f.acceptance.candidate);
+});
+test("historical acceptance without sourceCommit requires hashed reviewed provenance", async () => {
+  const f = await fixture();
+  const original = globalThis.structuredClone(f.acceptance);
+  original.candidate = { setupSha256: "1".repeat(64), manifestSha256: "2".repeat(64) };
+  for (const gate of original.gates) gate.candidate = original.candidate;
+  const originalBytes = JSON.stringify(original);
+  await writeFile(path.join(f.root, "baseline.json"), originalBytes);
+  const completion = { releaseCompleted: true, candidate: original.candidate };
+  const completionBytes = JSON.stringify(completion);
+  await writeFile(path.join(f.root, "completed.json"), completionBytes);
+  const binding = {
+    schemaVersion: 1,
+    sourceCommit: f.plan.baselineCommit,
+    tag: f.plan.baselineRef,
+    candidate: original.candidate,
+    acceptanceSha256: digest(originalBytes),
+    reviewedBy: "release-reviewer",
+    reason: "tag and published artifact receipt reviewed",
+    releaseCompletion: { path: "completed.json", sha256: digest(completionBytes) },
+  };
+  const bindingBytes = JSON.stringify(binding);
+  await writeFile(path.join(f.root, "binding.json"), bindingBytes);
+  const reuse = f.acceptance.gates.find((gate) => gate.id === "service-rollback");
+  reuse.reuse = {
+    reason: "service update mechanism unchanged",
+    environment: "same Windows configuration",
+    candidate: original.candidate,
+    original: { path: "baseline.json", sha256: digest(originalBytes) },
+    baseline: { path: "binding.json", sha256: digest(bindingBytes) },
+  };
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, true);
+  reuse.reuse.baseline.sha256 = digest("wrong");
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
+});
+test("policy-only source equivalence is native-only and candidate-bound", async () => {
+  const f = await fixture();
+  const old = { commit: "f".repeat(40), inventorySha256: "1".repeat(64) };
+  f.plan.sourceEquivalence = {
+    from: old,
+    to: f.plan.source,
+    changed: ["scripts/qualification/release-verification.mjs"],
+  };
+  f.receipts.native.source = old;
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, true);
+  f.receipts.native.candidate = { ...candidate, setupSha256: "2".repeat(64) };
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
+  f.receipts.native.candidate = candidate;
+  f.receipts.windows.source = old;
+  assert.equal((await summarizeRun(f.plan, f.receipts, f.acceptance, f.root)).ready, false);
 });
 test("publication recomputes report instead of trusting a ready boolean", async () => {
   const f = await fixture();

@@ -1,9 +1,79 @@
 # Unified release verification
 
-Docker owns portable checks. GitHub Actions owns Windows automation. One bounded
-Windows 11 VM owns actual installation, service, NTFS/VHDX and interactive recovery
-acceptance. A container pass or a Windows Server CI pass is not Windows 11 native
-acceptance. Publishing remains a separate, explicitly requested operation.
+Docker owns portable checks. GitHub Actions owns Windows automation. A pinned
+Windows 11 NTFS environment (including an isolated physical-host fixture) owns
+actual installation, service and VHDX evidence. A container pass or Windows
+Server CI pass is not Windows 11 native acceptance. Publishing remains a
+separate, explicitly requested operation. The VM procedure below is historical
+and must not be used to recreate the retired beta.36 VM.
+
+## Change-scoped acceptance policy
+
+Keep all sixteen gate IDs as the review ledger; do not rerun every interactive
+journey. Compare the frozen source against the accepted baseline. An affected
+behavior needs exact-candidate evidence; an unchanged behavior may reuse a
+hashed, reviewed baseline record. Unclassified executable changes block
+qualification until mapped. Every candidate still needs clean source, current
+Docker/Windows automation, frozen distribution integrity, one actual
+Setup/update/launch/Doctor observation, no pending native transaction and
+explicit publication approval. A passing old receipt is never relabeled as
+having run against new bytes.
+
+For beta.36 the targeted changed behaviors are storage commit/recovery
+(service migration, workspace preservation, drain/duplicates, capacity/locks,
+interruption matrix), component compatibility/packaging (compatibility floors,
+artifact integrity, Setup/WinGet), and public delivery (discovery/download,
+artifact integrity, Setup/WinGet). The other journeys—fresh Setup prerequisite,
+Git/UAC, ZIP adoption, consecutive updates, app rollback, service rollback and
+Repair—can use the beta.35 review plus the exact beta.36 installation/update
+smoke where relevant. A gate with changed and unchanged subcases uses current
+evidence for the changed subcase and explicitly cites historical evidence for
+the unchanged subcases. Parent-commit response loss, stalled progress, restart
+and mismatched identity are verified by deterministic injected tests plus a
+real long-running normal commit; no forced production-service interruption is
+required.
+
+The beta.35 accepted ledger predates `sourceCommit`. Do not edit it to add one.
+For an unaffected gate's `reuse`, record the historical `candidate`, a hashed
+`original` ledger, and a hashed `baseline` provenance JSON with
+`schemaVersion:1`, `sourceCommit` equal to the plan baseline, matching
+`candidate`, `acceptanceSha256`, nonempty `reviewedBy` and `reason`, and a
+hashed `releaseCompletion` attachment whose completed candidate matches.
+If this chain cannot be verified, the gate stays blocked until focused evidence
+exists. An affected composite gate may cite unchanged historical subcases only
+when `gate.delta` contains the current plan `source`, `candidate`, and a
+nonempty `evidence` list also present in the gate's evidence. Passed or
+partial current-candidate gates additionally need `attachments: [{path, sha256}]`;
+the verifier reads and hashes each real file. An affected gate
+cannot be passed using only `reuse`.
+
+Policy-only source changes may carry native evidence forward only when the
+newly frozen Setup and manifest hashes remain identical. Set
+`sourceEquivalence: {commit, inventorySha256, distributionDirectory}` in the
+new config to the original tested source and the new frozen distribution under
+`output/`. The planner verifies Setup, manifest and application ZIP hashes
+and that every intervening tracked change is under `scripts/qualification/`
+or `docs/`; the old native receipt
+keeps its original source and candidate. Docker and Windows receipts must be
+regenerated for the new policy source. If an artifact hash differs, omit
+`sourceEquivalence` and perform focused current-candidate qualification.
+
+After the reviewed receipts and final acceptance JSON exist, import them in one
+non-mutating-to-host pass into a fresh output directory:
+
+```powershell
+node scripts/qualification/compose-beta36-native.mjs output/verification-unification-20260920/beta36-native-aggregate-input.json output/verification-unification-20260920/beta36-native-delta-receipt.json
+node scripts/qualification/release-delta.mjs output/candidate.json output/new-release-run --docker output/docker.json --windows output/windows.json --native output/native.json --acceptance output/acceptance.json
+```
+
+The beta.36 composer reads existing exact-source host/CI evidence and writes a
+small native receipt. It explicitly does not claim physical-host fault injection;
+the changed failure paths are covered by the named deterministic Windows tests.
+The one-pass importer writes only the run/report under `output/`; it does not run Setup,
+change the service/store, delete evidence or publish. Gate 04's real public URL
+and gate 16's local WinGet install are checked after separately approved public
+delivery, in a new final report. The unsigned-beta policy defers Authenticode
+only, never delivery or missing tests.
 
 ## Common entry point
 
@@ -83,38 +153,39 @@ receipt, not just the JSON summary. Docker additionally records `imageDigest`.
 The native operator records a receipt only after the selected real scenarios:
 `candidate` must match the frozen hashes; `updateLaunchPassed` must be true;
 `pendingTransactions` must be zero; `regressions` lists completed regression IDs;
-`coverage.passed` lists deferred test IDs actually exercised. Include the VM ID,
-OS, filesystem and component identities in `environment`. Never turn a simulator
+`coverage.passed` lists deferred test IDs actually exercised. Include the
+physical host or VM identity, OS, filesystem and component identities in
+`environment`. Never turn a simulator
 or a small-cache pass into a large-cache pass. Missing native cases remain blocked;
 the common runner imports evidence and does not fabricate or launch destructive
 fault scenarios automatically.
 
 Windows CI also supplies `native-tests/manifest.json` and small precompiled Go
-test executables; the VM needs no Go/Node build toolchain. Verify each executable's
+test executables; the selected Windows 11 native environment needs no Go/Node
+build toolchain. Verify each executable's
 manifest SHA-256 and source identity before running it. Run only named cases with
 `-test.v -test.run '^CaseName$'`, record the complete output, and require the named
 `--- PASS` (a zero exit containing `--- SKIP` is not success):
 
-| Case                                     | Requirement                                                                                              |
-| ---------------------------------------- | -------------------------------------------------------------------------------------------------------- |
-| `TestExternalBeeNativeLifecycle`         | Elevated guest; `HONEYBEE_BEE_NATIVE_ROOT` points to a new, nonexistent path under its QA directory      |
-| `TestInstalledUserCanWriteMountedParent` | Original non-elevated guest user and installed candidate broker; `TESTPLAY_VHDX_INSTALLED_USER_ACCESS=1` |
-| `TestDifferencingChildGeometry`          | Guest NTFS; `UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST=1`                                                    |
-| `TestNativeChildGeometry`                | Guest NTFS; `HONEYBEE_VHDX_GEOMETRY_TEST=1`                                                              |
+| Case                                     | Requirement                                                                                                 |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `TestExternalBeeNativeLifecycle`         | Elevated native environment; `HONEYBEE_BEE_NATIVE_ROOT` points to a new, nonexistent QA path                |
+| `TestInstalledUserCanWriteMountedParent` | Original non-elevated user and isolated installed candidate broker; `TESTPLAY_VHDX_INSTALLED_USER_ACCESS=1` |
+| `TestDifferencingChildGeometry`          | Native NTFS; `UNITY_WORKSPACE_STORAGE_GEOMETRY_TEST=1`                                                      |
+| `TestNativeChildGeometry`                | Native NTFS; `HONEYBEE_VHDX_GEOMETRY_TEST=1`                                                                |
 
 The manifest contains their exact package-qualified IDs for `coverage.passed`.
 These small checks do not replace Setup/update/launch or issue46 large-cache
 qualification. Preserve fixtures on failure and inspect transaction status before
 any retry. Dedicated native artifacts are qualification-only, never public assets.
 
-The existing sixteen acceptance gates still apply. Ordinary app changes do not
-force a full interruption matrix; installer/updater changes and unknown production
-paths conservatively invalidate it. Reuse is explicit in `gate.reuse`, containing
-`reason`, `environment` and `original: {path, sha256}`. The original acceptance
-record must show a passed gate and the baseline `sourceCommit`. Keep that original
-candidate identity intact. The current gate's acceptance is a reviewed conclusion,
-not a claim that old binaries were retested. If historical evidence lacks a binding,
-obtain a review or rerun; do not guess.
+The sixteen gate IDs remain fixed. The change classifier selects affected
+behaviors and blocks unknown executable paths. Reuse includes `reason`,
+`environment`, the original `candidate` and `original: {path, sha256}`.
+Historical ledgers without `sourceCommit` require the separately hashed
+`baseline` provenance above. Keep the original candidate identity intact.
+The current conclusion is a reviewed attribution, not a claim that old
+binaries were retested.
 
 Add `verificationReportPath` to the existing publish review configuration. New
 publications require the unified report, re-read its attachments and receipts and
@@ -122,7 +193,7 @@ check its source/candidate immediately before publication. Existing beta.32 and
 beta.35 delivery exceptions are not extended to new versions. Manifest signature,
 distribution integrity and the fixed acceptance checks remain independent gates.
 
-## Bounded VM lifecycle
+## Historical bounded VM lifecycle (not active for beta.36)
 
 ### beta.36 conditional public delivery (approved 2026-09-20)
 
