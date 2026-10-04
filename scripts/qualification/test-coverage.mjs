@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import path from "node:path";
 
 const windowsVitest = new Set([
+  "packages/core/src/workspace-core.test.ts:retries orphaned removal after a real Windows directory lock is released",
   "packages/core/src/installed-activity.test.ts:shared application leases coexist and release idempotently",
   "packages/core/src/installed-activity.test.ts:real CLI entry refuses an exclusive updater and runs after release",
   "apps/desktop/src/main/pty-session-manager.test.ts:opens an interactive PowerShell in the selected Workspace",
