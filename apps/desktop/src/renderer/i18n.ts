@@ -55,6 +55,12 @@ const en = {
   repairHelp: "Repair this Workspace and confirm it is ready before opening tools.",
   capacityHelp: "Free space on the storage drive, then retry the operation.",
   operationHelp: "Review the error details, resolve the reported problem, then try again.",
+  branchExistsHelp:
+    "This branch already exists. In New Workspace, select Attach existing branch to continue working on it, or enter a different branch name to create a new branch.",
+  branchInUseHelp:
+    "This branch is already open in another worktree. Use that worktree, or choose a different branch for this Workspace.",
+  workspaceExistsHelp:
+    "This Workspace name is already registered in the project. Use the existing Workspace or choose a different name. If its removal is incomplete, finish removing it before reusing the name.",
   cacheCommitUnknownHelp:
     "Cache preparation could not be confirmed. Storage may still be working. Keep the diagnostic details and confirm the transaction outcome before retrying or cleaning up.",
   terminalLimitHelp:
@@ -258,6 +264,12 @@ const ko: Record<MessageKey, string> = {
   repairHelp: "워크스페이스를 복구하고 준비됨 상태를 확인한 뒤 도구를 여세요.",
   capacityHelp: "스토리지 드라이브의 여유 공간을 확보한 뒤 다시 시도하세요.",
   operationHelp: "오류 상세를 확인하고 원인을 해결한 뒤 다시 시도하세요.",
+  branchExistsHelp:
+    "이미 존재하는 브랜치입니다. 새 워크스페이스 창에서 '기존 브랜치 연결'을 선택하면 기존 작업을 이어갈 수 있습니다. 새 브랜치를 만들려면 다른 브랜치 이름을 입력하세요.",
+  branchInUseHelp:
+    "다른 worktree에서 사용 중인 브랜치입니다. 해당 worktree를 사용하거나 이 워크스페이스에 연결할 다른 브랜치를 선택하세요.",
+  workspaceExistsHelp:
+    "이 프로젝트에 같은 이름의 워크스페이스가 등록되어 있습니다. 기존 워크스페이스를 사용하거나 다른 이름을 입력하세요. 삭제 미완료 상태라면 삭제를 완료한 뒤 이름을 다시 사용할 수 있습니다.",
   cacheCommitUnknownHelp:
     "캐시 준비 완료 여부를 확인하지 못했습니다. 저장소 작업이 계속될 수 있습니다. 진단 정보를 보존하고 해당 작업의 결과를 확인한 뒤 재시도하거나 정리하세요.",
   terminalLimitHelp:

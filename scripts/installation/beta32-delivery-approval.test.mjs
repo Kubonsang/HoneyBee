@@ -10,6 +10,8 @@ import {
   beta35DeliveryApproval,
   publicDeliveryAdmission,
   beta36DeliveryApprovalId,
+  beta37DeliveryApprovalId,
+  validateOperatorDeliveryApproval,
   validateBeta36Approval,
   loadDeliveryApproval,
 } from "./beta32-delivery-approval.mjs";
@@ -25,6 +27,60 @@ const beta36 = {
   manifestSha256: approval.manifestSha256,
   wingetManifestSha256: "d".repeat(64),
 };
+
+test("beta.37 requires its own approval and rejects stale version, source and artifact pins", async () => {
+  const record = { ...beta36, id: beta37DeliveryApprovalId, version: "0.1.0-beta.37" };
+  const root = await mkdtemp(path.join(tmpdir(), "hb-beta37-"));
+  const file = path.join(root, "approval.json");
+  const bytes = JSON.stringify(record);
+  await writeFile(file, bytes);
+  const options = {
+    deliveryApproval: record.id,
+    deliveryApprovalPath: file,
+    deliveryApprovalSha256: createHash("sha256").update(bytes).digest("hex"),
+    releaseCommit: record.sourceCommit,
+  };
+  assert.deepEqual(await loadDeliveryApproval(options), record);
+  await assert.rejects(loadDeliveryApproval({ ...options, deliveryApproval: beta36.id }));
+  await assert.rejects(loadDeliveryApproval({ ...options, releaseCommit: "e".repeat(40) }));
+  assert.equal(
+    publicDeliveryAdmission(policy, fixture(), record.version, record.id, record)
+      .publicDeliveryVerificationAllowed,
+    true,
+  );
+  assert.throws(() =>
+    publicDeliveryAdmission(policy, fixture(), record.version, record.id, beta36),
+  );
+  assert.throws(() =>
+    publicDeliveryAdmission(policy, fixture(), record.version, beta36.id, record),
+  );
+  for (const change of [
+    { version: beta36.version },
+    { setupSha256: "" },
+    { manifestSha256: "" },
+    { wingetManifestSha256: "" },
+    { sourceCommit: "" },
+    { schemaVersion: 2 },
+  ])
+    assert.throws(() =>
+      validateOperatorDeliveryApproval({ ...record, ...change }, record.sourceCommit),
+    );
+  assert.throws(() =>
+    publicDeliveryAdmission(policy, fixture(), record.version, record.id, {
+      ...record,
+      setupSha256: "a".repeat(64),
+    }),
+  );
+  for (const index of [0, 8, 12, 14]) {
+    const incomplete = fixture();
+    incomplete.gates[index].status = "pending";
+    assert.throws(() =>
+      publicDeliveryAdmission(policy, incomplete, record.version, record.id, record),
+    );
+  }
+  await writeFile(file, bytes + " ");
+  await assert.rejects(loadDeliveryApproval(options), /changed/);
+});
 
 test("beta.36 requires an explicit hash-pinned operator record and matching source", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "hb-beta36-"));

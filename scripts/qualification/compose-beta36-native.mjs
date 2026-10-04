@@ -4,6 +4,7 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { digestFile, readJson } from "./release-verification.mjs";
+import { verifyOrphanedNativeEvidence } from "./orphaned-native-evidence.mjs";
 
 const nativeCases = [
   [
@@ -35,6 +36,14 @@ const deterministicCases = [
 
 /** Compose only verified existing evidence; this does not execute native tests. */
 export async function composeBeta36Native(inputPath, outputPath) {
+  return composeNative(inputPath, outputPath, false);
+}
+
+export async function composeBeta37Native(inputPath, outputPath) {
+  return composeNative(inputPath, outputPath, true);
+}
+
+async function composeNative(inputPath, outputPath, issue54) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
   const outputRoot = path.join(root, "output") + path.sep;
   const resolvedOutputRoot = (await realpath(path.join(root, "output"))) + path.sep;
@@ -55,13 +64,19 @@ export async function composeBeta36Native(inputPath, outputPath) {
   for (const key of ["setupSha256", "manifestSha256"])
     assert(/^[a-f0-9]{64}$/u.test(input.candidate?.[key]));
   const paths = Object.fromEntries(
-    ["geometry", "lifecycle", "installedUser", "largeCache", "setupUpdate", "windows"].map(
-      (key) => {
-        const file = path.resolve(path.dirname(inputFile), input[key] ?? "");
-        assert(file.startsWith(outputRoot), `Invalid ${key} path`);
-        return [key, file];
-      },
-    ),
+    [
+      "geometry",
+      "lifecycle",
+      "installedUser",
+      "largeCache",
+      "setupUpdate",
+      "windows",
+      ...(issue54 ? ["orphanedCleanup"] : []),
+    ].map((key) => {
+      const file = path.resolve(path.dirname(inputFile), input[key] ?? "");
+      assert(file.startsWith(outputRoot), `Invalid ${key} path`);
+      return [key, file];
+    }),
   );
   const evidence = Object.fromEntries(
     await Promise.all(
@@ -160,6 +175,24 @@ export async function composeBeta36Native(inputPath, outputPath) {
     ...nativeCases.map(([name]) => path.join(path.dirname(paths.geometry), `${name}.log`)),
     path.join(path.dirname(paths.lifecycle), "TestExternalBeeNativeLifecycle.log"),
   ];
+  if (issue54) {
+    for (const item of [installedUser, largeCache, setupUpdate])
+      assert.deepEqual(item.candidate, input.candidate, "Native candidate mismatch");
+    assert.equal(setupUpdate.sourceCommit, input.source.commit);
+    assert.equal(setupUpdate.fromVersion, "0.1.0-beta.36");
+    assert.equal(setupUpdate.toVersion, "0.1.0-beta.37");
+    assert.equal(setupUpdate.cliLaunchPassed, true);
+    assert.equal(setupUpdate.desktopLaunchPassed, true);
+    attachmentFiles.push(
+      ...(await verifyOrphanedNativeEvidence(evidence.orphanedCleanup, {
+        source: input.source,
+        candidate: input.candidate,
+        computer: lifecycle.computer,
+        directory: path.dirname(paths.orphanedCleanup),
+        outputRoot: path.join(root, "output"),
+      })),
+    );
+  }
   const attachments = await Promise.all(
     attachmentFiles.map(async (file) => ({
       path: file,
@@ -178,9 +211,14 @@ export async function composeBeta36Native(inputPath, outputPath) {
     coverage: { passed, deferred: [], unexpectedSkips: 0 },
     updateLaunchPassed: true,
     pendingTransactions: 0,
-    regressions: ["issue46-large-cache", "native-commit-heartbeat"],
+    regressions: [
+      issue54 ? "issue54-orphaned-cleanup" : "issue46-large-cache",
+      "native-commit-heartbeat",
+    ],
     regressionMethods: {
-      "issue46-large-cache": "physical-host CLI/Desktop normal path",
+      [issue54 ? "issue54-orphaned-cleanup" : "issue46-large-cache"]: issue54
+        ? "physical-host CLI/Desktop retained cleanup, lock retry, refusal and branch preservation"
+        : "physical-host CLI/Desktop normal path",
       "native-commit-heartbeat":
         "same-source deterministic failure injection plus physical-host long normal commits; no host service fault claimed",
     },

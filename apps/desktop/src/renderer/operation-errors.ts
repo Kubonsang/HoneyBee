@@ -21,6 +21,9 @@ export const operationError = (reason: unknown): OperationError =>
         remediation: [],
       };
 export const errorGuidance = (code: string, upstreamCode?: string): MessageKey => {
+  if (code === "git.branch-exists") return "branchExistsHelp";
+  if (code === "git.branch-in-use") return "branchInUseHelp";
+  if (code === "workspace.exists") return "workspaceExistsHelp";
   if (code === "storage.commit-outcome-unknown") return "cacheCommitUnknownHelp";
   if (
     code === "storage.mount-identity-mismatch" ||

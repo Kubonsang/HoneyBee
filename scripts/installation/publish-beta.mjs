@@ -10,7 +10,7 @@ import { assertDistributionActionAllowed } from "./distribution-policy.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
 import {
   beta35DeliveryApproval,
-  beta36DeliveryApprovalId,
+  isOperatorDeliveryApproval,
   loadDeliveryApproval,
 } from "./beta32-delivery-approval.mjs";
 import { requireReleaseVerification } from "../qualification/release-verify.mjs";
@@ -25,7 +25,7 @@ assert(
 );
 const options = JSON.parse(await readBounded(configPath, 64 * 1024));
 const deliveryApproval = await loadDeliveryApproval(options);
-if (deliveryApproval?.id === beta36DeliveryApprovalId)
+if (isOperatorDeliveryApproval(deliveryApproval?.id))
   assert.equal(deliveryApproval.sourceCommit, commit, "Approved publication commit differs");
 const review = await reviewDistribution(options);
 assertDistributionActionAllowed(review, action);
@@ -76,11 +76,13 @@ const assets = [
   "SHA256SUMS.txt",
 ];
 const includeWinget =
-  receipt.version === beta35DeliveryApproval.version || receipt.version === "0.1.0-beta.36";
+  receipt.version === beta35DeliveryApproval.version ||
+  ["0.1.0-beta.36", "0.1.0-beta.37"].includes(receipt.version);
 if (includeWinget) {
   const pinned =
     receipt.version === beta35DeliveryApproval.version ? beta35DeliveryApproval : deliveryApproval;
   assert(pinned, "Candidate-bound WinGet delivery approval required");
+  assert.equal(pinned.version, receipt.version, "WinGet approval version differs");
   assert.equal(review.candidate.setupSha256, pinned.setupSha256);
   assert.equal(review.candidate.manifestSha256, pinned.manifestSha256);
   assert.equal(

@@ -15,7 +15,7 @@ import { distributionPolicy, distributionReadiness } from "./distribution-policy
 import {
   publicDeliveryAdmission,
   loadDeliveryApproval,
-  beta36DeliveryApprovalId,
+  isOperatorDeliveryApproval,
 } from "./beta32-delivery-approval.mjs";
 
 /** Offline handoff review, not a test runner or publishing authorization.
@@ -84,7 +84,7 @@ export async function reviewDistribution(options) {
   const candidate = { setupSha256: setup.sha256, manifestSha256: authenticated.manifestSha256 };
   assert.deepEqual(acceptance.candidate, candidate, "Acceptance belongs to a different candidate");
   const approval = await loadDeliveryApproval(options);
-  if (approval?.id === beta36DeliveryApprovalId)
+  if (isOperatorDeliveryApproval(approval?.id))
     assert.equal(
       (await digestDistributionFile(path.join(directory, "Kubonsang.HoneyBee.yaml"))).sha256,
       approval.wingetManifestSha256,
@@ -105,7 +105,7 @@ export async function reviewDistribution(options) {
       options.deliveryApproval,
       approval,
     ),
-    ...(approval?.id === beta36DeliveryApprovalId
+    ...(isOperatorDeliveryApproval(approval?.id)
       ? { deliveryApprovalSha256: options.deliveryApprovalSha256 }
       : {}),
     evidenceVerifiedByTool: false,

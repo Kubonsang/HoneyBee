@@ -5,8 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { mkdir, open, readFile, writeFile, unlink } from "node:fs/promises";
 import {
   publicDeliveryAdmission,
-  validateBeta36Approval,
-  beta36DeliveryApprovalId,
+  validateOperatorDeliveryApproval,
 } from "../installation/beta32-delivery-approval.mjs";
 import {
   makePlan,
@@ -60,7 +59,7 @@ export async function requireReleaseVerification(
   assert.equal(current.source.commit, sourceCommit, "Verification commit mismatch");
   assert.equal(current.releaseMode, releaseMode, "Verification release-mode mismatch");
   if (deliveryApproval) {
-    validateBeta36Approval(deliveryApproval, sourceCommit);
+    validateOperatorDeliveryApproval(deliveryApproval, sourceCommit);
     assert.equal(current.version, deliveryApproval.version);
     assert.deepEqual(
       current.blockers,
@@ -72,7 +71,7 @@ export async function requireReleaseVerification(
       { releaseMode },
       acceptance,
       current.version,
-      beta36DeliveryApprovalId,
+      deliveryApproval.id,
       deliveryApproval,
     );
     // Do not mutate the ordinary report or promote pending gates to passes.
