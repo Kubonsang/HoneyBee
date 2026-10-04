@@ -19,7 +19,35 @@ afterEach(() => {
   process.argv = originalArgs;
   process.exitCode = originalExitCode;
   vi.restoreAllMocks();
+  vi.resetModules();
 });
+
+it.each(["workspace.cleanup-pending", "workspace.in-use"])(
+  "prints removal retry instructions for %s without asking for repair",
+  async (code) => {
+    process.argv = [process.execPath, "cli.js", "workspace", "remove", "orphaned"];
+    process.exitCode = undefined;
+    const message = 'Workspace directory "C:/workspaces/orphaned" cleanup is incomplete.';
+    const instruction =
+      code === "workspace.in-use"
+        ? "Close tools using this directory and check its access permissions."
+        : "Back up remaining contents before manually cleaning up the path.";
+    mocks.run.mockRejectedValueOnce(
+      new WorkspaceCoreError(code, message, {
+        remediation: [instruction, 'Run honeybee workspace remove "orphaned" again.'],
+      }),
+    );
+    const stderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+    await import("./cli.js");
+    await vi.waitFor(() => expect(process.exitCode).toBe(1));
+    const output = String(stderr.mock.calls[0]?.[0]);
+    expect(output).toContain(`Error [${code}]`);
+    expect(output).toContain(message);
+    expect(output).toContain(instruction);
+    expect(output).toContain('workspace remove "orphaned"');
+    expect(output).not.toContain("workspace repair");
+  },
+);
 
 it("keeps unknown commit diagnostics in the CLI JSON error envelope", async () => {
   process.argv = [process.execPath, "cli.js", "cache", "prepare", "--json"];

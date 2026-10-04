@@ -114,7 +114,12 @@ worktree and first reserves and exclusively locks the exact Library volume. If U
 CLI, or another process still holds it, removal fails with `workspace.in-use` before the registry,
 junction, worktree, or branch changes. Successful removal deletes only a verified `Library`
 junction and worktree and preserves the branch. Interrupted removals remain `cleanup-pending` and
-can be retried.
+can be retried with `workspace remove`. If Git has already removed the worktree registration,
+retrying removal finishes cleanup when the Workspace directory is missing or empty. Remaining
+files or subdirectories are preserved: inspect and back them up before manually clearing the
+directory and retrying. A locked empty directory reports `workspace.in-use`; close tools using it
+and check access permissions before retrying. `workspace repair` directs pending cleanup back to
+`workspace remove`.
 
 `doctor` is a read-only Windows readiness report. It checks the runtime, Git, packaged storage
 tools, service and receipt identity, registered projects, cache prerequisites, registry, and

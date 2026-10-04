@@ -8,6 +8,7 @@ import {
   readlink,
   readdir,
   realpath,
+  rmdir,
   rm,
   stat,
   symlink,
@@ -794,9 +795,21 @@ export class HoneyBeeWorkspaceCore {
     try {
       let workspaceLibrary: string | undefined;
       const workspaceExists = await this.#exists(record.workspacePath);
-      if (workspaceExists) {
+      const orphaned =
+        resumed &&
+        (await this.#registeredWorktree(project.repositoryRoot, record.workspacePath)) ===
+          undefined;
+      if (orphaned) {
+        await this.#validateOrphanedWorkspace(project, record);
+      } else if (workspaceExists) {
         const view = await this.#view(record);
         if (view.git === undefined) {
+          if (resumed) {
+            throw this.#orphanedCleanupError(
+              record,
+              "Git still registers this path, but its worktree identity cannot be verified.",
+            );
+          }
           throw new WorkspaceCoreError(
             "workspace.repair-required",
             `Workspace "${record.name}" cannot be identified as a safe Git worktree.`,
@@ -830,11 +843,17 @@ export class HoneyBeeWorkspaceCore {
           record.mountPath,
         );
       } else {
-        const registeredBranch = await this.#registeredWorktreeBranch(
+        const registered = await this.#registeredWorktree(
           project.repositoryRoot,
           record.workspacePath,
         );
-        if (registeredBranch !== undefined && registeredBranch !== record.branch) {
+        if (registered !== undefined && registered.branch !== record.branch) {
+          if (resumed) {
+            throw this.#orphanedCleanupError(
+              record,
+              "The missing path is registered to a different branch or a detached HEAD.",
+            );
+          }
           throw new WorkspaceCoreError(
             "workspace.repair-required",
             "The missing Workspace path is registered to a different Git branch.",
@@ -915,7 +934,21 @@ export class HoneyBeeWorkspaceCore {
         throw error;
       }
       cleanupStarted = true;
-      if (workspaceExists) {
+      if (orphaned) {
+        try {
+          if (await this.#validateOrphanedWorkspace(project, record)) {
+            await rmdir(record.workspacePath);
+          }
+        } catch (error) {
+          if (errorCode(error) === "ENOENT") {
+            // Another cleanup may have removed the empty directory first.
+          } else if (errorCode(error) === "ENOTEMPTY" || errorCode(error) === "EEXIST") {
+            throw this.#orphanedCleanupError(record, "The directory is no longer empty.");
+          } else {
+            throw error;
+          }
+        }
+      } else if (workspaceExists) {
         await this.#removeLibraryJunction(
           record.workspacePath,
           workspaceLibrary as string,
@@ -923,8 +956,7 @@ export class HoneyBeeWorkspaceCore {
         );
         await this.#git(project.repositoryRoot, ["worktree", "remove", record.workspacePath]);
       } else if (
-        (await this.#registeredWorktreeBranch(project.repositoryRoot, record.workspacePath)) !==
-        undefined
+        (await this.#registeredWorktree(project.repositoryRoot, record.workspacePath)) !== undefined
       ) {
         await this.#git(project.repositoryRoot, [
           "worktree",
@@ -952,7 +984,20 @@ export class HoneyBeeWorkspaceCore {
         alreadyRemoved: false,
       };
     } catch (error) {
-      let failure: unknown = error;
+      let failure: unknown =
+        resumed && libraryBusyError(error)
+          ? new WorkspaceCoreError(
+              "workspace.in-use",
+              `Workspace directory "${record.workspacePath}" could not be inspected or removed.`,
+              {
+                cause: error,
+                remediation: [
+                  "Close tools using this directory and check its access permissions.",
+                  `Run honeybee workspace remove "${record.name}" again.`,
+                ],
+              },
+            )
+          : error;
       if (removalPrepared && !removalCommitStarted) {
         try {
           await this.#storage.abortRetainedRemoval(
@@ -1187,19 +1232,78 @@ export class HoneyBeeWorkspaceCore {
     return matches[0];
   }
 
-  async #registeredWorktreeBranch(
+  #orphanedCleanupError(record: WorkspaceRecordV2, reason: string): WorkspaceCoreError {
+    return new WorkspaceCoreError(
+      "workspace.cleanup-pending",
+      `Workspace "${record.name}" cleanup is incomplete: ${reason} Path: "${record.workspacePath}".`,
+      {
+        remediation: [
+          "Inspect the path and Git worktree registration; back up any remaining contents before manually cleaning up the path.",
+          `Run honeybee workspace remove "${record.name}" again.`,
+        ],
+      },
+    );
+  }
+
+  async #validateOrphanedWorkspace(
+    project: ProjectRecordV2,
+    record: WorkspaceRecordV2,
+  ): Promise<boolean> {
+    if (
+      pathKey(record.workspacePath) !== pathKey(path.join(project.workspaceRoot, record.name)) ||
+      pathKey(path.dirname(record.workspacePath)) !== pathKey(project.workspaceRoot)
+    ) {
+      throw this.#orphanedCleanupError(
+        record,
+        "The path does not match its registered workspace root.",
+      );
+    }
+    if (
+      (await this.#registeredWorktree(project.repositoryRoot, record.workspacePath)) !== undefined
+    ) {
+      throw this.#orphanedCleanupError(record, "Git still registers a worktree at this path.");
+    }
+    const entry = await lstat(record.workspacePath).catch((error: unknown) => {
+      if (errorCode(error) === "ENOENT") return undefined;
+      throw error;
+    });
+    const physicalRoot = await realpath(project.workspaceRoot).catch((error: unknown) => {
+      if (errorCode(error) === "ENOENT" && entry === undefined) return undefined;
+      throw error;
+    });
+    if (physicalRoot !== undefined && pathKey(physicalRoot) !== pathKey(project.workspaceRoot)) {
+      throw this.#orphanedCleanupError(
+        record,
+        "The workspace root now resolves to a different path.",
+      );
+    }
+    if (entry === undefined) return false;
+    if (!entry.isDirectory() || entry.isSymbolicLink()) {
+      throw this.#orphanedCleanupError(record, "The path is not an ordinary directory.");
+    }
+    if (pathKey(await realpath(record.workspacePath)) !== pathKey(record.workspacePath)) {
+      throw this.#orphanedCleanupError(record, "The directory resolves to a different path.");
+    }
+    if ((await readdir(record.workspacePath)).length !== 0) {
+      throw this.#orphanedCleanupError(record, "Remaining files or directories were preserved.");
+    }
+    return true;
+  }
+
+  async #registeredWorktree(
     repositoryRoot: string,
     workspacePath: string,
-  ): Promise<string | undefined> {
-    const records = (await this.#git(repositoryRoot, ["worktree", "list", "--porcelain"]))
-      .split(/\r?\n\r?\n/u)
-      .map((entry) => entry.split(/\r?\n/u));
+  ): Promise<{ readonly path: string; readonly branch?: string } | undefined> {
+    const records = (await this.#git(repositoryRoot, ["worktree", "list", "--porcelain", "-z"]))
+      .split("\0\0")
+      .map((entry) => entry.split("\0"));
     for (const lines of records) {
       const worktree = lines.find((line) => line.startsWith("worktree "))?.slice(9);
       if (worktree === undefined || pathKey(worktree) !== pathKey(workspacePath)) continue;
-      return lines
+      const branch = lines
         .find((line) => line.startsWith("branch refs/heads/"))
         ?.slice("branch refs/heads/".length);
+      return { path: worktree, ...(branch === undefined ? {} : { branch }) };
     }
     return undefined;
   }

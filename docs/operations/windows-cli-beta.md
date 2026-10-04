@@ -95,8 +95,15 @@ Remove refuses tracked and untracked changes and never deletes the branch. It al
 service to lock the exact Library volume before HoneyBee changes the registry, junction, or Git
 worktree. `workspace.in-use` means Unity or another process still has an open handle: close tools
 rooted in that Workspace and retry the same command. HoneyBee does not kill processes. A lost
-response is safe to retry, and a different-target Library junction or ordinary directory is never
+response is safe to retry, and a different-target Library junction or ordinary Library directory is never
 replaced or deleted.
+
+If an interrupted removal leaves `cleanup-pending` after Git has already removed the worktree
+registration, run `workspace remove` again. HoneyBee finishes cleanup when the registered directory
+is missing or empty. If files or subdirectories remain, HoneyBee preserves them and reports the
+path: inspect and back up their contents, manually clear the directory, then retry removal. A locked
+empty directory reports `workspace.in-use`; close programs using it and check access permissions.
+Use `workspace remove` to finish pending cleanup; `workspace repair` will direct you to that command.
 
 ## Reboot recovery
 

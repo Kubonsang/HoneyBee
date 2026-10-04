@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   cp,
@@ -25,6 +25,7 @@ import type {
   StorageLease,
   StorageParentBuild,
   WorkspaceStoragePort,
+  WorkspaceRecordV2,
 } from "./workspace-types.js";
 import { WorkspaceCoreError } from "./workspace-types.js";
 
@@ -268,8 +269,8 @@ class FakeStorage implements WorkspaceStoragePort {
   }
 }
 
-const fixture = async () => {
-  const root = await mkdtemp(path.join(tmpdir(), "honeybee-workspace-core-"));
+const fixture = async (prefix = "honeybee-workspace-core-") => {
+  const root = await mkdtemp(path.join(tmpdir(), prefix));
   roots.push(root);
   const source = path.join(root, "source");
   const workspaceRoot = path.join(root, "workspaces");
@@ -316,6 +317,81 @@ const fixture = async () => {
   });
   await core.prepareCache(project.projectId);
   return { root, source, workspaceRoot, core, project, storage };
+};
+
+const orphanedFixture = async (state: WorkspaceRecordV2["state"] = "cleanup-pending") => {
+  const context = await fixture("honeybee-orphaned-한글 공간-");
+  const created = await context.core.createWorkspace({
+    name: "orphaned",
+    branch: "feature/orphaned",
+  });
+  const registry = new WorkspaceRegistryStore(path.join(context.root, "registry"));
+  const record = (await registry.read()).workspaces[0] as WorkspaceRecordV2;
+  await unlink(path.join(created.workspacePath, "Library"));
+  await git(context.source, "worktree", "remove", created.workspacePath);
+  await mkdir(created.workspacePath);
+  await registry.putWorkspace({ ...record, state });
+  return { ...context, created, registry, record: { ...record, state } };
+};
+
+const lockDirectory = async (directory: string): Promise<() => Promise<void>> => {
+  const script = `
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class DirectoryLock {
+  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+  public static extern IntPtr CreateFile(string path, uint access, uint share, IntPtr security, uint creation, uint flags, IntPtr template);
+  [DllImport("kernel32.dll")]
+  public static extern bool CloseHandle(IntPtr handle);
+}
+'@
+$handle = [DirectoryLock]::CreateFile('${directory.replaceAll("'", "''")}', 1, 3, [IntPtr]::Zero, 3, 0x02000000, [IntPtr]::Zero)
+if ($handle -eq [IntPtr]::new(-1)) { throw "Directory lock failed" }
+try { [Console]::WriteLine('locked'); [Console]::ReadLine() | Out-Null }
+finally { [DirectoryLock]::CloseHandle($handle) | Out-Null }
+`;
+  const child = spawn(
+    "powershell.exe",
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] },
+  );
+  const exited = new Promise<void>((resolve) => child.once("close", () => resolve()));
+  await new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill();
+      reject(new Error("Directory lock timed out"));
+    }, 15_000);
+    let output = "";
+    let diagnostics = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      diagnostics += chunk.toString();
+    });
+    child.stdout.on("data", (chunk: Buffer) => {
+      output += chunk.toString();
+      if (output.includes("locked")) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", () => {
+      clearTimeout(timer);
+      if (!output.includes("locked")) reject(new Error(diagnostics || "Directory lock exited"));
+    });
+  });
+  return async () => {
+    child.stdin.end("\n");
+    await exited;
+  };
 };
 
 afterEach(async () => {
@@ -561,6 +637,233 @@ describe("Workspace starting commits", { timeout: 30_000 }, () => {
 });
 
 describe("HoneyBeeWorkspaceCore", () => {
+  it.each(["cleanup-pending", "removing"] as const)(
+    "finishes %s cleanup after Git registration is gone and preserves the branch",
+    async (state) => {
+      const { core, source, storage, created, registry } = await orphanedFixture(state);
+      expect(await core.workspaceStatus(created.workspaceId)).toMatchObject({
+        state,
+        available: false,
+      });
+      await expect(core.repairWorkspace(created.workspaceId)).rejects.toMatchObject({
+        code: "workspace.cleanup-pending",
+        remediation: [expect.stringContaining("workspace remove")],
+      });
+      expect((await core.removeWorkspace(created.workspaceId)).alreadyRemoved).toBe(false);
+      await expect(stat(created.workspacePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(stat(created.storageWorkspacePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect((await registry.read()).workspaces).toEqual([]);
+      expect((await registry.read()).removalReceipts).toHaveLength(1);
+      expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual([
+        "prepare",
+        "commit",
+      ]);
+      expect(await git(source, "rev-parse", created.branch)).toBe(created.baseCommit);
+      expect((await core.removeWorkspace(created.workspaceId)).alreadyRemoved).toBe(true);
+    },
+    30_000,
+  );
+
+  it.each(["cleanup-pending", "removing"] as const)(
+    "finishes %s cleanup when both Git registration and the directory are gone",
+    async (state) => {
+      const { core, created } = await orphanedFixture(state);
+      await rm(created.workspacePath, { recursive: true });
+      await expect(core.removeWorkspace(created.workspaceId)).resolves.toMatchObject({
+        alreadyRemoved: false,
+      });
+      expect(await core.listWorkspaces()).toEqual([]);
+    },
+    30_000,
+  );
+
+  it.each(["file", "hidden", "directory", "git", "junction"] as const)(
+    "preserves orphaned cleanup containing a remaining %s",
+    async (kind) => {
+      const { core, storage, created, root } = await orphanedFixture();
+      const remaining = path.join(
+        created.workspacePath,
+        kind === "hidden" ? ".hidden" : kind === "git" ? ".git" : "remaining",
+      );
+      if (kind === "directory") await mkdir(remaining);
+      else if (kind === "junction") await symlink(root, remaining, "junction");
+      else await writeFile(remaining, "preserve\n");
+      await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+        code: "workspace.cleanup-pending",
+        message: expect.stringContaining(created.workspacePath),
+        remediation: expect.arrayContaining([
+          expect.stringContaining("back up"),
+          expect.stringContaining("workspace remove"),
+        ]),
+      });
+      expect(storage.removalEvents).toEqual([]);
+      expect((await core.workspaceStatus(created.workspaceId)).state).toBe("cleanup-pending");
+      expect((await stat(created.storageWorkspacePath)).isDirectory()).toBe(true);
+      if (kind !== "directory" && kind !== "junction")
+        expect(await readFile(remaining, "utf8")).toBe("preserve\n");
+      await rm(remaining, { recursive: true });
+      await expect(core.removeWorkspace(created.workspaceId)).resolves.toMatchObject({
+        alreadyRemoved: false,
+      });
+    },
+    30_000,
+  );
+
+  it("does not apply orphaned cleanup to a ready workspace", async () => {
+    const { core, storage, created } = await orphanedFixture("ready");
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.repair-required",
+    });
+    expect(storage.removalEvents).toEqual([]);
+    expect((await stat(created.workspacePath)).isDirectory()).toBe(true);
+  }, 30_000);
+
+  it.each(["path", "junction", "root-junction"] as const)(
+    "rejects orphaned cleanup with a substituted %s",
+    async (kind) => {
+      const { core, storage, created, registry, record, root, workspaceRoot } =
+        await orphanedFixture();
+      const outside = path.join(root, "outside");
+      await mkdir(outside);
+      if (kind === "path") await registry.putWorkspace({ ...record, workspacePath: outside });
+      else if (kind === "junction") {
+        await rm(created.workspacePath, { recursive: true });
+        await symlink(outside, created.workspacePath, "junction");
+      } else {
+        await rm(workspaceRoot, { recursive: true });
+        await mkdir(path.join(outside, record.name));
+        await symlink(outside, workspaceRoot, "junction");
+      }
+      await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+        code: "workspace.cleanup-pending",
+      });
+      expect(storage.removalEvents).toEqual([]);
+      expect((await stat(outside)).isDirectory()).toBe(true);
+      if (kind === "root-junction")
+        expect((await stat(path.join(outside, record.name))).isDirectory()).toBe(true);
+    },
+    30_000,
+  );
+
+  it("aborts orphaned cleanup when a file appears after storage prepare", async () => {
+    const { core, storage, created } = await orphanedFixture();
+    const lateFile = path.join(created.workspacePath, "late.txt");
+    storage.afterPrepare = async () => {
+      await writeFile(lateFile, "preserve\n");
+    };
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.cleanup-pending",
+    });
+    expect(await readFile(lateFile, "utf8")).toBe("preserve\n");
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual(["prepare", "abort"]);
+    storage.afterPrepare = undefined;
+    await rm(lateFile);
+    await core.removeWorkspace(created.workspaceId);
+  }, 30_000);
+
+  it("aborts orphaned cleanup when Git registers the path after storage prepare", async () => {
+    const { core, source, storage, created } = await orphanedFixture();
+    storage.afterPrepare = async () => {
+      await git(source, "worktree", "add", "--detach", created.workspacePath, "HEAD");
+    };
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "workspace.cleanup-pending",
+    });
+    expect(await git(created.workspacePath, "rev-parse", "HEAD")).toBe(created.baseCommit);
+    expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual(["prepare", "abort"]);
+  }, 30_000);
+
+  it.each(["detached", "other-branch"] as const)(
+    "does not mistake a missing %s worktree for absent Git registration",
+    async (kind) => {
+      const { core, source, storage, created } = await orphanedFixture();
+      await git(
+        source,
+        "worktree",
+        "add",
+        ...(kind === "detached" ? ["--detach"] : ["-b", "feature/other"]),
+        created.workspacePath,
+        "HEAD",
+      );
+      await rm(created.workspacePath, { recursive: true });
+      await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+        code: "workspace.cleanup-pending",
+      });
+      expect(storage.removalEvents).toEqual([]);
+      expect(await git(source, "worktree", "list", "--porcelain")).toContain(
+        created.workspacePath.replaceAll("\\", "/"),
+      );
+    },
+    30_000,
+  );
+
+  it("does not interpret failed Git registration lookup as an absent worktree", async () => {
+    const { core, source, storage, created } = await orphanedFixture();
+    await rm(path.join(source, ".git"), { recursive: true });
+    await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+      code: "git.command-failed",
+    });
+    expect(storage.removalEvents).toEqual([]);
+    expect((await stat(created.workspacePath)).isDirectory()).toBe(true);
+  }, 30_000);
+
+  it.each(["missing-storage", "commit-failure", "lost-response", "registry-failure"] as const)(
+    "resumes orphaned cleanup after %s",
+    async (kind) => {
+      const { core, storage, created, registry } = await orphanedFixture();
+      if (kind === "missing-storage") await storage.dropRetained(created.consumerId);
+      else {
+        let spy: ReturnType<typeof vi.spyOn> | undefined;
+        if (kind === "commit-failure") storage.failNextRemove = true;
+        else if (kind === "lost-response") storage.loseNextRemoveResponse = true;
+        else
+          spy = vi
+            .spyOn(WorkspaceRegistryStore.prototype, "completeWorkspaceRemoval")
+            .mockRejectedValueOnce(new WorkspaceCoreError("registry.lock-failed", "simulated"));
+        try {
+          await expect(core.removeWorkspace(created.workspaceId)).rejects.toBeInstanceOf(
+            WorkspaceCoreError,
+          );
+        } finally {
+          spy?.mockRestore();
+        }
+        expect((await registry.read()).workspaces[0]?.state).toBe("cleanup-pending");
+        await expect(stat(created.workspacePath)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      await core.removeWorkspace(created.workspaceId);
+      expect((await registry.read()).workspaces).toEqual([]);
+      expect((await core.removeWorkspace(created.workspaceId)).alreadyRemoved).toBe(true);
+    },
+    30_000,
+  );
+
+  it.skipIf(process.platform !== "win32")(
+    "retries orphaned removal after a real Windows directory lock is released",
+    async () => {
+      const { core, storage, created } = await orphanedFixture();
+      const release = await lockDirectory(created.workspacePath);
+      try {
+        await expect(core.removeWorkspace(created.workspaceId)).rejects.toMatchObject({
+          code: "workspace.in-use",
+          remediation: expect.arrayContaining([
+            expect.stringContaining("Close tools"),
+            expect.stringContaining("workspace remove"),
+          ]),
+        });
+        expect((await core.workspaceStatus(created.workspaceId)).state).toBe("cleanup-pending");
+        expect(storage.removalEvents.map((event) => event.split(":")[0])).toEqual([
+          "prepare",
+          "abort",
+        ]);
+      } finally {
+        await release();
+      }
+      await core.removeWorkspace(created.workspaceId);
+      expect(await core.listWorkspaces()).toEqual([]);
+    },
+    60_000,
+  );
+
   it("preserves the first unstaged status column and quoted Unicode paths", async () => {
     const { core } = await fixture();
     const created = await core.createWorkspace({

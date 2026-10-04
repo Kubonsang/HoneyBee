@@ -60,6 +60,12 @@ removal deletes the verified Git worktree and HoneyBee Library storage but alway
 branch. `cleanup-pending` removal can be retried with the same action. A different-target Library
 junction is never replaced or deleted automatically.
 
+If Git has already removed the worktree registration during a failed removal, **Retry removal**
+finishes cleanup when the Workspace directory is missing or empty. Remaining files or subdirectories
+are preserved; inspect and back them up before manually clearing the directory and retrying. For
+`workspace.in-use` on an empty directory, close programs using it and check access permissions,
+then retry removal. Repair does not finish pending deletion; use the removal retry action.
+
 ## Reboot recovery
 
 Beta 10 prepares parents with a shared immutable Bee seed and creates a separate
