@@ -32,7 +32,7 @@
     "@vitejs/plugin-react": "^6.0.5",
     "electron": "^43.4.0",
     "png-to-ico": "3.0.1",
-    "vite": "^8.2.1"
+    "vite": "^8.2.4"
   },
   "license": "MIT"
 }
