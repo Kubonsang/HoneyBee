@@ -109,7 +109,7 @@ for (const entry of await (
   }
 }
 
-const electronVersion = String(desktopPackage.devDependencies.electron).replace(/^[^\d]*/u, "");
+const electronVersion = require("electron/package.json").version;
 await writeFile(
   path.join(staging, "package.json"),
   JSON.stringify(
