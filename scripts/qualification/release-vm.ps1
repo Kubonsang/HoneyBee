@@ -9,18 +9,34 @@ $ErrorActionPreference='Stop'
 $pin=Get-Content -LiteralPath $PinPath -Raw | ConvertFrom-Json
 $repo=[IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $root=[IO.Path]::GetFullPath($pin.vmRoot)
+# Explicitly approved for the NEW gallery fixture on 2026-11-01. Historical
+# 40 GiB fixtures and their 38 GiB guard are unchanged.
+$galleryProfile=$pin.profile -eq 'storage-recovery-gallery-20261101'
+$vmBudgetBytes=40GB
+$vmPauseBytes=38GB
+$expectedDiskBytes=64GB
+if($galleryProfile){
+  $approvedRoot=[IO.Path]::GetFullPath((Join-Path $repo 'output/storage-recovery-vm-20261101/HyperV'))
+  if($root -ne $approvedRoot -or $pin.vmName -ne 'HoneyBee-StorageRecovery-20261101' -or $pin.galleryArchiveSha256 -ne 'b546c32894785dbaac07543d913bde9d6598972f76a440d6b5c00b2e73739684'){throw 'Gallery capacity exception belongs only to the approved new fixture'}
+  if($pin.vmBudgetBytes -ne 64GB -or $pin.pauseBytes -ne 60GB -or $pin.hostPauseFreeBytes -ne 22GB -or $pin.diskBytes -lt 64GB -or $pin.diskBytes -gt 256GB){throw 'Gallery capacity pin differs'}
+  $vmBudgetBytes=64GB
+  $vmPauseBytes=60GB
+  $expectedDiskBytes=[long]$pin.diskBytes
+}
+
 $allowed=Join-Path $repo 'output'
 if(-not $root.StartsWith($allowed+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'VM root must be an explicit child of repository output'}
 if($pin.schemaVersion -ne 1 -or -not $pin.vmId){throw 'Pinned VM identity required'}
 if((Get-Item -LiteralPath $root -Force).Attributes -band [IO.FileAttributes]::ReparsePoint){throw 'Linked VM root refused'}
 $vm=Get-VM -Id ([Guid]$pin.vmId)
+if($galleryProfile -and $vm.Name -ne $pin.vmName){throw 'Gallery VM name no longer matches the approved fixture'}
 if($vm.AutomaticCheckpointsEnabled -or @(Get-VMSnapshot -VM $vm).Count){throw 'Checkpoints are prohibited'}
 $disks=@(Get-VMHardDiskDrive -VM $vm)
 if($disks.Count -ne 1){throw 'Exactly one independent OS disk required'}
 $diskPath=[IO.Path]::GetFullPath($disks[0].Path)
 if(-not $diskPath.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'VM disk escaped budget root'}
 $disk=Get-VHD -Path $diskPath
-if($disk.ParentPath -or $disk.VhdType -ne 'Dynamic' -or $disk.Size -ne 64GB){throw 'Expected standalone dynamic 64 GiB disk'}
+if($disk.ParentPath -or $disk.VhdType -ne 'Dynamic' -or $disk.Size -ne $expectedDiskBytes){throw 'Expected the pinned standalone dynamic OS disk'}
 foreach($location in @($vm.ConfigurationLocation,$vm.SnapshotFileLocation,$vm.SmartPagingFilePath)){
   $resolvedLocation=[IO.Path]::GetFullPath($location).TrimEnd([IO.Path]::DirectorySeparatorChar)
   if($resolvedLocation -ne $root -and -not $resolvedLocation.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'VM configuration/runtime files escaped budget root'}
@@ -31,7 +47,7 @@ function Get-BudgetSnapshot {
   if(@($items | Where-Object {($_.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0}).Count){throw 'VM budget root contains a link'}
   $bytes=($items | Where-Object {-not $_.PSIsContainer} | Measure-Object -Property Length -Sum).Sum
   $volume=Get-Volume -FilePath $root
-  [ordered]@{schemaVersion=1;vmId=$pin.vmId;vmBytes=[long]$bytes;hostFreeBytes=[long]$volume.SizeRemaining;at=[DateTime]::UtcNow.ToString('o');budgetBytes=40GB;pauseBytes=38GB;hostFloorBytes=20GB;hostPauseFreeBytes=22GB}
+  [ordered]@{schemaVersion=1;vmId=$pin.vmId;vmBytes=[long]$bytes;hostFreeBytes=[long]$volume.SizeRemaining;at=[DateTime]::UtcNow.ToString('o');budgetBytes=$vmBudgetBytes;pauseBytes=$vmPauseBytes;hostFloorBytes=20GB;hostPauseFreeBytes=22GB}
 }
 if($Mode -eq 'Admit'){
   if(-not $GuestCapacityPath -or $ExpectedGrowthBytes -lt 0){throw 'Fresh guest capacity and nonnegative peak growth required'}
@@ -40,7 +56,7 @@ if($Mode -eq 'Admit'){
   $age=([DateTime]::UtcNow-[DateTime]::Parse($guest.at).ToUniversalTime()).TotalMinutes
   if($age -gt 5 -or $age -lt 0){throw 'Guest capacity observation is stale'}
   $snapshot=Get-BudgetSnapshot
-  if($snapshot.vmBytes+$ExpectedGrowthBytes -ge 38GB -or $snapshot.hostFreeBytes-$ExpectedGrowthBytes -le 22GB -or $guest.guestFreeBytes-$ExpectedGrowthBytes -lt 22GB){throw 'Insufficient peak headroom; no expansion or safety-floor reduction allowed'}
+  if($snapshot.vmBytes+$ExpectedGrowthBytes -ge $vmPauseBytes -or $snapshot.hostFreeBytes-$ExpectedGrowthBytes -le 22GB -or $guest.guestFreeBytes-$ExpectedGrowthBytes -lt 22GB){throw 'Insufficient peak headroom; no expansion or safety-floor reduction allowed'}
   $snapshot.expectedGrowthBytes=$ExpectedGrowthBytes
   $snapshot.guestFreeBytes=$guest.guestFreeBytes
   $snapshot.admitted=$true
@@ -71,7 +87,7 @@ do {
     $snapshot=Get-BudgetSnapshot
     if($Mode -eq 'Watch'){
       $snapshot | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $root 'release-budget-status.json') -Encoding UTF8
-      if($snapshot.vmBytes -ge 38GB -or $snapshot.hostFreeBytes -le 22GB){
+      if($snapshot.vmBytes -ge $vmPauseBytes -or $snapshot.hostFreeBytes -le 22GB){
         $vm | Suspend-VM -Confirm:$false
         throw 'Capacity guard paused VM; no automatic resume or expansion'
       }
