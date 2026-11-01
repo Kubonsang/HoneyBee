@@ -159,6 +159,16 @@ func (s *maintenanceService) waitState(ctx context.Context, want svc.State) erro
 }
 
 func (s *maintenanceService) stop(ctx context.Context) error {
+	return s.stopFromState(ctx, svc.Paused, nil, nil)
+}
+
+// Running-source entry is private to the exact legacy-source adapter. Both
+// proofs must establish a completely detached, unchanged retained inventory.
+// The ordinary migrator still requires an acknowledged SCM pause.
+func (s *maintenanceService) stopFromState(ctx context.Context, required svc.State, beforeStop, afterStop func() error) error {
+	if required != svc.Paused && (required != svc.Running || beforeStop == nil || afterStop == nil) {
+		return errors.New("complete detached legacy stop authority required")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	if err := ctx.Err(); err != nil {
@@ -174,8 +184,16 @@ func (s *maintenanceService) stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if status.State != svc.Paused || status.ProcessId == 0 {
+	if status.State != required || status.ProcessId == 0 {
+		if required == svc.Running {
+			return errors.New("legacy source must be running before detached stop")
+		}
 		return errors.New("source service must acknowledge maintenance pause before stop")
+	}
+	if beforeStop != nil {
+		if err := beforeStop(); err != nil {
+			return err
+		}
 	}
 	wait, closeProcess, err := s.holdProcess(status.ProcessId)
 	if err != nil {
@@ -207,8 +225,13 @@ func (s *maintenanceService) stop(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if currentStatus.State != svc.Paused || currentStatus.ProcessId != status.ProcessId {
+	if currentStatus.State != required || currentStatus.ProcessId != status.ProcessId {
 		return errors.New("source service process changed before stop")
+	}
+	if beforeStop != nil {
+		if err := beforeStop(); err != nil {
+			return err
+		}
 	}
 	if _, err = s.control.Control(svc.Stop); err != nil {
 		return err
@@ -218,6 +241,11 @@ func (s *maintenanceService) stop(ctx context.Context) error {
 	}
 	if err = wait(ctx); err != nil {
 		return err
+	}
+	if afterStop != nil {
+		if err := afterStop(); err != nil {
+			return err
+		}
 	}
 	return s.check()
 }

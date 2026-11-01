@@ -34,6 +34,10 @@ A missing/corrupt receipt, missing/changed installed executable and a different 
 
 The current hb12 source does not advertise SCM Pause/Continue. The current combined migration refuses it before service mutation. A bridge requires separate implementation and preservation/rollback evidence; this UI change alone does not qualify that bridge or a public release.
 
+An isolated Windows 11 26H2 guest subsequently verified the exact published beta.11 hb12 binary (`0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3`): `release` with `retainChild=true`, a normal source-service stop/restart, and `attach-retained` preserved synthetic authored, Library and external Bee file hashes plus the child file ID. The first synthetic parent lacked its required `Bee` directory; that failed seed and report were retained separately from the corrected successful case. This is a same-version mechanism probe, not cross-version migration, Git branch preservation or interruption/rollback qualification.
+
+Private native primitives now restrict a possible no-pause transition to that exact published hb12 payload and a complete, detached retained inventory. They pin the original process, retain file/directory guards, compare complete lease journals before and after process exit, and refuse any mounted store image. The ordinary migration still requires Pause; no CLI/Setup admission currently enables these new primitives. Integrate the source recovery plan and Setup/UI actions, advance the component revision and regenerate manifests, then qualify the complete transaction before building a release candidate.
+
 A fresh, disconnected Hyper-V VM can be prepared without reusing any retired QA VM:
 
 ```powershell
