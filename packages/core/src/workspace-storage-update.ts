@@ -157,7 +157,11 @@ export const planStorageUpdate = async (
         ? [
             "quiesce-operations",
             ...(legacy
-              ? ["retain-and-detach-all-workspaces", "verify-detached-source-inventory"]
+              ? [
+                  "lock-retained-workspace-volumes",
+                  "stop-legacy-service-with-volume-locks",
+                  "verify-detached-source-inventory",
+                ]
               : []),
             "capture-service-and-workspace-backup",
             "migrate-service",
@@ -180,7 +184,9 @@ export const planStorageUpdate = async (
         "validate-project-bindings",
         "acquire-update-and-operation-locks",
         ...(migration ? ["qualified-service-backup-and-rollback"] : []),
-        ...(legacy ? ["admit-legacy-detached-recovery"] : []),
+        ...(legacy
+          ? ["qualify-legacy-busy-volume-exclusion", "admit-legacy-detached-recovery"]
+          : []),
         "recheck-live-source",
         "durable-activation-and-recovery",
       ],

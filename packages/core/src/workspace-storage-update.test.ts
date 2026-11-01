@@ -270,7 +270,10 @@ it("requires explicit recovery intent for the exact published hb12 behind an hb1
     activationAllowed: false,
     elevation: "service-operation-only",
   });
-  expect(plan.steps).toContain("retain-and-detach-all-workspaces");
+  expect(plan.steps).toContain("lock-retained-workspace-volumes");
+  expect(plan.steps).toContain("stop-legacy-service-with-volume-locks");
+  expect(plan.steps).not.toContain("retain-and-detach-all-workspaces");
+  expect(plan.remainingGates).toContain("qualify-legacy-busy-volume-exclusion");
   expect(plan.remainingGates).toContain("admit-legacy-detached-recovery");
   expect(f.tools.expectedComponentVersion).toBe("0.0.0+cfa606fd4143.hb13");
   expect(f.serviceEvidence).toHaveBeenCalledTimes(2);
