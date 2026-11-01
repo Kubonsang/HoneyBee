@@ -104,6 +104,48 @@ func TestLegacySourceRequiresPublishedExecutableNotJustVersion(t *testing.T) {
 	}
 }
 
+func TestLegacyRollbackStartsNormallyOnlyForProtectedDetachedOriginal(t *testing.T) {
+	source := serviceEvidence{SchemaVersion: 1, ExecutableSHA256: legacyHb12Executable,
+		Receipt: installReceipt{ComponentVersion: legacyHb12Component, ExecutableSHA256: legacyHb12Executable}}
+	tx, pin := strings.Repeat("a", 64), strings.Repeat("b", 64)
+	topology := maintenanceTopology{SchemaVersion: 1, TransactionSHA256: tx, SourceEvidenceSHA256: pin, Mounts: []maintenanceMount{}}
+	args, err := topologyResumeArguments(source, source, topology, tx, pin)
+	if err != nil || len(args) != 0 {
+		t.Fatal("legacy rollback must not send unsupported maintenance arguments", args, err)
+	}
+	target := source
+	target.Receipt.ComponentVersion = "0.0.0+cfa606fd4143.hb17"
+	want := []string{"maintenance-resume", tx, pin}
+	for _, pair := range [][2]serviceEvidence{{target, source}, {target, target}} {
+		args, err := topologyResumeArguments(pair[0], pair[1], topology, tx, pin)
+		if err != nil || !reflect.DeepEqual(args, want) {
+			t.Fatal("target or ordinary broker lost protected resume instructions", args, err)
+		}
+	}
+	for _, scenario := range []string{"attached", "transaction", "source", "nil", "schema", "bad-argument"} {
+		t.Run(scenario, func(t *testing.T) {
+			changed, transaction := topology, tx
+			switch scenario {
+			case "attached":
+				changed.Mounts = []maintenanceMount{{Attached: true}}
+			case "transaction":
+				changed.TransactionSHA256 = strings.Repeat("c", 64)
+			case "source":
+				changed.SourceEvidenceSHA256 = strings.Repeat("c", 64)
+			case "nil":
+				changed.Mounts = nil
+			case "schema":
+				changed.SchemaVersion = 2
+			case "bad-argument":
+				transaction = "unbound"
+			}
+			if _, err := topologyResumeArguments(source, source, changed, transaction, pin); err == nil {
+				t.Fatal("legacy rollback accepted an unbound or attached snapshot")
+			}
+		})
+	}
+}
+
 func TestLegacyDetachedJournalsRejectDynamicDriftAndAdditionalWorkspaces(t *testing.T) {
 	_, lease := topologyLeaseFixture(t)
 	lease.State = "released"

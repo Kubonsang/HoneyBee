@@ -86,6 +86,29 @@ func pairTopologyTransaction(transaction string, source, expected serviceEvidenc
 	return transaction
 }
 
+// The original hb12 broker cannot consume maintenance-resume instructions.
+// Its rollback baseline is already detached; start it normally and verify that
+// protected snapshot before restoring automatic startup. New brokers still
+// consume the full protected topology to restore their attachments.
+func topologyResumeArguments(selected, original serviceEvidence, topology maintenanceTopology, transaction, sourcePin string) ([]string, error) {
+	args := []string{"maintenance-resume", transaction, sourcePin}
+	if _, _, err := brokerResumeArguments(append([]string{workspace.WindowsServiceName}, args...)); err != nil {
+		return nil, err
+	}
+	if selected != original || !exactLegacyHb12Source(original) {
+		return args, nil
+	}
+	if topology.SchemaVersion != 1 || topology.TransactionSHA256 != transaction || topology.SourceEvidenceSHA256 != sourcePin || topology.Mounts == nil {
+		return nil, errors.New("protected detached legacy rollback topology required")
+	}
+	for _, mount := range topology.Mounts {
+		if mount.Attached {
+			return nil, errors.New("legacy rollback cannot restore attached workspaces")
+		}
+	}
+	return nil, nil
+}
+
 func validateLegacyDetachedJournals(topology maintenanceTopology, leases []workspace.LeaseJournal) error {
 	if len(leases) != len(topology.Mounts) {
 		return errors.New("legacy workspace inventory changed before cold maintenance")

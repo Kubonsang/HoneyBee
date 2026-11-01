@@ -40,6 +40,10 @@ Native transaction preparation now has a guarded internal path for that exact pu
 
 The read-only Core planner also has an explicit `legacy-hb12-detached` option. It requires the original managed hb13 package helpers, the exact installed hb12 executable and receipt, the same canonical installation/Workspace root and a target that explicitly supports hb12 service replacement. It keeps activation disabled and records the remaining native admission/qualification gates. No CLI, Setup or UI caller enables this option yet. Finish source preparation and caller wiring, advance the component revision and regenerate manifests, then qualify the complete transaction before building a release candidate.
 
+The VM now contains the original published beta.35 application with its hb13 requirement, the unchanged hb12 service and a real Git worktree/branch on the retained synthetic Workspace. The original NSIS wrapper returned exit 1 before application publication in PowerShell Direct; running its unchanged, independently verified installation entry with captured output published the exact official application bytes and returned the expected storage-attention exit 2. The first Git preparation failed because Windows PowerShell 5.1 combined the helper's remaining arguments into one string. Explicit named array arguments were verified in that engine with real spaced-path worktrees, then the guest continuation passed without rerunning Setup or changing the service.
+
+Against that actual source, the new Core planner refused ordinary update and returned only an explicit legacy migration plan. Receipt, authored-file and lease bytes stayed unchanged. These are fixture and read-only planning checks, not proof of cross-version preservation. Internal rollback startup now sends no new broker instructions to the original hb12 service and refuses any attached original snapshot; new brokers still receive protected topology instructions. A separate, not-yet-connected source-baseline verifier authenticates both releases and compares the original evidence/pointer while always reporting `ready=false` and `activationAllowed=false`. Returning to the old version mismatch must never be reported as successful Doctor readiness.
+
 A fresh, disconnected Hyper-V VM can be prepared without reusing any retired QA VM:
 
 ```powershell
@@ -53,7 +57,7 @@ After reviewing the plan, run the same command in an administrator PowerShell wi
 
 After manual Windows installation, name the guest `HB-RECOVERY38`, format its OS volume as NTFS and detach the ISO. Use the generated `release-vm-pin.json` with `release-vm.ps1`. The existing 38 GiB pause threshold, 22 GiB host reserve and 22 GiB guest headroom remain in force. Do not run service migration until the pinned guest capacity/admission and monitor are ready.
 
-Before public beta.38, reproduce hb12 + beta.35/hb13 with synthetic Workspaces and branches in that guest, then qualify the bridge with authored-file and branch preservation, Library reattachment, source/target identity rejection, UAC cancellation, interruption/rollback and final Doctor checks. Do not import private host Workspace data into the fixture. Freeze exact Setup and manifest hashes and complete the existing release verification ledger before publication.
+Before public beta.38, use the reproduced hb12 + beta.35/hb13 source to qualify the bridge with authored-file and branch preservation, Library reattachment, source/target identity rejection, UAC cancellation, interruption/rollback and final Doctor checks. Do not import private host Workspace data into the fixture. Freeze exact Setup and manifest hashes and complete the existing release verification ledger before publication.
 
 ### Approved Quick Create gallery alternative (2026-11-01)
 
