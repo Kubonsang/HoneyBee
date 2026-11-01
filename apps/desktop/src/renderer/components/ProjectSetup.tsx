@@ -30,6 +30,7 @@ export function ProjectSetup({
   cacheReady,
   onBrowseRoot,
   onCheck,
+  onStorageRecovery,
   onOpenUnity,
   onSetup,
   t,
@@ -42,6 +43,7 @@ export function ProjectSetup({
   cacheReady: boolean;
   onBrowseRoot: () => void;
   onCheck: () => void;
+  onStorageRecovery: () => void;
   onOpenUnity: () => void;
   onSetup: () => void;
   t: (key: MessageKey) => string;
@@ -151,6 +153,15 @@ export function ProjectSetup({
             </div>
           </div>
         ))}
+      {!storageReady && (
+        <button
+          className="secondary full-button"
+          onClick={onStorageRecovery}
+          data-testid="setup-storage-recovery"
+        >
+          {t("storageRecovery")}
+        </button>
+      )}
       {sourceMissing && (
         <button className="secondary full-button" onClick={onOpenUnity}>
           <ShieldCheck size={19} />

@@ -113,6 +113,8 @@ export interface WorkspaceRemoveResultV1 {
 export type DoctorCheckStatusV1 = "pass" | "warning" | "fail";
 
 export interface DoctorCheckV1 {
+  readonly expectedVersion?: string;
+  readonly actualVersion?: string | null;
   readonly code: string;
   readonly status: DoctorCheckStatusV1;
   readonly message: string;

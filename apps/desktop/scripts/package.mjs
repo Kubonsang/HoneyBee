@@ -171,5 +171,9 @@ await cp(
   path.join(repositoryRoot, "docs", "operations", "windows-cli-beta.md"),
   path.join(paths[0], "STORAGE-SETUP.md"),
 );
+await cp(
+  path.join(repositoryRoot, "docs", "operations", "storage-recovery.md"),
+  path.join(paths[0], "STORAGE-RECOVERY.md"),
+);
 await cp(path.join(repositoryRoot, "LICENSE"), path.join(paths[0], "LICENSE-HoneyBee"));
 process.stdout.write(paths[0] + "\n");
