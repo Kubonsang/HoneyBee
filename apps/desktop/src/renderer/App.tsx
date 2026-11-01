@@ -10,6 +10,7 @@ import type {
   DesktopWorkspaceCreateRequestV1,
   DesktopWorkspaceV2,
 } from "../shared/ipc.js";
+import { StorageRecovery } from "./components/StorageRecovery.js";
 import { AppFrame } from "./components/AppFrame.js";
 import { CloneProject } from "./components/CloneProject.js";
 import { ProjectHome } from "./components/ProjectHome.js";
@@ -49,6 +50,7 @@ export function App() {
   const [doctor, setDoctor] = useState<DesktopDoctorReportV1>();
   const [workspaceRoot, setWorkspaceRoot] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [recoveryOpen, setRecoveryOpen] = useState(false);
   const [refreshStatus, setRefreshStatus] = useState<RefreshStatus>({ failed: false });
   const scope =
     route === "workbench"
@@ -257,7 +259,13 @@ export function App() {
           : "home"
         : undefined;
   return (
-    <AppFrame locale={locale} setLocale={setLocale} t={t}>
+    <AppFrame
+      locale={locale}
+      setLocale={setLocale}
+      t={t}
+      onStorageRecovery={() => setRecoveryOpen(true)}
+    >
+      {recoveryOpen && <StorageRecovery locale={locale} onClose={() => setRecoveryOpen(false)} />}
       {error !== undefined && (
         <div className="error-banner">
           <Warning size={20} weight="fill" />
@@ -354,6 +362,7 @@ export function App() {
             })
           }
           onCheck={checkSetup}
+          onStorageRecovery={() => setRecoveryOpen(true)}
           onOpenUnity={() =>
             run(async () => {
               await desktopApi.launchProjectUnity({ path: inspection.path });

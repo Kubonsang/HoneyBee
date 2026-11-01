@@ -25,6 +25,13 @@ const binding = (observation) => {
     Number.isSafeInteger(observation.parentCount) && observation.parentCount >= 0,
     "Incomplete storage observation",
   );
+  assert(
+    observation.sourceRecovery === undefined ||
+      (observation.sourceRecovery === "legacy-hb12-detached" &&
+        observation.status === "migration-required" &&
+        observation.sourceComponentVersion === "0.0.0+cfa606fd4143.hb12"),
+    "Invalid legacy recovery binding",
+  );
   return {
     status: observation.status,
     sourceVersion: observation.sourceVersion,
@@ -34,13 +41,18 @@ const binding = (observation) => {
     sourcePointerSha256: observation.sourcePointerSha256,
     manifestSha256: observation.manifestSha256,
     parentCount: observation.parentCount,
+    ...(observation.sourceRecovery ? { sourceRecovery: observation.sourceRecovery } : {}),
   };
 };
 /** Creates a pinned, non-executable plan from a NEW verified extraction, never an arbitrary Prepared marker. */
 export const createUpdatePlan = async (
-  { installationRoot, stageAttempt, manifestSha256, bootstrapperVersion, channel },
+  { installationRoot, stageAttempt, manifestSha256, bootstrapperVersion, channel, sourceRecovery },
   { observe = observeUpdateSource } = {},
 ) => {
+  assert(
+    sourceRecovery === undefined || sourceRecovery === "legacy-hb12-detached",
+    "Unsupported source recovery",
+  );
   const root = path.resolve(installationRoot);
   const stage = child(root, path.basename(stageAttempt), "stage");
   assert.equal(path.resolve(stageAttempt), stage, "Stage outside update root");
@@ -51,9 +63,11 @@ export const createUpdatePlan = async (
     manifestSha256,
     bootstrapperVersion,
     channel,
+    ...(sourceRecovery ? { sourceRecovery } : {}),
   };
   const first = await observe(request),
     identity = binding(first);
+  assert.equal(first.sourceRecovery, sourceRecovery, "Source recovery intent changed");
   const source = {
     currentVersion: first.sourceVersion,
     bootstrapperVersion,
@@ -135,6 +149,7 @@ export const revalidateUpdatePlan = async (
     manifestSha256: plan.manifestSha256,
     bootstrapperVersion: plan.source.bootstrapperVersion,
     channel: plan.source.channel,
+    ...(plan.identity.sourceRecovery ? { sourceRecovery: plan.identity.sourceRecovery } : {}),
   };
   assert.deepEqual(binding(await observe(request)), plan.identity, "Source plan is stale");
   const inventoryBytes = await readBounded(path.join(attempt, "inventory.json"), 8 * 1024 * 1024);

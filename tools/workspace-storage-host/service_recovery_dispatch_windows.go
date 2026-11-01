@@ -189,7 +189,7 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 		if err != nil {
 			return err
 		}
-		return bound.resumeRecordedTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic)
+		return bound.resumeRecordedTopology(ctx, area, pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected), source.Evidence, automatic)
 	}
 	loadReplacement := func() (serviceReplacementRecord, error) {
 		var replacement serviceReplacementRecord

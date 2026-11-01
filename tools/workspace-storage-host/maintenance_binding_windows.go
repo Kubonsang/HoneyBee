@@ -172,8 +172,12 @@ func (b *boundMaintenanceService) resumeRecordedTopology(ctx context.Context, ar
 	if err != nil {
 		return err
 	}
+	args, err := topologyResumeArguments(b.evidence, original, topology, transaction, pin)
+	if err != nil {
+		return err
+	}
 	return b.service.withSourceEvidence(b.evidence, func(s *maintenanceService) error {
-		if err := s.resumeWithArguments(ctx, []string{"maintenance-resume", transaction, pin}); err != nil {
+		if err := s.resumeWithArguments(ctx, args); err != nil {
 			return err
 		}
 		verify := func() error {
@@ -215,7 +219,7 @@ func (b *boundMaintenanceService) resumeRecordedTopology(ctx context.Context, ar
 			if err = b.restartDetachedBroker(ctx, area, transaction, topology, original.Receipt); err != nil {
 				return err
 			}
-			if err = s.resumeWithArguments(ctx, []string{"maintenance-resume", transaction, pin}); err != nil {
+			if err = s.resumeWithArguments(ctx, args); err != nil {
 				return err
 			}
 			if err = verify(); err != nil {

@@ -9,8 +9,10 @@ export function AppFrame({
   children,
   locale,
   setLocale,
+  onStorageRecovery,
   t,
 }: {
+  onStorageRecovery: () => void;
   children: ReactNode;
   locale: Locale;
   setLocale: (locale: Locale) => void;
@@ -24,8 +26,19 @@ export function AppFrame({
           <strong>HoneyBee</strong>
         </div>
         <div className="titlebar-drag" />
+        <button
+          className="locale-button"
+          data-testid="storage-recovery-open"
+          onClick={onStorageRecovery}
+        >
+          {locale === "ko" ? "스토리지 복구" : "Storage recovery"}
+        </button>
         <UpdateCheck locale={locale} />
-        <button className="locale-button" onClick={() => setLocale(locale === "ko" ? "en" : "ko")}>
+        <button
+          className="locale-button"
+          data-testid="locale-toggle"
+          onClick={() => setLocale(locale === "ko" ? "en" : "ko")}
+        >
           {t("language")}
         </button>
         <div className="window-controls">

@@ -1,6 +1,7 @@
 export type Locale = "ko" | "en";
 
 const en = {
+  storageRecovery: "Open storage recovery",
   usageTitle: "Storage",
   usageMeasure: "Measure / refresh",
   usageUnknown: "Unknown",
@@ -192,9 +193,9 @@ const en = {
   setupServiceHelp:
     "The storage service is missing or stopped. Follow the one-time administrator setup in the bundled installation guide, then check again.",
   setupVersionHelp:
-    "The storage version differs. Remove old Workspaces with the old CLI and verify their branches before following the service replacement guide.",
+    "The app and storage versions differ. Open Storage recovery to review a preserving update. Keep existing Workspaces and branches.",
   setupReceiptHelp:
-    "The installation record does not match this package or user. Check the installed user and package; replace only a matching HoneyBee installation after removing old Workspaces.",
+    "The storage installation owner or files could not be verified. Open Storage recovery and check the original Windows user and matching installation.",
   setupAccessHelp:
     "The storage folder is inaccessible. Check its path and your account permissions, then check again.",
   setupPackageHelp:
@@ -211,6 +212,7 @@ export type MessageKey = keyof typeof en;
 export const messageKeys = Object.keys(en) as MessageKey[];
 
 const ko: Record<MessageKey, string> = {
+  storageRecovery: "스토리지 복구 열기",
   usageTitle: "용량",
   usageMeasure: "측정 / 새로고침",
   usageUnknown: "확인 불가",
@@ -400,9 +402,9 @@ const ko: Record<MessageKey, string> = {
   setupServiceHelp:
     "스토리지 서비스가 없거나 중지되어 있습니다. 동봉된 설치 안내서의 관리자 최초 설정을 완료한 뒤 다시 확인하세요.",
   setupVersionHelp:
-    "스토리지 버전이 다릅니다. 기존 CLI로 이전 워크스페이스를 정리하고 브랜치 보존을 확인한 뒤 안내서에 따라 서비스를 교체하세요.",
+    "앱과 스토리지 버전이 다릅니다. 스토리지 복구에서 보존 업데이트를 확인하세요. 기존 워크스페이스와 브랜치는 유지하세요.",
   setupReceiptHelp:
-    "설치 정보가 현재 패키지 또는 사용자와 맞지 않습니다. 설치 사용자와 패키지를 확인하세요. 같은 HoneyBee 설치만 기존 워크스페이스 정리 후 교체할 수 있습니다.",
+    "스토리지 설치 소유자 또는 파일을 확인하지 못했습니다. 스토리지 복구에서 원래 Windows 계정과 같은 설치 경로를 확인하세요.",
   setupAccessHelp:
     "스토리지 폴더에 접근할 수 없습니다. 경로와 현재 계정의 접근 권한을 확인한 뒤 다시 확인하세요.",
   setupPackageHelp:

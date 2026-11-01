@@ -57,7 +57,7 @@
     "smoke:setup": "node scripts/installation/smoke-setup.mjs",
     "test:setup": "node --test scripts/installation/fresh-install.test.mjs scripts/installation/service-setup.test.mjs scripts/installation/repair-admission.test.mjs scripts/installation/distribution-policy.test.mjs scripts/installation/beta32-delivery-approval.test.mjs scripts/installation/publish-assembly.test.mjs",
     "test:update-admission": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node node_modules/typescript/bin/tsc -p apps/desktop/tsconfig.main.build.json && node --test scripts/update/combined-admission.test.mjs scripts/update/desktop-session.test.mjs",
-    "test:combined-update": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node --test scripts/update/combined-update.test.mjs scripts/update/combined-coordinator.test.mjs scripts/update/combined-application.test.mjs scripts/update/native-service-update.test.mjs scripts/update/service-update-session.test.mjs",
+    "test:combined-update": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node --test scripts/update/combined-update.test.mjs scripts/update/combined-coordinator.test.mjs scripts/update/combined-application.test.mjs scripts/update/native-service-update.test.mjs scripts/update/service-update-session.test.mjs scripts/update/legacy-source-baseline.test.mjs",
     "test:update": "go -C tools/honeybee-update-package test ./... && go -C tools/honeybee-update-package vet ./... && node scripts/update/build-package-tool.mjs && node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node node_modules/typescript/bin/tsc -p apps/desktop/tsconfig.main.build.json && node --test scripts/update/desktop-session.test.mjs scripts/update/desktop-update-lifecycle.test.mjs scripts/update/application-activity.test.mjs scripts/update/stage-release.test.mjs scripts/update/prepare-release.test.mjs scripts/update/update-plan.test.mjs scripts/update/update-transaction.test.mjs scripts/update/app-activation.test.mjs scripts/update/publish-version.test.mjs scripts/update/published-update.test.mjs scripts/update/version-health.test.mjs scripts/update/doctor-job.test.mjs scripts/qualification/qa-registry.test.mjs scripts/update/application-activity.test.mjs scripts/qualification/preservation.test.mjs",
     "stage:update": "node scripts/update/stage.mjs",
     "build:update-package": "node scripts/update/build-package-tool.mjs",
@@ -76,6 +76,6 @@
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.52.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

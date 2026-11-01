@@ -108,3 +108,75 @@ test("source drift during revalidation is rejected", async () => {
   );
   await preserved(f.options);
 });
+
+const legacySetup = async () => {
+  const f = await setup();
+  const manifestPath = path.join(f.options.stageAttempt, "release.json");
+  const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+  manifest.components.storage.migration = {
+    kind: "service-replacement",
+    supportedSourceVersions: ["0.0.0+cfa606fd4143.hb12"],
+  };
+  const bytes = JSON.stringify(manifest);
+  await writeFile(manifestPath, bytes);
+  f.request.manifestSha256 = sha256(bytes);
+  f.request.sourceRecovery = "legacy-hb12-detached";
+  Object.assign(f.observation, {
+    status: "migration-required",
+    sourceComponentVersion: "0.0.0+cfa606fd4143.hb12",
+    manifestSha256: sha256(bytes),
+    sourceRecovery: "legacy-hb12-detached",
+  });
+  return f;
+};
+
+test("pins explicit legacy intent through preparation and both revalidation observations", async () => {
+  const f = await legacySetup();
+  let calls = 0;
+  const dependencies = {
+    observe: async (request) => {
+      calls++;
+      assert.equal(request.sourceRecovery, "legacy-hb12-detached");
+      assert.equal(request.installationRoot, f.options.installationRoot);
+      return { ...f.observation };
+    },
+  };
+  const plan = await createUpdatePlan(f.request, dependencies);
+  const stored = JSON.parse(await readFile(plan.planPath, "utf8"));
+  assert.equal(stored.identity.sourceRecovery, "legacy-hb12-detached");
+  assert.equal(stored.source.storageComponentVersion, "0.0.0+cfa606fd4143.hb12");
+  await revalidateUpdatePlan(
+    { ...plan, installationRoot: f.options.installationRoot },
+    dependencies,
+  );
+  assert.equal(calls, 4);
+  await preserved(f.options);
+});
+
+for (const scenario of ["unsolicited", "missing", "unknown", "ordinary-status", "wrong-version"])
+  test(`refuses ${scenario} legacy recovery intent before package preparation`, async () => {
+    const f = await legacySetup();
+    if (scenario === "unsolicited") delete f.request.sourceRecovery;
+    if (scenario === "missing") delete f.observation.sourceRecovery;
+    if (scenario === "unknown") f.request.sourceRecovery = "force-replace";
+    if (scenario === "ordinary-status") f.observation.status = "app-only-candidate";
+    if (scenario === "wrong-version")
+      f.observation.sourceComponentVersion = "0.0.0+cfa606fd4143.hb13";
+    await assert.rejects(createUpdatePlan(f.request, f.dependencies));
+    assert(
+      !(await readdir(path.join(f.options.installationRoot, "update"))).some((name) =>
+        name.startsWith("prepare-"),
+      ),
+    );
+    await preserved(f.options);
+  });
+
+test("refuses legacy intent drift during revalidation without changing the source", async () => {
+  const f = await legacySetup();
+  const plan = await createUpdatePlan(f.request, f.dependencies);
+  delete f.observation.sourceRecovery;
+  await assert.rejects(
+    revalidateUpdatePlan({ ...plan, installationRoot: f.options.installationRoot }, f.dependencies),
+  );
+  await preserved(f.options);
+});

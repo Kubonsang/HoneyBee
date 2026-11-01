@@ -24,7 +24,7 @@ import {
   type ProjectRecordV2,
   type WorkspaceViewV1,
 } from "@honeybee/core";
-import { app, BrowserWindow, dialog, ipcMain, Menu } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
 
 import {
   DesktopBaseRefsRequestV1Schema,
@@ -35,6 +35,7 @@ import {
   DesktopFolderPickerRequestV1Schema,
   DesktopGitDiffRequestV1Schema,
   DesktopIpcChannels,
+  DesktopStorageRecoveryActionV1Schema,
   DesktopProjectPathRequestV1Schema,
   DesktopProjectRequestV1Schema,
   DesktopProjectSetupRequestV1Schema,
@@ -345,6 +346,68 @@ const updateCheck = new DesktopUpdateCheck({
     ),
 });
 const registerIpc = (): void => {
+  activityHandle(
+    DesktopIpcChannels.storageRecoveryStatus,
+    handler(async (value, event) => {
+      assert(value === undefined, "Recovery status accepts no external configuration");
+      assert(
+        mainWindow &&
+          event.sender === mainWindow.webContents &&
+          event.senderFrame === mainWindow.webContents.mainFrame,
+      );
+      return {
+        schemaVersion: 1 as const,
+        installation:
+          installedStorageCommand === undefined ? ("portable" as const) : ("managed" as const),
+        applicationVersion: compatibility.honeybeeVersion,
+        doctor: fixtureMode
+          ? {
+              schemaVersion: 1 as const,
+              ready: false,
+              summary: { pass: 1, warning: 0, fail: 1 },
+              checks: [
+                {
+                  code: "storage.install-receipt",
+                  status: "pass" as const,
+                  message: "Storage install receipt is valid.",
+                },
+                {
+                  code: "storage.component-version",
+                  status: "fail" as const,
+                  message: "Installed storage version differs.",
+                  actualVersion: "0.0.0+cfa606fd4143.hb12",
+                  expectedVersion: compatibility.workspaceStorage[0]?.version ?? "unknown",
+                },
+              ],
+            }
+          : await desktopDoctor(),
+      };
+    }),
+  );
+  activityHandle(
+    DesktopIpcChannels.storageRecoveryAction,
+    handler(async (value, event) => {
+      assert(
+        mainWindow &&
+          event.sender === mainWindow.webContents &&
+          event.senderFrame === mainWindow.webContents.mainFrame,
+      );
+      const { action } = DesktopStorageRecoveryActionV1Schema.parse(value);
+      // The renderer cannot supply a path, executable, command, URL or service identity.
+      if (fixtureMode) return true;
+      if (action === "download-setup") {
+        await shell.openExternal("https://github.com/Kubonsang/HoneyBee/releases");
+      } else {
+        const guide = app.isPackaged
+          ? path.join(process.resourcesPath, "..", "STORAGE-RECOVERY.md")
+          : path.resolve(app.getAppPath(), "../../docs/operations/storage-recovery.md");
+        const error = await shell.openPath(guide);
+        if (error) throw new DesktopMainError("storage.recovery-guide-unavailable", error);
+      }
+      return true;
+    }),
+  );
+
   for (const [channel, action] of [
     [DesktopIpcChannels.updateStatus, () => updateCheck.refresh()],
     [DesktopIpcChannels.updateCheck, () => updateCheck.check()],
@@ -993,6 +1056,10 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await click("[data-testid='workspace-dialog'] header .icon-button");
   await waitFor("[data-testid='workspace-workbench']");
   await capture("01-workbench");
+  await click("[data-testid='storage-recovery-open']");
+  await waitFor("[data-testid='storage-recovery'] .storage-versions");
+  await capture("10-storage-recovery");
+  await click("[data-testid='storage-recovery'] header button");
   await click(".workspace-row:nth-child(2)");
   await waitFor(".diff-line.added");
   await capture("07-changes-review");
@@ -1012,7 +1079,7 @@ const captureVisualFixture = async (window: BrowserWindow, directory: string): P
   await click(".back-button");
   await waitFor("[data-testid='project-home']");
   await capture("05-project-home");
-  await click(".locale-button");
+  await click("[data-testid='locale-toggle']");
   await capture("06-language-toggle");
   await window.webContents.executeJavaScript(
     "document.querySelector('.update-check > button').click()",
