@@ -4,7 +4,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -14,9 +16,76 @@ import (
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
+func TestLegacyTargetTopologyKeepsRollbackSnapshotDetached(t *testing.T) {
+	receipt, lease := topologyLeaseFixture(t)
+	receipt.ComponentVersion = legacyHb12Component
+	receipt.ExecutableSHA256 = legacyHb12Executable
+	source := serviceSourceRecord{SchemaVersion: 1, TransactionSHA256: strings.Repeat("a", 64), Evidence: serviceEvidence{
+		SchemaVersion: 1, Receipt: receipt, ExecutableSHA256: legacyHb12Executable,
+	}}
+	data, _ := json.Marshal(source.Evidence)
+	source.SourceEvidenceSHA256 = evidenceHash(data)
+	topology := maintenanceTopology{SchemaVersion: 1, TransactionSHA256: source.TransactionSHA256,
+		SourceEvidenceSHA256: source.SourceEvidenceSHA256, Mounts: []maintenanceMount{{Lease: lease}}}
+	originalSource := source
+	derived, target, err := legacyTargetTopology(source, topology)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(source, originalSource) || derived.Evidence != source.Evidence || !reflect.DeepEqual(derived.Original, source.Original) ||
+		derived.TransactionSHA256 == source.TransactionSHA256 || derived.TransactionSHA256 != target.TransactionSHA256 ||
+		target.SourceEvidenceSHA256 != source.SourceEvidenceSHA256 || !target.Mounts[0].Attached || topology.Mounts[0].Attached ||
+		!reflect.DeepEqual(target.Mounts[0].Lease, lease) {
+		t.Fatal("target topology changed source ownership or rollback state")
+	}
+	target.Mounts[0].Lease.OwnershipToken = "changed-target"
+	if topology.Mounts[0].Lease.OwnershipToken != lease.OwnershipToken {
+		t.Fatal("source and target topology share mutable storage")
+	}
+	other := source.Evidence
+	other.Receipt.ComponentVersion = "0.0.0+cfa606fd4143.hb17"
+	if pairTopologyTransaction(source.TransactionSHA256, source.Evidence, source.Evidence) != source.TransactionSHA256 ||
+		pairTopologyTransaction(source.TransactionSHA256, source.Evidence, other) != derived.TransactionSHA256 ||
+		pairTopologyTransaction(source.TransactionSHA256, other, source.Evidence) != source.TransactionSHA256 {
+		t.Fatal("source rollback or ordinary update selected the legacy target topology")
+	}
+	for _, scenario := range []string{"attached", "duplicate", "nil", "transaction", "evidence", "foreign", "version", "owner"} {
+		t.Run(scenario, func(t *testing.T) {
+			s, snapshot := source, topology
+			snapshot.Mounts = append([]maintenanceMount{}, topology.Mounts...)
+			switch scenario {
+			case "attached":
+				snapshot.Mounts[0].Attached = true
+			case "duplicate":
+				snapshot.Mounts = append(snapshot.Mounts, snapshot.Mounts[0])
+			case "nil":
+				snapshot.Mounts = nil
+			case "transaction":
+				snapshot.TransactionSHA256 = strings.Repeat("b", 64)
+			case "evidence":
+				s.SourceEvidenceSHA256 = strings.Repeat("c", 64)
+				snapshot.SourceEvidenceSHA256 = s.SourceEvidenceSHA256
+			case "foreign":
+				snapshot.Mounts[0].Lease.UserSID = "S-1-5-18"
+			case "version":
+				s.Evidence.Receipt.ComponentVersion = other.Receipt.ComponentVersion
+			case "owner":
+				snapshot.Mounts[0].Lease.OwnershipToken = ""
+			}
+			if _, _, err := legacyTargetTopology(s, snapshot); err == nil {
+				t.Fatal("invalid source topology admitted")
+			}
+		})
+	}
+	topology.Mounts = []maintenanceMount{}
+	if _, empty, err := legacyTargetTopology(source, topology); err != nil || empty.Mounts == nil {
+		t.Fatal("empty inventory lost its complete-snapshot representation", err)
+	}
+}
+
 func TestLegacySourceRequiresPublishedExecutableNotJustVersion(t *testing.T) {
-	valid := serviceEvidence{SchemaVersion: 1, ExecutableSHA256: legacyHb12Executable,
-		Receipt: installReceipt{ComponentVersion: legacyHb12Component, ExecutableSHA256: legacyHb12Executable}}
+	valid := serviceEvidence{SchemaVersion: 1, ExecutableSHA256: "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3",
+		Receipt: installReceipt{ComponentVersion: "0.0.0+cfa606fd4143.hb12", ExecutableSHA256: "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3"}}
 	if !exactLegacyHb12Source(valid) {
 		t.Fatal("published legacy identity was not recognized")
 	}
