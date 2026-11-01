@@ -53,7 +53,7 @@ if($Mode -eq 'Admit'){
   if(-not $GuestCapacityPath -or $ExpectedGrowthBytes -lt 0){throw 'Fresh guest capacity and nonnegative peak growth required'}
   $guest=Get-Content -LiteralPath $GuestCapacityPath -Raw | ConvertFrom-Json
   if(-not $pin.computerName -or $guest.computer -ne $pin.computerName -or $guest.filesystem -ne 'NTFS'){throw 'Guest identity/filesystem mismatch'}
-  $age=([DateTime]::UtcNow-[DateTime]::Parse($guest.at).ToUniversalTime()).TotalMinutes
+  $age=([DateTimeOffset]::UtcNow-[DateTimeOffset]$guest.at).TotalMinutes
   if($age -gt 5 -or $age -lt 0){throw 'Guest capacity observation is stale'}
   $snapshot=Get-BudgetSnapshot
   if($snapshot.vmBytes+$ExpectedGrowthBytes -ge $vmPauseBytes -or $snapshot.hostFreeBytes-$ExpectedGrowthBytes -le 22GB -or $guest.guestFreeBytes-$ExpectedGrowthBytes -lt 22GB){throw 'Insufficient peak headroom; no expansion or safety-floor reduction allowed'}
@@ -67,7 +67,7 @@ if($Mode -eq 'Finish'){
   if(-not $ExportReceipt){throw 'Verified native export receipt required before shutdown'}
   $receipt=Get-Content -LiteralPath $ExportReceipt -Raw | ConvertFrom-Json
   if($receipt.lane -ne 'native' -or $receipt.status -ne 'passed' -or $receipt.pendingTransactions -ne 0 -or $receipt.environment.vmId -ne $pin.vmId){throw 'Only a successful terminal run of this VM may finish'}
-  $age=([DateTime]::UtcNow-[DateTime]::Parse($receipt.completedAt).ToUniversalTime()).TotalMinutes
+  $age=([DateTimeOffset]::UtcNow-[DateTimeOffset]$receipt.completedAt).TotalMinutes
   if($age -gt 5 -or $age -lt 0){throw 'Stale receipt; obtain a fresh transaction-status/export confirmation'}
   if(@($receipt.attachments).Count -eq 0){throw 'Export inventory missing'}
   $base=Split-Path -Parent ([IO.Path]::GetFullPath($ExportReceipt))

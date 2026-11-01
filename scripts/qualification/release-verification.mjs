@@ -43,6 +43,7 @@ export const git = (root, args) =>
 export function classifyTest(file) {
   if (file.endsWith(".test.ps1")) {
     if (/\/(native-fault-baseline|native-evidence)\.test\.ps1$/u.test(file)) return "docker";
+    if (file.endsWith("/release-vm.test.ps1")) return "docker+windows";
     if (file.endsWith("/inspect-integrated-guest.test.ps1")) return "windows";
     return "unclassified";
   }

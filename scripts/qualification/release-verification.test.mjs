@@ -156,6 +156,7 @@ test("classification retains Windows-specific Go and rejects unknown PowerShell 
   assert.equal(classifyTest("tools/workspace-storage-host/service_windows_test.go"), "windows");
   assert.equal(classifyTest("scripts/new.test.ps1"), "unclassified");
   assert.equal(classifyTest("scripts/qualification/native-evidence.test.ps1"), "docker");
+  assert.equal(classifyTest("scripts/qualification/release-vm.test.ps1"), "docker+windows");
   assert.equal(classifyTest("scripts/new.test.mjs"), "docker+windows");
   assert.equal(classifyTest("other/new.test.ts"), "unclassified");
   assert.equal(classifyTest("scripts/new.test.js"), "unclassified");
