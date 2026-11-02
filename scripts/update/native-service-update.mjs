@@ -40,6 +40,17 @@ export function createNativeServiceUpdate(
   { health, sessionFactory = createServiceUpdateSession },
 ) {
   assert.equal(typeof health, "function", "Authenticated Doctor runner required");
+  const sourceRecovery = options.sourceRecovery,
+    sourceObservationSha256 = options.sourceObservationSha256;
+  assert(
+    sourceRecovery === undefined || sourceRecovery === "legacy-hb12-detached",
+    "Unsupported source recovery intent",
+  );
+  if (sourceRecovery) {
+    assert(/^[a-f0-9]{64}$/u.test(sourceObservationSha256), "Bound source observation required");
+  } else {
+    assert.equal(sourceObservationSha256, undefined, "Unsolicited source recovery observation");
+  }
   const root = path.resolve(options.installationRoot);
   const identity = Object.freeze({ ...options.identity });
   const validationId = combinedUpdateIdentity(identity);
@@ -161,7 +172,18 @@ export function createNativeServiceUpdate(
       return result.decision === "abort";
     },
     async validateSource() {
-      return (await health("source")).ready === true;
+      const checked = await health("source");
+      if (!sourceRecovery) return checked.ready === true;
+      return (
+        checked.schemaVersion === 1 &&
+        checked.kind === "legacy-source-baseline" &&
+        checked.version === "0.1.0-beta.35" &&
+        checked.baselineRestored === true &&
+        checked.ready === false &&
+        checked.readyForWorkspaceOperations === false &&
+        checked.activationAllowed === false &&
+        checked.sourceEvidenceSha256 === sourceObservationSha256
+      );
     },
     async verifyCommitted() {
       const result = await command("status");
@@ -182,6 +204,12 @@ export async function runNativeCombinedUpdate(options, hooks) {
       identity: options.identity,
       recover: options.recover,
       targetPointerSha256: options.validation.targetPointerSha256,
+      ...(options.sourceRecovery
+        ? {
+            sourceRecovery: options.sourceRecovery,
+            sourceObservationSha256: options.sourceObservationSha256,
+          }
+        : {}),
     },
     { health: hooks.health },
   );

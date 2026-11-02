@@ -9,6 +9,86 @@ import { sha256 } from "./release-manifest.mjs";
 import { combinedUpdateIdentity } from "./combined-update.mjs";
 import { createNativeServiceUpdate } from "./native-service-update.mjs";
 
+const legacyBridgeOptions = () => ({
+  installationRoot: path.resolve("output/legacy-bridge-validation"),
+  identity: {
+    serviceTransactionSha256: "a".repeat(64),
+    sourcePointerSha256: "b".repeat(64),
+    manifestSha256: "c".repeat(64),
+  },
+  targetPointerSha256: "d".repeat(64),
+  sourceRecovery: "legacy-hb12-detached",
+  sourceObservationSha256: "e".repeat(64),
+});
+const legacyBaseline = () => ({
+  schemaVersion: 1,
+  kind: "legacy-source-baseline",
+  version: "0.1.0-beta.35",
+  baselineRestored: true,
+  ready: false,
+  readyForWorkspaceOperations: false,
+  activationAllowed: false,
+  sourceEvidenceSha256: "e".repeat(64),
+});
+
+test("explicit legacy rollback accepts only its bound unready baseline; target still requires Doctor", async () => {
+  const options = legacyBridgeOptions();
+  const bridge = createNativeServiceUpdate(options, {
+    health: async () => legacyBaseline(),
+    sessionFactory: () => {
+      throw new Error("validation cannot open a privileged session");
+    },
+  });
+  assert.equal(await bridge.validateSource(), true);
+  assert.equal(await bridge.validateDoctor(), false);
+  // Caller mutation cannot turn this validation into the ordinary ready test.
+  options.sourceRecovery = undefined;
+  options.sourceObservationSha256 = "f".repeat(64);
+  assert.equal(await bridge.validateSource(), true);
+  const ordinary = { ...legacyBridgeOptions() };
+  Reflect.deleteProperty(ordinary, "sourceRecovery");
+  Reflect.deleteProperty(ordinary, "sourceObservationSha256");
+  assert.equal(
+    await createNativeServiceUpdate(ordinary, {
+      health: async () => legacyBaseline(),
+    }).validateSource(),
+    false,
+  );
+});
+
+for (const [field, value] of Object.entries({
+  schemaVersion: 2,
+  kind: "doctor",
+  version: "0.1.0-beta.36",
+  baselineRestored: false,
+  ready: true,
+  readyForWorkspaceOperations: true,
+  activationAllowed: true,
+  sourceEvidenceSha256: "f".repeat(64),
+})) {
+  test(`legacy rollback refuses changed baseline ${field}`, async () => {
+    const bridge = createNativeServiceUpdate(legacyBridgeOptions(), {
+      health: async () => ({ ...legacyBaseline(), [field]: value }),
+    });
+    assert.equal(await bridge.validateSource(), false);
+  });
+}
+
+test("native source validation rejects unknown or unbound recovery intent", () => {
+  for (const change of [
+    { sourceRecovery: "unknown" },
+    { sourceObservationSha256: undefined },
+    { sourceRecovery: undefined },
+  ]) {
+    assert.throws(() =>
+      createNativeServiceUpdate(
+        { ...legacyBridgeOptions(), ...change },
+        { health: async () => ({ ready: true }) },
+      ),
+    );
+  }
+});
+
 test("native adapters connect prepare, Doctor evidence and pair commit through one session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "hb-native-bridge-"));
   const source = Buffer.from("source-pointer"),

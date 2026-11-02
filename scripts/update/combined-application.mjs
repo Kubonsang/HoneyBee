@@ -46,6 +46,33 @@ export function validateCombinedApplicationContext(value) {
   assert(compareVersions(target.activeVersion, source.activeVersion) > 0);
   assert.equal(target.generation, source.generation + 1);
   assert(/^[a-f0-9]{64}$/u.test(value.launcherSha256));
+  assert(
+    value.sourceRecovery === undefined || value.sourceRecovery === "legacy-hb12-detached",
+    "Unsupported source recovery intent",
+  );
+  if (value.sourceRecovery) {
+    assert.equal(
+      value.nativeCoordinator,
+      "target",
+      "Legacy recovery requires the target coordinator",
+    );
+    assert(
+      /^[a-f0-9]{64}$/u.test(value.sourceObservationSha256),
+      "Bound source observation required",
+    );
+    assert.equal(source.activeVersion, "0.1.0-beta.35");
+    assert.equal(
+      source.manifestSha256,
+      "272b131a2d3deaffedee07f94e904f9ec1d822d868b8eb2494b60576f947b2cb",
+      "Legacy recovery source package differs",
+    );
+  } else {
+    assert.equal(
+      value.sourceObservationSha256,
+      undefined,
+      "Unsolicited source recovery observation",
+    );
+  }
   return { sourceBytes, targetBytes, source, target };
 }
 

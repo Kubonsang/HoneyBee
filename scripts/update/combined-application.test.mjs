@@ -9,7 +9,51 @@ import { combinedUpdateIdentity } from "./combined-update.mjs";
 import {
   createCombinedApplicationSelection,
   persistCombinedApplicationContext,
+  validateCombinedApplicationContext,
 } from "./combined-application.mjs";
+
+test("legacy combined contexts require the reproduced source, target runner and observation", () => {
+  const context = (change = {}, pointerChange = {}) => {
+    const source = {
+      schemaVersion: 1,
+      generation: 1,
+      activeVersion: "0.1.0-beta.35",
+      manifestSha256: "272b131a2d3deaffedee07f94e904f9ec1d822d868b8eb2494b60576f947b2cb",
+      ...pointerChange,
+    };
+    const bytes = Buffer.from(JSON.stringify(source));
+    const identity = {
+      sourcePointerSha256: sha256(bytes),
+      manifestSha256: "a".repeat(64),
+      serviceTransactionSha256: "b".repeat(64),
+    };
+    return {
+      schemaVersion: 1,
+      identity,
+      identitySha256: combinedUpdateIdentity(identity),
+      launcherSha256: "c".repeat(64),
+      sourcePointer: bytes.toString("base64"),
+      targetPointer: Buffer.from(
+        JSON.stringify({ ...source, generation: 2, activeVersion: "0.1.0-beta.38" }),
+      ).toString("base64"),
+      nativeCoordinator: "target",
+      sourceRecovery: "legacy-hb12-detached",
+      sourceObservationSha256: "d".repeat(64),
+      ...change,
+    };
+  };
+  assert.equal(validateCombinedApplicationContext(context()).source.activeVersion, "0.1.0-beta.35");
+  for (const change of [
+    { sourceRecovery: "unknown" },
+    { sourceRecovery: undefined },
+    { sourceObservationSha256: undefined },
+    { nativeCoordinator: undefined },
+  ])
+    assert.throws(() => validateCombinedApplicationContext(context(change)));
+  for (const change of [{ activeVersion: "0.1.0-beta.36" }, { manifestSha256: "e".repeat(64) }]) {
+    assert.throws(() => validateCombinedApplicationContext(context({}, change)));
+  }
+});
 
 test("paired selection preserves source bytes and refuses unknown pointers or lost activity", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "hb-paired-pointer-"));

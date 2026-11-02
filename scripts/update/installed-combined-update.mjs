@@ -16,6 +16,7 @@ import {
 } from "./desktop-session.mjs";
 import { withDesktopUpdateLifecycle } from "./desktop-update-lifecycle.mjs";
 import { checkVersionHealth } from "./version-health.mjs";
+import { checkLegacySourceBaseline } from "./legacy-source-baseline.mjs";
 import {
   createCombinedApplicationSelection,
   persistCombinedApplicationContext,
@@ -91,6 +92,12 @@ export async function activateInstalledCombinedUpdate({
     targetPointer: targetBytes.toString("base64"),
     launcherSha256: options.launcherSha256,
     ...(nativeCoordinator ? { nativeCoordinator } : {}),
+    ...(plan.identity.sourceRecovery
+      ? {
+          sourceRecovery: plan.identity.sourceRecovery,
+          sourceObservationSha256: plan.identity.sourceEvidenceSha256,
+        }
+      : {}),
   };
   const verifyRelease = createCombinedReleaseAuthorization(root, runtime, context);
   const sourceDirectory = path.join(root, "versions", source.activeVersion),
@@ -198,6 +205,7 @@ export async function runCombinedApplicationTransaction({
   activity,
   recover = false,
 }) {
+  context = globalThis.structuredClone(context);
   const { source, target } = validateCombinedApplicationContext(context);
   verifyRelease ??= createCombinedReleaseAuthorization(root, runtime, context);
   clients ??= {
@@ -211,6 +219,26 @@ export async function runCombinedApplicationTransaction({
   const health = async (which) => {
     const pointer = which === "target" ? target : source;
     activity.assertHeld();
+    if (which === "source" && context.sourceRecovery) {
+      return checkLegacySourceBaseline(
+        { installationRoot: root, context },
+        {
+          authorize: async () => {
+            activity.assertHeld();
+            assert.equal(
+              await verifyRelease(path.join(root, "versions", source.activeVersion)),
+              true,
+            );
+            assert.equal(
+              await verifyRelease(path.join(root, "versions", target.activeVersion)),
+              true,
+            );
+            activity.assertHeld();
+            return true;
+          },
+        },
+      );
+    }
     return checkVersionHealth(
       {
         installationRoot: root,
@@ -227,6 +255,12 @@ export async function runCombinedApplicationTransaction({
       native,
       clients,
       recover,
+      ...(context.sourceRecovery
+        ? {
+            sourceRecovery: context.sourceRecovery,
+            sourceObservationSha256: context.sourceObservationSha256,
+          }
+        : {}),
       validation: {
         version: target.activeVersion,
         targetPointerSha256: sha256(Buffer.from(context.targetPointer, "base64")),
@@ -255,5 +289,12 @@ export async function runCombinedApplicationTransaction({
       restartTarget: async () => {},
     },
   );
-  return { ...result, kind: "combined", transactionDirectory: result.directory };
+  return {
+    ...result,
+    kind: "combined",
+    transactionDirectory: result.directory,
+    ...(context.sourceRecovery && result.state === "RolledBack"
+      ? { storageRecoveryRequired: true, readyForWorkspaceOperations: false }
+      : {}),
+  };
 }
