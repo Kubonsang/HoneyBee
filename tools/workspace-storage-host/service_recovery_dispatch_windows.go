@@ -101,6 +101,9 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 	if source.Evidence.Receipt.WorkspaceRoot != filepath.Join(record.ApplicationRoot, "Workspaces") || source.Evidence.Receipt.ComponentVersion != record.ReleaseSource.ComponentVersion {
 		return false, errors.New("recovery user/source binding changed")
 	}
+	if err := validateLegacyRecoverySource(record.SourceRecovery, record.ReleaseSource, source.Evidence); err != nil {
+		return false, err
+	}
 	journal, err := area.loadMigration(record.MigrationName, record.MigrationSHA256)
 	if err != nil {
 		return false, err
@@ -175,7 +178,11 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 			return err
 		}
 		defer bound.close()
-		_, err = records.read("service-topology-" + record.TransactionSHA256 + ".json")
+		if resumed, err := bound.resumeLegacyRunningTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic); err != nil || resumed {
+			return err
+		}
+		topologyTransaction := pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected)
+		_, err = records.read("service-topology-" + topologyTransaction + ".json")
 		if os.IsNotExist(err) {
 			status, err := bound.handle.Query()
 			if err != nil {
@@ -189,7 +196,7 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 		if err != nil {
 			return err
 		}
-		return bound.resumeRecordedTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic)
+		return bound.resumeRecordedTopology(ctx, area, topologyTransaction, source.Evidence, automatic)
 	}
 	loadReplacement := func() (serviceReplacementRecord, error) {
 		var replacement serviceReplacementRecord

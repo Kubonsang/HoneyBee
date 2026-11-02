@@ -20,7 +20,12 @@ export async function bindCandidateTools(directory, compatibility, maintenanceBa
           "0.0.0+cfa606fd4143.hb13.topology6.qa-baseline",
           "0.0.0+cfa606fd4143.hb13.topology7.qa-baseline",
         ]
-      : ["0.0.0+cfa606fd4143.hb13", "0.0.0+cfa606fd4143.hb15", "0.0.0+cfa606fd4143.hb16"]
+      : [
+          "0.0.0+cfa606fd4143.hb13",
+          "0.0.0+cfa606fd4143.hb15",
+          "0.0.0+cfa606fd4143.hb16",
+          "0.0.0+cfa606fd4143.hb17",
+        ]
     ).includes(manifest.workspaceStorageVersion),
     "Unexpected candidate component version",
   );

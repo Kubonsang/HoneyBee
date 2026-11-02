@@ -265,14 +265,18 @@ func admitMaintenanceDiskVolumes(expected map[uint32]string, check func() error)
 // stopped/disabled service with independently proven process exit during recovery.
 // Returned handles must remain alive until quiesce. No detach occurs here.
 func (area *maintenanceArea) reserveTopology(expected serviceEvidence, transaction string, assertPaused func() error) (*maintenanceVolumeReservation, error) {
-	if area == nil || assertPaused == nil || !migrationDigest(transaction) {
-		return nil, errors.New("paused protected transaction required")
+	return area.reserveTopologyMode(expected, transaction, assertPaused, false)
+}
+
+func (area *maintenanceArea) reserveTopologyMode(expected serviceEvidence, transaction string, assertSource func() error, detachedOnly bool) (*maintenanceVolumeReservation, error) {
+	if area == nil || assertSource == nil || !migrationDigest(transaction) {
+		return nil, errors.New("protected transaction and source proof required")
 	}
 	check := func() error {
 		if err := area.assertHeld(); err != nil {
 			return err
 		}
-		return assertPaused()
+		return assertSource()
 	}
 	if err := check(); err != nil {
 		return nil, err
@@ -369,6 +373,9 @@ func (area *maintenanceArea) reserveTopology(expected serviceEvidence, transacti
 		attached, err := maintenanceImageLoaded(lease.ChildPath)
 		if err != nil {
 			return reject(err)
+		}
+		if detachedOnly && attached {
+			return reject(errors.New("legacy recovery requires preserving release of every workspace before maintenance"))
 		}
 		topology.Mounts = append(topology.Mounts, maintenanceMount{lease, attached})
 		if !attached {

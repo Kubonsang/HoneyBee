@@ -129,6 +129,66 @@ windowsTest(
     await preserved(f);
   },
 );
+windowsTest(
+  "explicit legacy preparation binds recovery intent through actual inactive publication",
+  async () => {
+    const f = await setup(true);
+    const file = path.join(f.options.stageAttempt, "release.json");
+    const manifest = JSON.parse(await readFile(file));
+    manifest.components.storage.migration = {
+      kind: "service-replacement",
+      supportedSourceVersions: ["0.0.0+cfa606fd4143.hb12"],
+    };
+    const bytes = Buffer.from(JSON.stringify(manifest));
+    await writeFile(file, bytes);
+    await writeFile(
+      path.join(f.options.stageAttempt, "release.sig.json"),
+      signReleaseManifest(bytes, keys.privateKey),
+    );
+    f.options.expectedManifestSha256 = sha256(bytes);
+    f.options.sourceRecovery = "legacy-hb12-detached";
+    Object.assign(f.observation, {
+      manifestSha256: sha256(bytes),
+      sourceComponentVersion: "0.0.0+cfa606fd4143.hb12",
+      status: "migration-required",
+      sourceRecovery: "legacy-hb12-detached",
+    });
+    let observations = 0;
+    const result = await prepareAuthenticatedUpdate(f.options, {
+      observe: async (request) => {
+        observations++;
+        assert.equal(request.sourceRecovery, "legacy-hb12-detached");
+        return { ...f.observation };
+      },
+    });
+    assert(observations >= 4);
+    const plan = JSON.parse(await readFile(result.planPath));
+    assert.equal(plan.identity.sourceRecovery, "legacy-hb12-detached");
+    assert.equal(plan.identity.sourceComponentVersion, "0.0.0+cfa606fd4143.hb12");
+    await preserved(f);
+  },
+);
+
+test("authenticated preparation refuses unknown, unsolicited or inapplicable recovery intent", async () => {
+  for (const scenario of ["unknown", "unsolicited", "not-service"]) {
+    const f = await setup();
+    if (scenario === "unknown") f.options.sourceRecovery = "force";
+    if (scenario === "unsolicited") f.observation.sourceRecovery = "legacy-hb12-detached";
+    if (scenario === "not-service") f.options.sourceRecovery = "legacy-hb12-detached";
+    let planned = false;
+    await assert.rejects(
+      prepareAuthenticatedUpdate(f.options, {
+        observe: f.observe,
+        plan: async () => {
+          planned = true;
+          throw Error("must not prepare");
+        },
+      }),
+    );
+    assert.equal(planned, false);
+    await preserved(f);
+  }
+});
 for (const failure of [
   "signature",
   "manifest",

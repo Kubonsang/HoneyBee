@@ -179,7 +179,7 @@ func execute(args []string) (any, error) {
 		if len(args) != 1 {
 			return nil, errors.New("install-capabilities accepts no arguments")
 		}
-		return map[string]any{"schemaVersion": 1, "freshInstallElevation": 1, "serviceUpdateSession": 1}, nil
+		return map[string]any{"schemaVersion": 1, "freshInstallElevation": 1, "serviceUpdateSession": 1, "legacyHb12Recovery": 1}, nil
 	case "install-elevated":
 		flags := flag.NewFlagSet("install-elevated", flag.ContinueOnError)
 		flags.SetOutput(io.Discard)

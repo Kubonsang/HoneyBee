@@ -10,6 +10,7 @@ import {
   DesktopGitDiffV1Schema,
   DesktopIpcChannels,
   DesktopUpdateStatusV1Schema,
+  DesktopStorageRecoveryV1Schema,
   DesktopProjectCandidateV1Schema,
   DesktopProjectInspectionV1Schema,
   DesktopProjectV2Schema,
@@ -28,6 +29,10 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  storageRecoveryStatus: () =>
+    invoke(DesktopIpcChannels.storageRecoveryStatus, DesktopStorageRecoveryV1Schema),
+  storageRecoveryAction: (request) =>
+    invoke(DesktopIpcChannels.storageRecoveryAction, z.boolean(), request),
   updateStatus: () => invoke(DesktopIpcChannels.updateStatus, DesktopUpdateStatusV1Schema),
   checkUpdate: () => invoke(DesktopIpcChannels.updateCheck, DesktopUpdateStatusV1Schema),
   cancelUpdateCheck: () => invoke(DesktopIpcChannels.updateCancel, DesktopUpdateStatusV1Schema),

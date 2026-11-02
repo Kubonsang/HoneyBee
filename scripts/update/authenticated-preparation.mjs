@@ -36,22 +36,34 @@ export const prepareAuthenticatedUpdate = async (
   { observe = observeUpdateSource, plan = createUpdatePlan, publish = publishPreparedVersion } = {},
 ) => {
   options = { ...options, trustedPublicKeys: [...options.trustedPublicKeys] };
+  assert(
+    options.sourceRecovery === undefined || options.sourceRecovery === "legacy-hb12-detached",
+    "Unsupported source recovery intent",
+  );
   const root = path.resolve(options.installationRoot);
   const stage = path.resolve(options.stageAttempt);
   const authenticated = await authenticateStagedRelease(options);
   const serviceCandidate =
     authenticated.manifest.components.storage.migration.kind === "service-replacement";
+  if (options.sourceRecovery)
+    assert(serviceCandidate, "Legacy recovery requires service replacement");
   const request = {
     installationRoot: root,
     manifestPath: path.join(stage, "release.json"),
     manifestSha256: authenticated.manifestSha256,
     bootstrapperVersion: options.bootstrapperVersion,
     channel: options.channel,
+    ...(options.sourceRecovery ? { sourceRecovery: options.sourceRecovery } : {}),
   };
   const admit = async (value) => {
     assert.deepEqual(value, request, "Unexpected preflight request");
     await authenticateStagedRelease(options);
     const observation = await observe(value);
+    assert.equal(
+      observation.sourceRecovery,
+      options.sourceRecovery,
+      "Source recovery intent changed",
+    );
     assert(
       observation.status === (serviceCandidate ? "migration-required" : "app-only-candidate") &&
         observation.activationAllowed === false,
@@ -67,6 +79,7 @@ export const prepareAuthenticatedUpdate = async (
       manifestSha256: authenticated.manifestSha256,
       bootstrapperVersion: options.bootstrapperVersion,
       channel: options.channel,
+      ...(options.sourceRecovery ? { sourceRecovery: options.sourceRecovery } : {}),
     },
     { observe: admit },
   );

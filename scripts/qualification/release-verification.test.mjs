@@ -156,6 +156,7 @@ test("classification retains Windows-specific Go and rejects unknown PowerShell 
   assert.equal(classifyTest("tools/workspace-storage-host/service_windows_test.go"), "windows");
   assert.equal(classifyTest("scripts/new.test.ps1"), "unclassified");
   assert.equal(classifyTest("scripts/qualification/native-evidence.test.ps1"), "docker");
+  assert.equal(classifyTest("scripts/qualification/release-vm.test.ps1"), "docker+windows");
   assert.equal(classifyTest("scripts/new.test.mjs"), "docker+windows");
   assert.equal(classifyTest("other/new.test.ts"), "unclassified");
   assert.equal(classifyTest("scripts/new.test.js"), "unclassified");
@@ -192,6 +193,21 @@ test("source equivalence refuses product and package changes", () => {
     ]),
   );
   assert(!policyOnlySourceChange([]));
+  assert(
+    policyOnlySourceChange([
+      "scripts/installation/beta32-delivery-approval.mjs",
+      "scripts/installation/beta32-delivery-approval.test.mjs",
+      "scripts/installation/complete-public-beta.mjs",
+      "scripts/installation/publish-beta.mjs",
+    ]),
+  );
+  for (const file of [
+    "scripts/installation/setup-entry.mjs",
+    "scripts/installation/build-setup.mjs",
+    "scripts/update/setup-upgrade.mjs",
+    "scripts/installation/prepare-distribution.mjs",
+  ])
+    assert(!policyOnlySourceChange(["scripts/installation/beta32-delivery-approval.mjs", file]));
   assert(!policyOnlySourceChange(["packages/core/src/workspace-storage.ts"]));
   assert(
     !policyOnlySourceChange(["scripts/qualification/release-verification.mjs", "package.json"]),
@@ -221,6 +237,15 @@ test("change impact selects behavior, while unknown production changes block adm
   const unknown = impact(["new-build-system.config"]);
   assert.deepEqual(unknown.unclassified, ["new-build-system.config"]);
   assert(!unknown.rerunGates.includes("interruption-matrix"));
+});
+test("dependency resolution changes require every acceptance gate", () => {
+  for (const file of ["pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const result = impact([file]);
+    assert.deepEqual(result.unclassified, []);
+    assert.deepEqual(new Set(result.rerunGates), new Set(fixedAcceptanceGates));
+    assert.deepEqual(result.reasons, [{ file, scope: "dependency-resolution" }]);
+  }
+  assert.deepEqual(impact(["other-workspace.yaml"]).unclassified, ["other-workspace.yaml"]);
 });
 test("capacity admission includes expected growth, guest service floor and child reserve", () => {
   const base = { hostFreeBytes: 60 * GiB, guestFreeBytes: 30 * GiB, vmBytes: 29 * GiB };

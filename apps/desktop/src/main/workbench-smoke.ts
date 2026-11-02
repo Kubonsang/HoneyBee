@@ -20,6 +20,20 @@ export const verifyWorkbench = async (browser: BrowserWindow): Promise<void> => 
       return result;
     };
     await waitFor(() => document.querySelectorAll(".workspace-row").length === 3);
+    document.querySelector<HTMLButtonElement>("[data-testid='storage-recovery-open']")?.click();
+    await waitFor(
+      () => document.querySelector("[data-testid='storage-recovery'] .storage-versions") !== null,
+    );
+    const recovery = document.querySelector("[data-testid='storage-recovery']");
+    if (!recovery?.textContent?.includes("hb12"))
+      throw new Error("Storage recovery lost the installed component version.");
+    if (!recovery.textContent.includes("Workspace"))
+      throw new Error("Storage recovery preservation guidance is missing.");
+    recovery.querySelector<HTMLButtonElement>("header button")?.click();
+    await waitFor(() => document.querySelector("[data-testid='storage-recovery']") === null);
+    if (document.querySelectorAll(".workspace-row").length !== 3)
+      throw new Error("Opening recovery changed Workspaces.");
+
     document.querySelector<HTMLButtonElement>("[data-testid='usage-tab']")?.click();
     await waitFor(() => document.querySelector(".usage-panel") !== null);
     if (document.querySelector(".usage-panel table") !== null)

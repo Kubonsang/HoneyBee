@@ -41,7 +41,7 @@
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
     "test:run": "vitest run && corepack pnpm test:storage-host && corepack pnpm test:launcher && corepack pnpm test:setup && corepack pnpm test:update && corepack pnpm test:update-trust && corepack pnpm test:application-repair && corepack pnpm test:release-key && corepack pnpm test:combined-update && corepack pnpm test:qualification-flow",
-    "test:update-trust": "node --test scripts/update/release-authentication.test.mjs scripts/update/authenticated-preparation.test.mjs scripts/update/update-job.test.mjs scripts/update/recovery-source.test.mjs scripts/update/activate-authenticated.test.mjs scripts/update/update-outcome.test.mjs scripts/update/setup-upgrade.test.mjs scripts/recovery/reconnect-workspaces.test.mjs",
+    "test:update-trust": "node --test scripts/update/release-authentication.test.mjs scripts/update/authenticated-preparation.test.mjs scripts/update/update-job.test.mjs scripts/update/recovery-source.test.mjs scripts/update/activate-authenticated.test.mjs scripts/update/update-outcome.test.mjs scripts/update/setup-upgrade.test.mjs scripts/update/legacy-setup-source.test.mjs scripts/recovery/reconnect-workspaces.test.mjs",
     "test:launcher": "go -C tools/honeybee-launcher test ./... && go -C tools/honeybee-launcher vet ./...",
     "test:storage-host": "go -C tools/workspace-storage-host test ./...",
     "package:setup": "node scripts/installation/build-setup.mjs",
@@ -57,7 +57,7 @@
     "smoke:setup": "node scripts/installation/smoke-setup.mjs",
     "test:setup": "node --test scripts/installation/fresh-install.test.mjs scripts/installation/service-setup.test.mjs scripts/installation/repair-admission.test.mjs scripts/installation/distribution-policy.test.mjs scripts/installation/beta32-delivery-approval.test.mjs scripts/installation/publish-assembly.test.mjs",
     "test:update-admission": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node node_modules/typescript/bin/tsc -p apps/desktop/tsconfig.main.build.json && node --test scripts/update/combined-admission.test.mjs scripts/update/desktop-session.test.mjs",
-    "test:combined-update": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node --test scripts/update/combined-update.test.mjs scripts/update/combined-coordinator.test.mjs scripts/update/combined-application.test.mjs scripts/update/native-service-update.test.mjs scripts/update/service-update-session.test.mjs",
+    "test:combined-update": "node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node --test scripts/update/combined-update.test.mjs scripts/update/combined-coordinator.test.mjs scripts/update/combined-application.test.mjs scripts/update/native-service-update.test.mjs scripts/update/service-update-session.test.mjs scripts/update/legacy-source-baseline.test.mjs",
     "test:update": "go -C tools/honeybee-update-package test ./... && go -C tools/honeybee-update-package vet ./... && node scripts/update/build-package-tool.mjs && node node_modules/typescript/bin/tsc -p packages/core/tsconfig.build.json && node node_modules/typescript/bin/tsc -p apps/desktop/tsconfig.main.build.json && node --test scripts/update/desktop-session.test.mjs scripts/update/desktop-update-lifecycle.test.mjs scripts/update/application-activity.test.mjs scripts/update/stage-release.test.mjs scripts/update/prepare-release.test.mjs scripts/update/update-plan.test.mjs scripts/update/update-transaction.test.mjs scripts/update/app-activation.test.mjs scripts/update/publish-version.test.mjs scripts/update/published-update.test.mjs scripts/update/version-health.test.mjs scripts/update/doctor-job.test.mjs scripts/qualification/qa-registry.test.mjs scripts/update/application-activity.test.mjs scripts/qualification/preservation.test.mjs",
     "stage:update": "node scripts/update/stage.mjs",
     "build:update-package": "node scripts/update/build-package-tool.mjs",
@@ -76,6 +76,6 @@
     "prettier": "^3.8.1",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.52.0",
-    "vitest": "^4.1.11"
+    "vitest": "^4.1.12"
   }
 }

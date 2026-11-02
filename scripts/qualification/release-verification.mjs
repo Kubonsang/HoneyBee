@@ -43,6 +43,7 @@ export const git = (root, args) =>
 export function classifyTest(file) {
   if (file.endsWith(".test.ps1")) {
     if (/\/(native-fault-baseline|native-evidence)\.test\.ps1$/u.test(file)) return "docker";
+    if (file.endsWith("/release-vm.test.ps1")) return "docker+windows";
     if (file.endsWith("/inspect-integrated-guest.test.ps1")) return "windows";
     return "unclassified";
   }
@@ -155,6 +156,11 @@ export function impact(files) {
     } else if (/^(apps\/|packages\/)/u.test(file)) {
       gates.add("workspace-preservation");
       reasons.push({ file, scope: "application" });
+    } else if (["pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(file)) {
+      // Resolution and overrides may change both the application runtime and
+      // the installed update tools, even when declarations stay unchanged.
+      fixedAcceptanceGates.forEach((gate) => gates.add(gate));
+      reasons.push({ file, scope: "dependency-resolution" });
     } else if (file === "package.json" || file.endsWith("/package.json")) {
       gates.add("artifact-integrity");
       reasons.push({ file, scope: "build-manifest" });
@@ -187,7 +193,16 @@ export function versionOnlyManifestChange(before, after) {
 
 export function policyOnlySourceChange(files) {
   return (
-    files.length > 0 && files.every((file) => /^(scripts\/qualification\/|docs\/)/u.test(file))
+    files.length > 0 &&
+    files.every(
+      (file) =>
+        /^(scripts\/qualification\/|docs\/)/u.test(file) ||
+        // These publication-only approval/completion tools are not embedded in
+        // Setup or the recovery runtime. Artifact hashes still must match.
+        /^scripts\/installation\/(beta32-delivery-approval(?:\.test)?|complete-public-beta|publish-beta)\.mjs$/u.test(
+          file,
+        ),
+    )
   );
 }
 

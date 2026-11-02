@@ -13,21 +13,30 @@ import (
 )
 
 type serviceRecoveryContext struct {
-	SchemaVersion        int                  `json:"schemaVersion"`
-	TransactionSHA256    string               `json:"transactionSha256"`
-	SourceEvidenceSHA256 string               `json:"sourceEvidenceSha256"`
-	MigrationName        string               `json:"migrationName"`
-	MigrationSHA256      string               `json:"migrationSha256"`
-	WorkerExecutable     string               `json:"workerExecutable"`
-	WorkerSHA256         string               `json:"workerSha256"`
-	ReleaseSource        nativeReleaseSource  `json:"releaseSource"`
-	ApplicationRoot      string               `json:"applicationRoot"`
-	SourcePointerSHA256  string               `json:"sourcePointerSha256"`
-	TargetPointerSHA256  string               `json:"targetPointerSha256"`
-	Owner                serviceRecoveryOwner `json:"owner"`
+	SchemaVersion           int                  `json:"schemaVersion"`
+	TransactionSHA256       string               `json:"transactionSha256"`
+	SourceEvidenceSHA256    string               `json:"sourceEvidenceSha256"`
+	MigrationName           string               `json:"migrationName"`
+	MigrationSHA256         string               `json:"migrationSha256"`
+	WorkerExecutable        string               `json:"workerExecutable"`
+	WorkerSHA256            string               `json:"workerSha256"`
+	ReleaseSource           nativeReleaseSource  `json:"releaseSource"`
+	ApplicationRoot         string               `json:"applicationRoot"`
+	SourcePointerSHA256     string               `json:"sourcePointerSha256"`
+	TargetPointerSHA256     string               `json:"targetPointerSha256"`
+	Owner                   serviceRecoveryOwner `json:"owner"`
+	SourceRecovery          string               `json:"sourceRecovery,omitempty"`
+	SourceObservationSHA256 string               `json:"sourceObservationSha256,omitempty"`
 }
 
 func (r serviceRecoveryContext) validate(areaPath string) error {
+	if r.SourceRecovery == "" {
+		if r.SourceObservationSHA256 != "" {
+			return errors.New("unsolicited legacy source observation")
+		}
+	} else if r.SourceRecovery != legacyHb12Recovery || !migrationDigest(r.SourceObservationSHA256) || r.ReleaseSource.AppVersion != legacySourceAppVersion || r.ReleaseSource.ComponentVersion != legacyHb12Component {
+		return errors.New("unbound legacy recovery context")
+	}
 	if r.SchemaVersion != 1 || !migrationDigest(r.TransactionSHA256) || !migrationDigest(r.SourceEvidenceSHA256) || !migrationDigest(r.MigrationSHA256) || !migrationDigest(r.SourcePointerSHA256) || !migrationDigest(r.TargetPointerSHA256) || r.SourcePointerSHA256 == r.TargetPointerSHA256 || r.Owner.PID == 0 || r.Owner.Created == 0 {
 		return errors.New("invalid recovery context identity")
 	}
@@ -129,6 +138,9 @@ func (area *maintenanceArea) recordServiceRecovery(record serviceRecoveryContext
 	}
 	if source.Evidence.Receipt.WorkspaceRoot != filepath.Join(record.ApplicationRoot, "Workspaces") || source.Evidence.Receipt.ComponentVersion != record.ReleaseSource.ComponentVersion {
 		return serviceRecoveryRegistration{}, errors.New("recovery context differs from installed user binding")
+	}
+	if err := validateLegacyRecoverySource(record.SourceRecovery, record.ReleaseSource, source.Evidence); err != nil {
+		return serviceRecoveryRegistration{}, err
 	}
 	journal, err := area.loadMigration(record.MigrationName, record.MigrationSHA256)
 	if err != nil {

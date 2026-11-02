@@ -148,7 +148,15 @@ describe("Workspace doctor", () => {
     const mismatch = await core.doctor({ storageCommand, expectedComponentVersion: "next" });
     expect(mismatch.ready).toBe(false);
     expect(mismatch.checks).toContainEqual(
-      expect.objectContaining({ code: "storage.component-version", status: "fail" }),
+      expect.objectContaining({
+        code: "storage.component-version",
+        status: "fail",
+        expectedVersion: "next",
+        actualVersion: "test",
+      }),
+    );
+    expect(mismatch.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.install-receipt", status: "pass" }),
     );
     const matching = await core.doctor({ storageCommand, expectedComponentVersion: "test" });
     expectPlatformReadiness(matching);

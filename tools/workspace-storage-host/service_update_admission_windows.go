@@ -30,6 +30,7 @@ type serviceUpdateAdmission struct {
 	ApplicationRoot         string              `json:"applicationRoot"`
 	SourcePointer           []byte              `json:"sourcePointer"`
 	SourceObservationSHA256 string              `json:"sourceObservationSha256"`
+	SourceRecovery          string              `json:"sourceRecovery,omitempty"`
 	TargetPointer           []byte              `json:"targetPointer"`
 	Source                  nativeReleaseSource `json:"source"`
 	Executable              string              `json:"executable"`
@@ -66,6 +67,9 @@ func validateServiceUpdatePointers(request serviceUpdateAdmission, admitted admi
 	}
 	if source.ActiveVersion != request.Source.AppVersion || target.ActiveVersion != admitted.Release.Version || target.Generation != source.Generation+1 || target.ManifestSHA256 != admitted.Release.Recovery.LaunchManifestSHA256 {
 		return errors.New("application selection differs from authenticated release")
+	}
+	if request.SourceRecovery != "" && (request.SourceRecovery != legacyHb12Recovery || source.ActiveVersion != legacySourceAppVersion || source.ManifestSHA256 != legacySourceLaunchManifest || request.Source.ComponentVersion != legacyHb12Component) {
+		return errors.New("legacy recovery must bind the reproduced source application")
 	}
 	return nil
 }
@@ -129,6 +133,9 @@ func stageInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, req
 	if source.Receipt.StoreRoot != store || source.Receipt.WorkspaceRoot != filepath.Join(request.ApplicationRoot, "Workspaces") || source.Receipt.ComponentVersion != request.Source.ComponentVersion {
 		return empty, errors.New("installed service and application user binding differs")
 	}
+	if err = validateLegacyRecoverySource(request.SourceRecovery, request.Source, source); err != nil {
+		return empty, err
+	}
 	var observation bytes.Buffer
 	encoder := json.NewEncoder(&observation)
 	encoder.SetEscapeHTML(false)
@@ -151,7 +158,7 @@ func stageInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, req
 		if err != nil {
 			return empty, err
 		}
-		if record.Owner != owner || record.SourceEvidenceSHA256 != sourcePin || record.ReleaseSource != request.Source || record.ApplicationRoot != request.ApplicationRoot || record.SourcePointerSHA256 != evidenceHash(request.SourcePointer) || record.TargetPointerSHA256 != evidenceHash(request.TargetPointer) {
+		if record.Owner != owner || record.SourceEvidenceSHA256 != sourcePin || record.ReleaseSource != request.Source || record.ApplicationRoot != request.ApplicationRoot || record.SourcePointerSHA256 != evidenceHash(request.SourcePointer) || record.TargetPointerSHA256 != evidenceHash(request.TargetPointer) || record.SourceRecovery != request.SourceRecovery || (request.SourceRecovery != "" && record.SourceObservationSHA256 != request.SourceObservationSHA256) {
 			return empty, errors.New("service admission retry conflicts with protected owner")
 		}
 		held, candidate, err := area.openServiceCandidate(request.TransactionSHA256, request.Source, keys)
@@ -176,7 +183,7 @@ func stageInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, req
 	if err != nil {
 		return empty, err
 	}
-	if status.State != svc.Running || status.ProcessId == 0 || status.Accepts&svc.AcceptPauseAndContinue == 0 {
+	if status.State != svc.Running || status.ProcessId == 0 || (request.SourceRecovery == "" && status.Accepts&svc.AcceptPauseAndContinue == 0) {
 		return empty, errors.New("installed service does not support recoverable maintenance pause")
 	}
 	candidate, err := area.stageServiceCandidate(request.TransactionSHA256, request.Executable, request.Manifest, request.Signature, request.Inventory, request.Source, keys)
@@ -195,6 +202,10 @@ func stageInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, req
 	}
 	defer journal.closePrivate()
 	record := serviceRecoveryContext{SchemaVersion: 1, TransactionSHA256: request.TransactionSHA256, SourceEvidenceSHA256: sourcePin, MigrationName: filepath.Base(journal.directory), MigrationSHA256: journal.identitySHA256, WorkerExecutable: filepath.Join(area.Path, candidate.PayloadName, "host.exe"), WorkerSHA256: admitted.ExecutableSHA256, ReleaseSource: request.Source, ApplicationRoot: request.ApplicationRoot, SourcePointerSHA256: evidenceHash(request.SourcePointer), TargetPointerSHA256: evidenceHash(request.TargetPointer), Owner: owner}
+	if request.SourceRecovery != "" {
+		record.SourceRecovery = request.SourceRecovery
+		record.SourceObservationSHA256 = request.SourceObservationSHA256
+	}
 	registration, err := area.recordServiceRecovery(record)
 	if err != nil {
 		return empty, err

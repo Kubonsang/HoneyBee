@@ -14,7 +14,11 @@ import (
 )
 
 func loadRecoverySource(area *maintenanceArea, record serviceRecoveryContext) (serviceSourceRecord, error) {
-	return loadServiceSourceRecord(filepath.Dir(area.Path), record.TransactionSHA256, record.SourceEvidenceSHA256, area.restoreRecordStorage(area.assertHeld, 64<<10), area.assertHeld)
+	source, err := loadServiceSourceRecord(filepath.Dir(area.Path), record.TransactionSHA256, record.SourceEvidenceSHA256, area.restoreRecordStorage(area.assertHeld, 64<<10), area.assertHeld)
+	if err != nil {
+		return source, err
+	}
+	return source, validateLegacyRecoverySource(record.SourceRecovery, record.ReleaseSource, source.Evidence)
 }
 
 func loadRecoveryReplacement(area *maintenanceArea, record serviceRecoveryContext, source serviceEvidence) (serviceReplacementRecord, error) {
@@ -66,7 +70,11 @@ func resumeInstalledPair(ctx context.Context, area *maintenanceArea, record serv
 		return err
 	}
 	defer bound.close()
-	_, err = area.restoreRecordStorage(area.assertHeld, 16<<20).read("service-topology-" + record.TransactionSHA256 + ".json")
+	if resumed, err := bound.resumeLegacyRunningTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic); err != nil || resumed {
+		return err
+	}
+	topologyTransaction := pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected)
+	_, err = area.restoreRecordStorage(area.assertHeld, 16<<20).read("service-topology-" + topologyTransaction + ".json")
 	if os.IsNotExist(err) {
 		status, err := bound.handle.Query()
 		if err != nil {
@@ -80,7 +88,7 @@ func resumeInstalledPair(ctx context.Context, area *maintenanceArea, record serv
 	if err != nil {
 		return err
 	}
-	return bound.resumeRecordedTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic)
+	return bound.resumeRecordedTopology(ctx, area, topologyTransaction, source.Evidence, automatic)
 }
 
 // Concrete forward transaction. Only a previously authenticated, armed native
@@ -170,13 +178,30 @@ func prepareInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, r
 	hooks := migrationHooks{
 		AssertHeld: check, ValidateSource: validateSource,
 		AppSelection: func() (string, error) { return recoveryApplicationSelection(record) },
-		PauseSource:  func() error { return bound.pause(ctx) },
+		PauseSource: func() error {
+			if exactLegacyHb12Source(source.Evidence) {
+				return validateSource()
+			}
+			return bound.pause(ctx)
+		},
 		ReserveDisks: func() error {
 			var err error
+			if exactLegacyHb12Source(source.Evidence) {
+				reservation, err = bound.reserveLegacyRetained(area, record.TransactionSHA256)
+				if err != nil {
+					return err
+				}
+				return area.recordLegacyRetainedTopologies(source)
+			}
 			reservation, err = bound.reserve(area, record.TransactionSHA256)
 			return err
 		},
-		StopSource: func() error { return bound.stop(ctx) },
+		StopSource: func() error {
+			if exactLegacyHb12Source(source.Evidence) {
+				return bound.stopLegacyRetained(ctx, area, record.TransactionSHA256, reservation)
+			}
+			return bound.stop(ctx)
+		},
 		QuiesceDisks: func() error {
 			if reservation == nil {
 				return errors.New("pre-stop reservation missing")

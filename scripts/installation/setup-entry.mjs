@@ -17,7 +17,9 @@ import { ensureSetupService } from "./service-setup.mjs";
 import { repairInstalledComponents } from "./component-repair.mjs";
 import { adoptInstalledProjects } from "./adopt-projects.mjs";
 
-const bundle = path.dirname(fileURLToPath(import.meta.url));
+// NSIS may execute from an 8.3 TEMP alias. Normalize its own bundle before
+// passing paths to the strict managed-installation and recovery validators.
+const bundle = await realpath(path.dirname(fileURLToPath(import.meta.url)));
 const target = process.argv[2];
 const runSetup = async () => {
   let repairActivity;
@@ -54,6 +56,22 @@ const runSetup = async () => {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
+    if (!repair && installedPointer) {
+      const { resumeLegacySetupUpgrade } = await import(
+        pathToFileURL(path.join(bundle, "scripts/update/setup-upgrade.mjs")).href
+      );
+      const recovered = await resumeLegacySetupUpgrade({
+        installationRoot: target,
+        mediaDirectory: path.join(bundle, "update-media"),
+        expectedVersion: sourceActivation.activeVersion,
+        allowServiceUpdate: allowInstall,
+      });
+      if (recovered) {
+        process.stdout.write(JSON.stringify(recovered) + "\n");
+        process.exitCode = recovered.ready ? 4 : 2;
+        return;
+      }
+    }
     if (
       !repair &&
       installedPointer &&
@@ -67,6 +85,7 @@ const runSetup = async () => {
         mediaDirectory: path.join(bundle, "update-media"),
         expectedVersion: sourceActivation.activeVersion,
         allowServiceUpdate: allowInstall,
+        sourceInstallation: source,
       });
       process.stdout.write(JSON.stringify(result) + "\n");
       // The update lifecycle already restarted the selected version.

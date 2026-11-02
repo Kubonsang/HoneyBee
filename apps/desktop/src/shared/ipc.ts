@@ -112,6 +112,8 @@ export const DesktopDoctorReportV1Schema = z
           status: z.enum(["pass", "warning", "fail"]),
           message: z.string(),
           subject: z.string().optional(),
+          expectedVersion: z.string().max(128).optional(),
+          actualVersion: z.string().max(128).nullable().optional(),
           remediation: z.array(z.string()).optional(),
         })
         .strict(),
@@ -367,7 +369,24 @@ export const DesktopUpdateStatusV1Schema = z
   .strict();
 export type DesktopUpdateStatusV1 = z.infer<typeof DesktopUpdateStatusV1Schema>;
 
+export const DesktopStorageRecoveryV1Schema = z
+  .object({
+    schemaVersion: z.literal(1),
+    installation: z.enum(["managed", "portable"]),
+    applicationVersion: z.string().min(1).max(128),
+    doctor: DesktopDoctorReportV1Schema,
+  })
+  .strict();
+export type DesktopStorageRecoveryV1 = z.infer<typeof DesktopStorageRecoveryV1Schema>;
+export const DesktopStorageRecoveryActionV1Schema = z
+  .object({
+    action: z.enum(["download-setup", "open-guide"]),
+  })
+  .strict();
+
 export const DesktopIpcChannels = {
+  storageRecoveryStatus: "desktop.storage.recovery-status.v1",
+  storageRecoveryAction: "desktop.storage.recovery-action.v1",
   updateStatus: "desktop.update.status.v1",
   updateCheck: "desktop.update.check.v1",
   updateCancel: "desktop.update.cancel.v1",
@@ -415,6 +434,10 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  storageRecoveryStatus(): Promise<DesktopStorageRecoveryV1>;
+  storageRecoveryAction(
+    request: z.infer<typeof DesktopStorageRecoveryActionV1Schema>,
+  ): Promise<boolean>;
   updateStatus(): Promise<DesktopUpdateStatusV1>;
   checkUpdate(): Promise<DesktopUpdateStatusV1>;
   cancelUpdateCheck(): Promise<DesktopUpdateStatusV1>;

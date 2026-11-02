@@ -40,7 +40,10 @@ const check = (
   code: string,
   status: DoctorCheckV1["status"],
   message: string,
-  options: Pick<DoctorCheckV1, "subject" | "remediation"> = {},
+  options: Pick<
+    DoctorCheckV1,
+    "subject" | "remediation" | "expectedVersion" | "actualVersion"
+  > = {},
 ): DoctorCheckV1 => ({ code, status, message, ...options });
 
 /** Shared prerequisite probe for Doctor and setup. Does not modify user state. */
@@ -248,19 +251,25 @@ export const runWorkspaceDoctor = async (
         diagnostic.receiptValid &&
         diagnostic.executableExists &&
         diagnostic.executableDigestMatches &&
-        diagnostic.userMatches &&
-        (options.expectedComponentVersion === undefined ||
-          diagnostic.componentVersion === options.expectedComponentVersion);
+        diagnostic.userMatches;
       checks.push(
         receiptMatches
           ? check("storage.install-receipt", "pass", "Storage install receipt is valid.")
           : check(
               "storage.install-receipt",
               "fail",
-              "Storage install receipt is missing, invalid, or belongs to a different package/user.",
+              !diagnostic.receiptExists
+                ? "Storage install receipt is missing."
+                : !diagnostic.receiptValid
+                  ? "Storage install receipt is invalid."
+                  : !diagnostic.userMatches
+                    ? "Storage is installed for a different Windows user."
+                    : !diagnostic.executableExists
+                      ? "The installed storage executable is missing."
+                      : "The installed storage executable does not match its receipt.",
               {
                 remediation: [
-                  "Run the documented storage install command with --replace if required.",
+                  "Open Storage recovery in HoneyBee. Keep existing Workspaces and verify the installation owner before repairing the matching installation.",
                 ],
               },
             ),
@@ -272,8 +281,10 @@ export const runWorkspaceDoctor = async (
             diagnostic.componentVersion === options.expectedComponentVersion ? "pass" : "fail",
             `Installed storage version: ${diagnostic.componentVersion ?? "unknown"}; required: ${options.expectedComponentVersion}.`,
             {
+              expectedVersion: options.expectedComponentVersion,
+              actualVersion: diagnostic.componentVersion ?? null,
               remediation: [
-                "Remove older Workspaces with their original CLI and verify branch preservation before following the documented service replacement procedure.",
+                "Open Storage recovery in HoneyBee to update the matching installation. Keep existing Workspaces and their branches; a version mismatch does not require deleting them.",
               ],
             },
           ),

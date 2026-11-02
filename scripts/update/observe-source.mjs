@@ -21,7 +21,12 @@ export const observeUpdateSource = async ({
   manifestSha256,
   bootstrapperVersion,
   channel,
+  sourceRecovery,
 }) => {
+  assert(
+    sourceRecovery === undefined || sourceRecovery === "legacy-hb12-detached",
+    "Unsupported source recovery",
+  );
   const root = path.resolve(installationRoot);
   await plainDirectory(root);
   const pointerBytes = await readBounded(path.join(root, "current.json"));
@@ -39,17 +44,18 @@ export const observeUpdateSource = async ({
   const tools = new WorkspaceToolResolver(options).resolve();
   assert(tools?.provenance === "managed", "Managed installation required");
   const manifest = parseReleaseManifest(await readBounded(manifestPath), manifestSha256);
-  admitRelease(manifest, {
-    currentVersion: pointer.activeVersion,
-    bootstrapperVersion,
-    channel,
-    storageComponentVersion: tools.expectedComponentVersion,
-  });
   const plan = await planStorageUpdate(
     new WindowsWorkspaceStorage(),
     tools,
     manifest.components.storage,
+    sourceRecovery ? { sourceRecovery, installationRoot: root } : {},
   );
+  admitRelease(manifest, {
+    currentVersion: pointer.activeVersion,
+    bootstrapperVersion,
+    channel,
+    storageComponentVersion: plan.sourceComponentVersion,
+  });
   assert.deepEqual(
     await readBounded(path.join(root, "current.json")),
     pointerBytes,

@@ -4,10 +4,223 @@ import { generateKeyPairSync } from "node:crypto";
 import { cp, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
-import { createEmbeddedReleaseTransport, authorizeMatchingSetup } from "./setup-upgrade.mjs";
+import {
+  createEmbeddedReleaseTransport,
+  authorizeMatchingSetup,
+  runExternalSetupJob,
+  resumeLegacySetupUpgrade,
+  findReusableLegacyPreparation,
+} from "./setup-upgrade.mjs";
 import { signReleaseManifest } from "./release-authentication.mjs";
 import { stageAuthenticatedRelease } from "./authenticated-release.mjs";
 import { sha256 } from "./release-manifest.mjs";
+import {
+  combinedUpdateIdentity,
+  inspectCombinedJournal,
+  readCombinedOutcome,
+} from "./combined-update.mjs";
+import { persistCombinedApplicationContext } from "./combined-application.mjs";
+
+for (const scenario of [
+  "valid",
+  "other-source",
+  "other-release",
+  "failed-job",
+  "changed-request",
+  "changed-plan",
+  "ordinary-plan",
+]) {
+  test(`legacy Setup reuses only a fully bound preparation: ${scenario}`, async () => {
+    const parent = path.resolve("output/setup-media-tests");
+    await mkdir(parent, { recursive: true });
+    const root = await mkdtemp(path.join(parent, "reuse-"));
+    const job = path.join(root, "update/jobs/job-reuse123"),
+      attempt = path.join(root, "update/prepare-reuse123");
+    await mkdir(job, { recursive: true });
+    await mkdir(attempt, { recursive: true });
+    const options = {
+      installationRoot: root,
+      manifestSha256: "a".repeat(64),
+      sourcePointerSha256: "b".repeat(64),
+    };
+    const request = {
+      schemaVersion: 1,
+      operation: "prepare",
+      manifestSha256: scenario === "other-release" ? "c".repeat(64) : options.manifestSha256,
+      sourcePointerSha256:
+        scenario === "other-source" ? "c".repeat(64) : options.sourcePointerSha256,
+    };
+    const requestBytes = Buffer.from(JSON.stringify(request));
+    await writeFile(path.join(job, "request.json"), requestBytes);
+    const planPath = path.join(attempt, "plan.json");
+    const plan = {
+      identity: {
+        sourceRecovery: scenario === "ordinary-plan" ? undefined : "legacy-hb12-detached",
+        sourceComponentVersion: "0.0.0+cfa606fd4143.hb12",
+        sourcePointerSha256: options.sourcePointerSha256,
+        manifestSha256: options.manifestSha256,
+      },
+    };
+    const planBytes = Buffer.from(JSON.stringify(plan));
+    await writeFile(planPath, planBytes);
+    const result = {
+      state: "ReadyForActivation",
+      activationAllowed: false,
+      manifestSha256: options.manifestSha256,
+      sourcePointerSha256: options.sourcePointerSha256,
+      planPath,
+      planSha256: sha256(planBytes),
+      publicationDirectory: path.join(root, "update/publications/publish-reuse123"),
+    };
+    await writeFile(
+      path.join(job, "result.json"),
+      JSON.stringify({
+        schemaVersion: 1,
+        passed: scenario !== "failed-job",
+        requestSha256: sha256(requestBytes),
+        result,
+      }),
+    );
+    if (scenario === "changed-request")
+      await writeFile(
+        path.join(job, "request.json"),
+        JSON.stringify({ ...request, extra: "changed" }),
+      );
+    if (scenario === "changed-plan") await writeFile(planPath, "changed");
+    let calls = 0;
+    const operation = findReusableLegacyPreparation(options, {
+      revalidate: async (value) => {
+        calls++;
+        assert.equal(value.planSha256, sha256(planBytes));
+        assert.equal(value.installationRoot, root);
+      },
+      verify: async (value) => {
+        calls++;
+        assert.equal(value.allowServiceCandidate, true);
+        assert.equal(value.publicationDirectory, result.publicationDirectory);
+      },
+    });
+    if (["changed-request", "changed-plan"].includes(scenario)) await assert.rejects(operation);
+    else {
+      const found = await operation;
+      assert.deepEqual(
+        found,
+        scenario === "valid" ? { name: "job-reuse123", sha256: sha256(requestBytes) } : undefined,
+      );
+    }
+    assert.equal(calls, scenario === "valid" ? 2 : 0);
+  });
+}
+
+test("rerunning Setup without a legacy journal does not create update state", async () => {
+  const parent = path.resolve("output/setup-media-tests");
+  await mkdir(parent, { recursive: true });
+  const root = await mkdtemp(path.join(parent, "no-recovery-"));
+  assert.equal(await resumeLegacySetupUpgrade({ installationRoot: root }), undefined);
+  await assert.rejects(readFile(path.join(root, "update/combined")), { code: "ENOENT" });
+});
+
+for (const scenario of ["cancelled-consent", "other-setup", "multiple", "empty"]) {
+  test(`interrupted legacy Setup admission refuses before authentication: ${scenario}`, async () => {
+    const parent = path.resolve("output/setup-media-tests");
+    await mkdir(parent, { recursive: true });
+    const root = await mkdtemp(path.join(parent, "pending-"));
+    const source = {
+      schemaVersion: 1,
+      generation: 1,
+      activeVersion: "0.1.0-beta.35",
+      manifestSha256: "272b131a2d3deaffedee07f94e904f9ec1d822d868b8eb2494b60576f947b2cb",
+    };
+    const sourceBytes = Buffer.from(JSON.stringify(source));
+    await writeFile(path.join(root, "current.json"), sourceBytes);
+    for (let i = 0; i < (scenario === "multiple" ? 2 : 1); i++) {
+      const identity = {
+        manifestSha256: "a".repeat(64),
+        sourcePointerSha256: sha256(sourceBytes),
+        serviceTransactionSha256: sha256("service-" + i),
+      };
+      const id = combinedUpdateIdentity(identity);
+      await persistCombinedApplicationContext(root, {
+        schemaVersion: 1,
+        identity,
+        identitySha256: id,
+        sourcePointer: sourceBytes.toString("base64"),
+        targetPointer: Buffer.from(
+          JSON.stringify({ ...source, generation: 2, activeVersion: "0.1.0-beta.38" }),
+        ).toString("base64"),
+        launcherSha256: "b".repeat(64),
+        nativeCoordinator: "target",
+        sourceRecovery: "legacy-hb12-detached",
+        sourceObservationSha256: "c".repeat(64),
+      });
+      const directory = path.join(root, "update/combined", id);
+      await mkdir(directory, { recursive: true });
+      if (scenario !== "empty")
+        await writeFile(
+          path.join(directory, "01.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            identitySha256: id,
+            previousSha256: id,
+            state: "Prepared",
+          }),
+        );
+      if (scenario === "empty") {
+        const options = {
+          installationRoot: root,
+          transactionDirectory: directory,
+          sourcePointerSha256: identity.sourcePointerSha256,
+        };
+        assert.equal((await inspectCombinedJournal(options)).state, "Unrecorded");
+        await assert.rejects(readCombinedOutcome(options));
+      }
+    }
+    await assert.rejects(
+      resumeLegacySetupUpgrade({
+        installationRoot: root,
+        expectedVersion: scenario === "other-setup" ? "0.1.0-beta.39" : "0.1.0-beta.38",
+        allowServiceUpdate: scenario === "other-setup" || scenario === "multiple",
+      }),
+      scenario === "other-setup"
+        ? /matching Setup/u
+        : scenario === "multiple"
+          ? /Multiple interrupted/u
+          : /interactive Setup/u,
+    );
+    assert.deepEqual(await readFile(path.join(root, "current.json")), sourceBytes);
+  });
+}
+
+for (const scenario of ["success", "failure", "changed-before", "changed-during"]) {
+  test(`external Setup job retains bound completion evidence: ${scenario}`, async () => {
+    const parent = path.resolve("output/setup-media-tests");
+    await mkdir(parent, { recursive: true });
+    const directory = await mkdtemp(path.join(parent, "job-"));
+    const request = Buffer.from(JSON.stringify({ schemaVersion: 1, operation: "setup-activate" }));
+    const requestPath = path.join(directory, "request.json");
+    await writeFile(requestPath, request);
+    const job = { directory, sha256: sha256(request) };
+    if (scenario === "changed-before") await writeFile(requestPath, "changed");
+    let calls = 0;
+    const operation = runExternalSetupJob(job, async () => {
+      calls++;
+      if (scenario === "failure") throw Error("native operation refused");
+      if (scenario === "changed-during") await writeFile(requestPath, "changed");
+      return { state: "Cancelled" };
+    });
+    if (scenario === "success") assert.equal((await operation).state, "Cancelled");
+    else await assert.rejects(operation);
+    assert.equal(calls, scenario === "changed-before" ? 0 : 1);
+    if (scenario !== "changed-before") {
+      const receipt = JSON.parse(await readFile(path.join(directory, "result.json")));
+      assert.equal(receipt.requestSha256, job.sha256);
+      assert.equal(receipt.passed, scenario === "success");
+    }
+    await assert.rejects(
+      runExternalSetupJob(job, () => assert.fail("job replay must never execute")),
+    );
+  });
+}
 
 test("later matching Setup repairs only the approved app while retaining original infrastructure", async () => {
   const parent = path.resolve("output/setup-media-tests");

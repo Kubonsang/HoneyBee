@@ -91,6 +91,39 @@ func TestServiceUpdatePointersBindExactSignedTarget(t *testing.T) {
 	}
 }
 
+func TestLegacyServiceUpdatePointersRequireKnownSourceLaunchManifest(t *testing.T) {
+	pin := strings.Repeat("a", 64)
+	source := serviceApplicationPointer{1, 1, legacySourceAppVersion, legacySourceLaunchManifest}
+	target := serviceApplicationPointer{1, 2, "0.1.0-beta.38", pin}
+	var admitted admittedServiceRelease
+	admitted.Release.Version = target.ActiveVersion
+	admitted.Release.Recovery.LaunchManifestSHA256 = pin
+	request := serviceUpdateAdmission{SchemaVersion: 1, TransactionSHA256: pin, OwnerPID: 1, ApplicationRoot: filepath.Join(t.TempDir(), "HoneyBee"), Source: nativeReleaseSource{AppVersion: source.ActiveVersion, ComponentVersion: legacyHb12Component}, SourceRecovery: legacyHb12Recovery}
+	request.SourcePointer, _ = json.Marshal(source)
+	request.TargetPointer, _ = json.Marshal(target)
+	if err := validateServiceUpdatePointers(request, admitted); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"launch", "version", "mode", "component"} {
+		r, pointer := request, source
+		switch scenario {
+		case "launch":
+			pointer.ManifestSHA256 = pin
+		case "version":
+			pointer.ActiveVersion = "0.1.0-beta.36"
+			r.Source.AppVersion = pointer.ActiveVersion
+		case "mode":
+			r.SourceRecovery = "unknown"
+		case "component":
+			r.Source.ComponentVersion = "0.0.0+cfa606fd4143.hb13"
+		}
+		r.SourcePointer, _ = json.Marshal(pointer)
+		if err := validateServiceUpdatePointers(r, admitted); err == nil {
+			t.Fatal(scenario, "admitted an unrecognized legacy package")
+		}
+	}
+}
+
 func TestRecoveryRegistrationRequiresRunningPinnedWorker(t *testing.T) {
 	pin := strings.Repeat("a", 64)
 	registration := serviceRecoveryRegistration{pin, pin, filepath.Join(t.TempDir(), "host.exe"), pin}

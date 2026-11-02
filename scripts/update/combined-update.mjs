@@ -57,10 +57,11 @@ export function combinedUpdateIdentity(identity) {
   return sha256(identityBytes);
 }
 
-export async function readCombinedOutcome({
+async function readCombinedJournal({
   installationRoot,
   transactionDirectory,
   sourcePointerSha256,
+  allowEmpty = false,
 }) {
   const root = path.resolve(installationRoot),
     directory = path.resolve(transactionDirectory);
@@ -77,7 +78,7 @@ export async function readCombinedOutcome({
   const names = (await readdir(directory))
     .filter((name) => !/^[a-f0-9-]+\.partial$/u.test(name))
     .sort();
-  assert(names.length > 0 && names.length <= 16);
+  assert((names.length > 0 || allowEmpty) && names.length <= 16);
   let state,
     previous = id;
   for (const [index, name] of names.entries()) {
@@ -93,6 +94,19 @@ export async function readCombinedOutcome({
     state = record.state;
     previous = sha256(bytes);
   }
+  return { state, context };
+}
+
+// State-chain inspection only. In particular a historical completed journal
+// need not still select the current pointer after a later successful update.
+export async function inspectCombinedJournal(options) {
+  const { state } = await readCombinedJournal({ ...options, allowEmpty: true });
+  return { state: state ?? "Unrecorded" };
+}
+
+export async function readCombinedOutcome(options) {
+  const { state, context } = await readCombinedJournal(options);
+  const root = path.resolve(options.installationRoot);
   assert(["Committed", "RolledBack"].includes(state));
   const selected = Buffer.from(
     state === "Committed" ? context.targetPointer : context.sourcePointer,

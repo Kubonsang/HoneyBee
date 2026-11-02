@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { parseStorageServiceEvidence } from "./workspace-service-evidence.js";
-import { planStorageUpdate } from "./workspace-storage-update.js";
+import { planStorageUpdate, publishedLegacyHb12 } from "./workspace-storage-update.js";
 import type {
   ResolvedStorageTools,
   StorageDiagnosticV1,
@@ -217,5 +217,175 @@ it("blocks a diagnostic workspace root that differs from its receipt", async () 
   f.diagnose.mockResolvedValue({ ...(await f.diagnose()), workspaceRoot: "C:\\other" });
   expect((await planStorageUpdate(f.storage, f.tools, f.target)).reason).toBe(
     "source-workspace-root-mismatch",
+  );
+});
+
+const legacyRecovery = {
+  sourceRecovery: "legacy-hb12-detached" as const,
+  installationRoot: "C:\\HoneyBee",
+};
+const legacyFixture = async () => {
+  const f = await fixture();
+  const evidence = {
+    ...f.evidence,
+    executableSha256: "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3",
+    receipt: {
+      ...f.evidence.receipt,
+      componentVersion: "0.0.0+cfa606fd4143.hb12",
+      executableSha256: "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3",
+    },
+  };
+  f.serviceEvidence.mockResolvedValue(evidence);
+  f.diagnose.mockResolvedValue({
+    ...(await f.diagnose()),
+    componentVersion: evidence.receipt.componentVersion,
+  });
+  f.diagnose.mockClear();
+  return {
+    ...f,
+    tools: { ...f.tools, expectedComponentVersion: "0.0.0+cfa606fd4143.hb13" },
+    evidence,
+    target: {
+      componentVersion: "0.0.0+cfa606fd4143.hb17",
+      migration: {
+        kind: "service-replacement" as const,
+        supportedSourceVersions: ["0.0.0+cfa606fd4143.hb12", "0.0.0+cfa606fd4143.hb13"],
+      },
+    },
+  };
+};
+
+it("requires explicit recovery intent for the exact published hb12 behind an hb13 package", async () => {
+  const f = await legacyFixture();
+  expect((await planStorageUpdate(f.storage, f.tools, f.target)).reason).toBe(
+    "source-service-identity-mismatch",
+  );
+  f.serviceEvidence.mockClear();
+  const plan = await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery);
+  expect(plan).toMatchObject({
+    status: "migration-required",
+    reason: "legacy-detached-recovery-required",
+    sourceRecovery: "legacy-hb12-detached",
+    sourceComponentVersion: "0.0.0+cfa606fd4143.hb12",
+    activationAllowed: false,
+    elevation: "service-operation-only",
+  });
+  expect(plan.steps).toContain("lock-retained-workspace-volumes");
+  expect(plan.steps).toContain("stop-legacy-service-with-volume-locks");
+  expect(plan.steps).not.toContain("retain-and-detach-all-workspaces");
+  expect(plan.remainingGates).toContain("qualify-legacy-busy-volume-exclusion");
+  expect(plan.remainingGates).toContain("admit-legacy-detached-recovery");
+  expect(f.tools.expectedComponentVersion).toBe("0.0.0+cfa606fd4143.hb13");
+  expect(f.serviceEvidence).toHaveBeenCalledTimes(2);
+});
+
+it("never performs workspace mutations while observing a legacy recovery candidate", async () => {
+  const f = await legacyFixture();
+  const mutate = vi.fn(async () => {
+    throw new Error("Observation must not mutate Workspaces");
+  });
+  const storage = {
+    ...f.storage,
+    retain: mutate,
+    attachRetained: mutate,
+    prepareRetainedRemoval: mutate,
+    commitRetainedRemoval: mutate,
+  };
+  expect((await planStorageUpdate(storage, f.tools, f.target, legacyRecovery)).status).toBe(
+    "migration-required",
+  );
+  expect(mutate).not.toHaveBeenCalled();
+});
+
+it("binds legacy recovery to the original managed root and source package", async () => {
+  const f = await legacyFixture();
+  expect(
+    (
+      await planStorageUpdate(f.storage, f.tools, f.target, {
+        sourceRecovery: "legacy-hb12-detached",
+      })
+    ).reason,
+  ).toBe("canonical-legacy-installation-root-required");
+  expect(
+    (
+      await planStorageUpdate(
+        f.storage,
+        { ...f.tools, expectedComponentVersion: "different-package" },
+        f.target,
+        legacyRecovery,
+      )
+    ).status,
+  ).toBe("blocked");
+  expect(f.serviceEvidence).not.toHaveBeenCalled();
+  expect(
+    (
+      await planStorageUpdate(f.storage, f.tools, f.target, {
+        ...legacyRecovery,
+        installationRoot: "C:\\OtherHoneyBee",
+      })
+    ).reason,
+  ).toBe("source-workspace-root-mismatch");
+  expect(f.diagnose).not.toHaveBeenCalled();
+});
+
+it("does not bypass selected helper integrity during legacy recovery", async () => {
+  const f = await legacyFixture();
+  await writeFile(f.tools.controlCommand, "tampered recovery helper");
+  expect((await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery)).status).toBe(
+    "blocked",
+  );
+  expect(f.serviceEvidence).not.toHaveBeenCalled();
+});
+
+it("does not use a version label to recover an unknown installed executable", async () => {
+  const f = await legacyFixture();
+  f.serviceEvidence.mockResolvedValue({
+    ...f.evidence,
+    executableSha256: hash("unknown"),
+    receipt: { ...f.evidence.receipt, executableSha256: hash("unknown") },
+  });
+  expect((await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery)).reason).toBe(
+    "source-service-identity-mismatch",
+  );
+  expect(f.diagnose).not.toHaveBeenCalled();
+});
+
+it("requires the release to declare the actual legacy source and service replacement", async () => {
+  const f = await legacyFixture();
+  for (const target of [
+    { ...f.target, migration: { ...f.target.migration, supportedSourceVersions: ["other"] } },
+    { ...f.target, migration: { ...f.target.migration, kind: "none" as const } },
+    { ...f.target, componentVersion: publishedLegacyHb12.componentVersion },
+  ]) {
+    expect((await planStorageUpdate(f.storage, f.tools, target, legacyRecovery)).status).toBe(
+      "blocked",
+    );
+  }
+  expect(f.serviceEvidence).not.toHaveBeenCalled();
+});
+
+it.each(["receiptValid", "executableDigestMatches", "userMatches"] as const)(
+  "keeps the %s identity gate in legacy recovery",
+  async (field) => {
+    const f = await legacyFixture();
+    f.diagnose.mockResolvedValue({ ...(await f.diagnose()), [field]: false });
+    expect((await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery)).status).toBe(
+      "blocked",
+    );
+    expect(f.status).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps manual-recovery and changing-evidence gates in explicit legacy recovery", async () => {
+  const f = await legacyFixture();
+  f.status.mockResolvedValueOnce({ parentCount: 1, manualRecoveryRequired: true });
+  expect((await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery)).status).toBe(
+    "blocked",
+  );
+  f.serviceEvidence
+    .mockResolvedValueOnce(f.evidence)
+    .mockResolvedValueOnce({ ...f.evidence, receiptSha256: hash("changed receipt") });
+  expect((await planStorageUpdate(f.storage, f.tools, f.target, legacyRecovery)).reason).toBe(
+    "source-service-changed-during-preflight",
   );
 });

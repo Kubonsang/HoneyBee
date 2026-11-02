@@ -53,7 +53,12 @@ newly frozen Setup and manifest hashes remain identical. Set
 new config to the original tested source and the new frozen distribution under
 `output/`. The planner verifies Setup, manifest and application ZIP hashes
 and that every intervening tracked change is under `scripts/qualification/`
-or `docs/`; the old native receipt
+or `docs/`, or is one of the publication-only files
+`scripts/installation/beta32-delivery-approval.mjs` (and its test),
+`scripts/installation/publish-beta.mjs`, and
+`scripts/installation/complete-public-beta.mjs`. These publication tools are not
+embedded in Setup or the application. Setup builders, runtime entry points and
+distribution assembly remain excluded. The old native receipt
 keeps its original source and candidate. Docker and Windows receipts must be
 regenerated for the new policy source. If an artifact hash differs, omit
 `sourceEquivalence` and perform focused current-candidate qualification.

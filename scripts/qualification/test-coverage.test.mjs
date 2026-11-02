@@ -31,6 +31,27 @@ test("unexplained skips cannot pass coverage audit", () => {
   input.vitest.testResults[0].assertionResults[0].status = "pending";
   assert.equal(auditCoverage(input).unexpectedSkips, 1);
 });
+
+for (const platform of ["linux", "win32"]) {
+  test(`pinned legacy VM probe requires native evidence on ${platform}`, () => {
+    const input = fixture();
+    input.platform = platform;
+    const event = {
+      Action: "skip",
+      Package: "github.com/Kubonsang/HoneyBee/tools/workspace-storage-host",
+      Test: "TestLegacyRetainedReservationPinnedVM",
+    };
+    input.goLogs = [JSON.stringify(event)];
+    const result = auditCoverage(input);
+    assert.equal(result.unexpectedSkips, 0);
+    assert.equal(result.deferred.length, 1);
+    assert.equal(result.deferred[0].owner, "native");
+    assert.equal(result.outOfScope.length, 0);
+    assert(!result.passed.some((id) => id.endsWith(event.Test)));
+    input.goLogs = [JSON.stringify({ ...event, Package: "unrelated-package" })];
+    assert.equal(auditCoverage(input).unexpectedSkips, 1);
+  });
+}
 test("Windows lifecycle skip is assigned to Windows, not counted as pass", () => {
   const input = fixture();
   const event = JSON.parse(input.nodeLog);
