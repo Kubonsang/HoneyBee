@@ -46,10 +46,15 @@ func exactLegacyHb12Source(source serviceEvidence) bool {
 		source.Receipt.ExecutableSHA256 == legacyHb12Executable
 }
 
-// Preserve the observed live topology for the target. The old broker cannot
-// restore attachments on startup, so its rollback intent must instead describe
-// the same retained children detached. Neither intent modifies lease journals.
+// Preserve the observed live snapshot for cancellation. The old broker cannot
+// restore attachments on startup, so its rollback intent describes retained
+// children detached. The new target reconnects those admitted retained children,
+// including when retrying from that cold rollback. No lease journal is edited.
 func legacyColdTopology(source serviceSourceRecord, topology maintenanceTopology) (serviceSourceRecord, maintenanceTopology, error) {
+	return legacyRetainedTopology(source, topology, false)
+}
+
+func legacyRetainedTopology(source serviceSourceRecord, topology maintenanceTopology, attach bool) (serviceSourceRecord, maintenanceTopology, error) {
 	if !exactLegacyHb12Source(source.Evidence) || !migrationDigest(source.TransactionSHA256) ||
 		topology.SchemaVersion != 1 || topology.TransactionSHA256 != source.TransactionSHA256 ||
 		topology.SourceEvidenceSHA256 != source.SourceEvidenceSHA256 || topology.Mounts == nil || len(topology.Mounts) > 10000 {
@@ -60,7 +65,11 @@ func legacyColdTopology(source serviceSourceRecord, topology maintenanceTopology
 		return serviceSourceRecord{}, maintenanceTopology{}, errors.New("legacy source evidence changed")
 	}
 	result := topology
-	result.TransactionSHA256 = evidenceHash([]byte("legacy-cold-topology:" + source.TransactionSHA256))
+	prefix := "legacy-cold-topology:"
+	if attach {
+		prefix = "legacy-target-topology:"
+	}
+	result.TransactionSHA256 = evidenceHash([]byte(prefix + source.TransactionSHA256))
 	result.Mounts = make([]maintenanceMount, len(topology.Mounts))
 	seen := map[string]bool{}
 	for i, mount := range topology.Mounts {
@@ -71,36 +80,44 @@ func legacyColdTopology(source serviceSourceRecord, topology maintenanceTopology
 			return serviceSourceRecord{}, maintenanceTopology{}, err
 		}
 		seen[mount.Lease.LeaseID] = true
-		result.Mounts[i] = maintenanceMount{Lease: mount.Lease, Attached: false}
+		result.Mounts[i] = maintenanceMount{Lease: mount.Lease, Attached: attach}
 	}
 	source.TransactionSHA256 = result.TransactionSHA256
 	return source, result, nil
 }
 
-func (area *maintenanceArea) recordLegacyColdTopology(source serviceSourceRecord) error {
+func (area *maintenanceArea) recordLegacyRetainedTopologies(source serviceSourceRecord) error {
 	check := area.assertHeld
 	records := area.restoreRecordStorage(check, 16<<20)
 	topology, err := loadMaintenanceTopology(source.TransactionSHA256, source.SourceEvidenceSHA256, source.Evidence.Receipt, records, check)
 	if err != nil {
 		return err
 	}
-	derivedSource, cold, err := legacyColdTopology(source, topology)
-	if err != nil {
-		return err
+	for _, attach := range []bool{false, true} {
+		derivedSource, retained, err := legacyRetainedTopology(source, topology, attach)
+		if err != nil {
+			return err
+		}
+		if err := persistServiceSourceRecord(derivedSource, filepath.Dir(area.Path), records, check); err != nil {
+			return err
+		}
+		data, err := json.Marshal(retained)
+		if err != nil {
+			return err
+		}
+		if err := persistRestoreRecord("service-topology-"+retained.TransactionSHA256+".json", data, 16<<20, records, check); err != nil {
+			return err
+		}
 	}
-	if err := persistServiceSourceRecord(derivedSource, filepath.Dir(area.Path), records, check); err != nil {
-		return err
-	}
-	data, err := json.Marshal(cold)
-	if err != nil {
-		return err
-	}
-	return persistRestoreRecord("service-topology-"+cold.TransactionSHA256+".json", data, 16<<20, records, check)
+	return nil
 }
 
 func pairTopologyTransaction(transaction string, source, expected serviceEvidence) string {
 	if exactLegacyHb12Source(source) && expected == source {
 		return evidenceHash([]byte("legacy-cold-topology:" + transaction))
+	}
+	if exactLegacyHb12Source(source) {
+		return evidenceHash([]byte("legacy-target-topology:" + transaction))
 	}
 	return transaction
 }
@@ -285,6 +302,20 @@ func (area *maintenanceArea) assertLegacyReservedSnapshot(ctx context.Context, s
 	}
 	if !reflect.DeepEqual(cold, expectedCold) {
 		return errors.New("durable legacy rollback topology differs from reserved workspaces")
+	}
+	targetTransaction := evidenceHash([]byte("legacy-target-topology:" + transaction))
+	target, err := loadMaintenanceTopology(targetTransaction, evidenceHash(data), source.Receipt, area.restoreRecordStorage(check, 16<<20), check)
+	if err != nil {
+		return err
+	}
+	expectedTarget := expectedCold
+	expectedTarget.TransactionSHA256 = targetTransaction
+	expectedTarget.Mounts = make([]maintenanceMount, len(topology.Mounts))
+	for i, mount := range topology.Mounts {
+		expectedTarget.Mounts[i] = maintenanceMount{Lease: mount.Lease, Attached: true}
+	}
+	if !reflect.DeepEqual(target, expectedTarget) {
+		return errors.New("durable legacy target topology differs from reserved retained workspaces")
 	}
 	leases, err := readMaintenanceLeases(source.Receipt.StoreRoot, source.Receipt.UserSID, check)
 	if err != nil {

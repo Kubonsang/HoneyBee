@@ -191,7 +191,7 @@ func prepareInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, r
 				if err != nil {
 					return err
 				}
-				return area.recordLegacyColdTopology(source)
+				return area.recordLegacyRetainedTopologies(source)
 			}
 			reservation, err = bound.reserve(area, record.TransactionSHA256)
 			return err

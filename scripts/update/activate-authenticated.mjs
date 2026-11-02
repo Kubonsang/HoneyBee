@@ -16,7 +16,7 @@ import { updateAndRestartDesktopWithDoctor } from "./desktop-session.mjs";
 import { activateInstalledCombinedUpdate } from "./installed-combined-update.mjs";
 
 export async function activateAuthenticatedUpdate(
-  { installationRoot, runtime, request, activationJob },
+  { installationRoot, runtime, request, activationJob, externalSetupRecovery },
   {
     observe,
     checkpoint,
@@ -74,6 +74,20 @@ export async function activateAuthenticatedUpdate(
   const planBytes = await readBounded(options.planPath);
   assert.equal(sha256(planBytes), options.planSha256);
   const plan = JSON.parse(planBytes);
+  assert(externalSetupRecovery === undefined || externalSetupRecovery === true);
+  if (plan.identity.sourceRecovery) {
+    assert.equal(
+      externalSetupRecovery,
+      true,
+      "Legacy activation requires the trusted external Setup runner",
+    );
+    assert.equal(request.operation, "setup-activate");
+  } else
+    assert.equal(
+      externalSetupRecovery,
+      undefined,
+      "External legacy recovery requires an explicit legacy plan",
+    );
   assert.equal(plan.manifestSha256, prior.manifestSha256);
   assert.equal(plan.stageAttempt, prior.stage);
   assert.equal(plan.source.bootstrapperVersion, trust.bootstrapperVersion);
@@ -129,6 +143,7 @@ export async function activateAuthenticatedUpdate(
       plan,
       sourceBytes,
       release: authenticated,
+      ...(externalSetupRecovery ? { nativeCoordinator: "target" } : {}),
     });
   const launcher = path.join(root, "HoneyBeeLauncher.exe");
   const restart = async () => {

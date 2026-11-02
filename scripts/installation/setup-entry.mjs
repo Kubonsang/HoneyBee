@@ -54,6 +54,22 @@ const runSetup = async () => {
     } catch (error) {
       if (error.code !== "ENOENT") throw error;
     }
+    if (!repair && installedPointer) {
+      const { resumeLegacySetupUpgrade } = await import(
+        pathToFileURL(path.join(bundle, "scripts/update/setup-upgrade.mjs")).href
+      );
+      const recovered = await resumeLegacySetupUpgrade({
+        installationRoot: target,
+        mediaDirectory: path.join(bundle, "update-media"),
+        expectedVersion: sourceActivation.activeVersion,
+        allowServiceUpdate: allowInstall,
+      });
+      if (recovered) {
+        process.stdout.write(JSON.stringify(recovered) + "\n");
+        process.exitCode = recovered.ready ? 4 : 2;
+        return;
+      }
+    }
     if (
       !repair &&
       installedPointer &&
@@ -67,6 +83,7 @@ const runSetup = async () => {
         mediaDirectory: path.join(bundle, "update-media"),
         expectedVersion: sourceActivation.activeVersion,
         allowServiceUpdate: allowInstall,
+        sourceInstallation: source,
       });
       process.stdout.write(JSON.stringify(result) + "\n");
       // The update lifecycle already restarted the selected version.

@@ -46,7 +46,7 @@ func TestLegacyColdTopologyKeepsTargetSnapshotAndOwnershipUnchanged(t *testing.T
 	other := source.Evidence
 	other.Receipt.ComponentVersion = "0.0.0+cfa606fd4143.hb17"
 	if pairTopologyTransaction(source.TransactionSHA256, source.Evidence, source.Evidence) != derived.TransactionSHA256 ||
-		pairTopologyTransaction(source.TransactionSHA256, source.Evidence, other) != source.TransactionSHA256 ||
+		pairTopologyTransaction(source.TransactionSHA256, source.Evidence, other) != evidenceHash([]byte("legacy-target-topology:"+source.TransactionSHA256)) ||
 		pairTopologyTransaction(source.TransactionSHA256, other, source.Evidence) != source.TransactionSHA256 {
 		t.Fatal("source rollback or target update selected an incorrect topology")
 	}
@@ -79,6 +79,14 @@ func TestLegacyColdTopologyKeepsTargetSnapshotAndOwnershipUnchanged(t *testing.T
 	topology.Mounts = []maintenanceMount{}
 	if _, empty, err := legacyColdTopology(source, topology); err != nil || empty.Mounts == nil {
 		t.Fatal("empty inventory lost its complete-snapshot representation", err)
+	}
+	// A second attempt may start from the detached cold rollback baseline. The
+	// target must reconnect admitted retained children rather than inherit that
+	// temporary detached state and leave otherwise preserved Workspaces unusable.
+	topology.Mounts = []maintenanceMount{{Lease: lease}}
+	_, retryTarget, err := legacyRetainedTopology(source, topology, true)
+	if err != nil || !retryTarget.Mounts[0].Attached || topology.Mounts[0].Attached {
+		t.Fatal("cold retry lost retained workspace reconnection intent", err)
 	}
 }
 
@@ -263,8 +271,8 @@ func TestLegacyReservationRequiresEveryOriginalChildAndOwnedLocks(t *testing.T) 
 			}
 		})
 	}
-	// Detached retained children need no volume lock and must stay detached in
-	// the target topology; neither source rollback nor target invents attachments.
+	// Detached retained children need no maintenance volume lock. Reconnection
+	// after replacement needs the separate protected target topology instead.
 	topology.Mounts[0].Attached = false
 	r := &maintenanceVolumeReservation{assertHeld: func() error { return nil }, releaseGuards: func() error { return nil }, legacySourcePID: 123}
 	if _, err := validateLegacyReservedVolumes(topology, r, false); err != nil {

@@ -32,6 +32,8 @@ repair_option_done:
   IfErrors adopt_option_done
   StrCpy $1 "$1 --adopt-projects"
 adopt_option_done:
+  DetailPrint "Checking the existing installation and its storage version."
+  DetailPrint "Supported storage recovery preserves Workspaces and Git branches. Close Unity and Workspace tools before continuing."
   ClearErrors
   ExecWait '"$PLUGINSDIR\bundle\payload\versions\${APP_VERSION}\runtime\node.exe" "$PLUGINSDIR\bundle\setup-entry.mjs" "$INSTDIR" $1' $0
   IfErrors stopped
@@ -47,7 +49,7 @@ ready:
   SetErrorLevel 0
   Goto done
 updated:
-  DetailPrint "HoneyBee update completed and the selected version was restarted."
+  DetailPrint "HoneyBee update or interrupted recovery completed and the selected version was restarted."
   SetErrorLevel 0
   Goto done
 needs_service:
@@ -55,7 +57,7 @@ needs_service:
   DetailPrint "Diagnostics: $INSTDIR\.setup-pending\health.json"
   DetailPrint "Repair diagnostics: $INSTDIR\update\repairs\repair-*\health.json"
   IfSilent +2
-    MessageBox MB_OK|MB_ICONEXCLAMATION "HoneyBee needs attention. Installation or update may have been cancelled or recovered. Existing project data and recovery evidence were preserved. See the health report and update evidence in the installation folder."
+    MessageBox MB_OK|MB_ICONEXCLAMATION "HoneyBee needs attention. Installation or update may have been cancelled or rolled back. Keep existing Workspaces and Git branches. Close Unity and rerun this same Setup to resume a supported interrupted recovery. See the health report and update evidence in the installation folder."
   SetErrorLevel 2
   Goto done
 needs_git:

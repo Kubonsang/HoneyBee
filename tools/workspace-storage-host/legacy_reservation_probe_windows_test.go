@@ -108,7 +108,7 @@ func TestLegacyRetainedReservationPinnedVM(t *testing.T) {
 	if err := area.recordServiceSource(record); err != nil {
 		t.Fatal(err)
 	}
-	if err := area.recordLegacyColdTopology(record); err != nil {
+	if err := area.recordLegacyRetainedTopologies(record); err != nil {
 		t.Fatal(err)
 	}
 	if err := area.assertLegacyReservedSnapshot(context.Background(), source, transaction, r, false); err != nil {

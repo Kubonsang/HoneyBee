@@ -41,7 +41,7 @@
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
     "test:run": "vitest run && corepack pnpm test:storage-host && corepack pnpm test:launcher && corepack pnpm test:setup && corepack pnpm test:update && corepack pnpm test:update-trust && corepack pnpm test:application-repair && corepack pnpm test:release-key && corepack pnpm test:combined-update && corepack pnpm test:qualification-flow",
-    "test:update-trust": "node --test scripts/update/release-authentication.test.mjs scripts/update/authenticated-preparation.test.mjs scripts/update/update-job.test.mjs scripts/update/recovery-source.test.mjs scripts/update/activate-authenticated.test.mjs scripts/update/update-outcome.test.mjs scripts/update/setup-upgrade.test.mjs scripts/recovery/reconnect-workspaces.test.mjs",
+    "test:update-trust": "node --test scripts/update/release-authentication.test.mjs scripts/update/authenticated-preparation.test.mjs scripts/update/update-job.test.mjs scripts/update/recovery-source.test.mjs scripts/update/activate-authenticated.test.mjs scripts/update/update-outcome.test.mjs scripts/update/setup-upgrade.test.mjs scripts/update/legacy-setup-source.test.mjs scripts/recovery/reconnect-workspaces.test.mjs",
     "test:launcher": "go -C tools/honeybee-launcher test ./... && go -C tools/honeybee-launcher vet ./...",
     "test:storage-host": "go -C tools/workspace-storage-host test ./...",
     "package:setup": "node scripts/installation/build-setup.mjs",
