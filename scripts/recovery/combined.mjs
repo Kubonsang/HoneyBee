@@ -2,10 +2,9 @@ import assert from "node:assert/strict";
 import process from "node:process";
 import path from "node:path";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { readBounded } from "../update/prepare-release.mjs";
 import { plainDirectory } from "../update/stage-release.mjs";
 import { withApplicationActivity } from "../update/application-activity.mjs";
-import { validateCombinedApplicationContext } from "../update/combined-application.mjs";
+import { loadCombinedApplicationContext } from "../update/combined-application.mjs";
 import { runCombinedApplicationTransaction } from "../update/installed-combined-update.mjs";
 
 const runtime = path.resolve(import.meta.dirname, "../..");
@@ -20,10 +19,7 @@ assert.equal(
   path.join(root, "recovery/v1").toLowerCase(),
   "Combined recovery runtime is outside installation",
 );
-const context = JSON.parse(
-  await readBounded(path.join(root, "update/combined-contexts", identity + ".json")),
-);
-validateCombinedApplicationContext(context);
+const context = await loadCombinedApplicationContext(root, identity);
 assert.equal(context.identitySha256, identity);
 const parent = path.join(root, "update/recovery-attempts");
 await mkdir(parent, { recursive: true });

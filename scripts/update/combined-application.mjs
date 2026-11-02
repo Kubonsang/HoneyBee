@@ -77,19 +77,61 @@ export function validateCombinedApplicationContext(value) {
 }
 
 export async function persistCombinedApplicationContext(root, value) {
+  value = globalThis.structuredClone(value);
   validateCombinedApplicationContext(value);
   const directory = path.join(path.resolve(root), "update/combined-contexts");
   await mkdir(directory, { recursive: true });
   await plainDirectory(directory);
   const name = path.join(directory, value.identitySha256 + ".json");
+  // Published bootstrapper generations strictly decode these six fields when
+  // following committed pointer history. Keep that original wire shape intact.
+  const original = {
+    schemaVersion: value.schemaVersion,
+    identity: value.identity,
+    identitySha256: value.identitySha256,
+    sourcePointer: value.sourcePointer,
+    targetPointer: value.targetPointer,
+    launcherSha256: value.launcherSha256,
+  };
+  const bytes = Buffer.from(JSON.stringify(original) + "\n");
+  const extensions = path.join(path.resolve(root), "update/combined-recovery");
+  const extensionPath = path.join(extensions, value.identitySha256 + ".json");
+  if (value.nativeCoordinator) {
+    await mkdir(extensions, { recursive: true });
+    await plainDirectory(extensions);
+    await persistContextFile(extensionPath, {
+      schemaVersion: 1,
+      identitySha256: value.identitySha256,
+      contextSha256: sha256(bytes),
+      nativeCoordinator: value.nativeCoordinator,
+      ...(value.sourceRecovery
+        ? {
+            sourceRecovery: value.sourceRecovery,
+            sourceObservationSha256: value.sourceObservationSha256,
+          }
+        : {}),
+    });
+  } else {
+    try {
+      await readBounded(extensionPath);
+      assert.fail("Combined recovery selection already exists");
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  await persistContextFile(name, original);
+  return name;
+}
+
+async function persistContextFile(name, value) {
   const bytes = Buffer.from(JSON.stringify(value) + "\n");
   try {
     assert.deepEqual(await readBounded(name), bytes, "Combined application context changed");
-    return name;
+    return;
   } catch (error) {
     if (error.code !== "ENOENT") throw error;
   }
-  const temporary = path.join(directory, randomUUID() + ".partial");
+  const temporary = path.join(path.dirname(name), randomUUID() + ".partial");
   const file = await open(temporary, "wx");
   try {
     await file.writeFile(bytes);
@@ -98,7 +140,48 @@ export async function persistCombinedApplicationContext(root, value) {
     await file.close();
   }
   await link(temporary, name);
-  return name;
+}
+
+export async function loadCombinedApplicationContext(root, identity) {
+  assert(/^[a-f0-9]{64}$/u.test(identity));
+  const bytes = await readBounded(
+    path.join(path.resolve(root), "update/combined-contexts", identity + ".json"),
+  );
+  const context = JSON.parse(bytes);
+  assert.equal(context.identitySha256, identity);
+  let extension;
+  try {
+    const directory = path.join(path.resolve(root), "update/combined-recovery");
+    await plainDirectory(directory);
+    extension = JSON.parse(await readBounded(path.join(directory, identity + ".json")));
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  if (extension) {
+    assert.deepEqual(
+      Object.keys(extension).sort(),
+      [
+        "schemaVersion",
+        "identitySha256",
+        "contextSha256",
+        "nativeCoordinator",
+        ...(extension.sourceRecovery ? ["sourceRecovery", "sourceObservationSha256"] : []),
+      ].sort(),
+    );
+    assert.equal(extension.schemaVersion, 1);
+    assert.equal(extension.identitySha256, identity);
+    assert.equal(extension.contextSha256, sha256(bytes), "Combined recovery context changed");
+    assert.equal(context.nativeCoordinator, undefined, "Duplicate recovery selection");
+    assert.equal(context.sourceRecovery, undefined, "Duplicate recovery intent");
+    assert.equal(context.sourceObservationSha256, undefined, "Duplicate recovery observation");
+    context.nativeCoordinator = extension.nativeCoordinator;
+    if (extension.sourceRecovery) {
+      context.sourceRecovery = extension.sourceRecovery;
+      context.sourceObservationSha256 = extension.sourceObservationSha256;
+    }
+  }
+  validateCombinedApplicationContext(context);
+  return context;
 }
 
 /** Called under BOTH installation update and exclusive application activity.
