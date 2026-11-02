@@ -14,7 +14,11 @@ import (
 )
 
 func loadRecoverySource(area *maintenanceArea, record serviceRecoveryContext) (serviceSourceRecord, error) {
-	return loadServiceSourceRecord(filepath.Dir(area.Path), record.TransactionSHA256, record.SourceEvidenceSHA256, area.restoreRecordStorage(area.assertHeld, 64<<10), area.assertHeld)
+	source, err := loadServiceSourceRecord(filepath.Dir(area.Path), record.TransactionSHA256, record.SourceEvidenceSHA256, area.restoreRecordStorage(area.assertHeld, 64<<10), area.assertHeld)
+	if err != nil {
+		return source, err
+	}
+	return source, validateLegacyRecoverySource(record.SourceRecovery, record.ReleaseSource, source.Evidence)
 }
 
 func loadRecoveryReplacement(area *maintenanceArea, record serviceRecoveryContext, source serviceEvidence) (serviceReplacementRecord, error) {

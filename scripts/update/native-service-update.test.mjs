@@ -89,6 +89,55 @@ test("native source validation rejects unknown or unbound recovery intent", () =
   }
 });
 
+test("legacy recovery lookup binds intent and source observation to protected native context", async () => {
+  for (const scenario of [
+    "valid",
+    "missing-mode",
+    "changed-mode",
+    "missing-observation",
+    "changed-observation",
+  ]) {
+    const root = await mkdtemp(path.join(os.tmpdir(), "hb-legacy-lookup-"));
+    const options = { ...legacyBridgeOptions(), installationRoot: root, recover: true };
+    const registration = {
+      transactionSha256: options.identity.serviceTransactionSha256,
+      contextSha256: "f".repeat(64),
+      executableSha256: "a".repeat(64),
+      executable: path.join(root, "protected-host.exe"),
+    };
+    const binding = {
+      applicationRoot: root,
+      sourcePointerSha256: options.identity.sourcePointerSha256,
+      targetPointerSha256: options.targetPointerSha256,
+      manifestSha256: options.identity.manifestSha256,
+      sourceRecovery: options.sourceRecovery,
+      sourceObservationSha256: options.sourceObservationSha256,
+    };
+    if (scenario === "missing-mode") Reflect.deleteProperty(binding, "sourceRecovery");
+    if (scenario === "changed-mode") binding.sourceRecovery = "unknown";
+    if (scenario === "missing-observation")
+      Reflect.deleteProperty(binding, "sourceObservationSha256");
+    if (scenario === "changed-observation") binding.sourceObservationSha256 = "f".repeat(64);
+    const bridge = createNativeServiceUpdate(options, {
+      health: async () => legacyBaseline(),
+      sessionFactory: () => ({
+        close: async () => {},
+        request: async ({ operation }) => {
+          assert.equal(operation, "lookup");
+          return { state: "Prepared", registration, binding };
+        },
+      }),
+    });
+    const admit = bridge.admit({
+      ...options.identity,
+      identitySha256: combinedUpdateIdentity(options.identity),
+    });
+    if (scenario === "valid") await admit;
+    else await assert.rejects(admit, /belongs to another application pair/u);
+    await bridge.close();
+  }
+});
+
 test("native adapters connect prepare, Doctor evidence and pair commit through one session", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "hb-native-bridge-"));
   const source = Buffer.from("source-pointer"),

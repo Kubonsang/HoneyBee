@@ -101,6 +101,9 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 	if source.Evidence.Receipt.WorkspaceRoot != filepath.Join(record.ApplicationRoot, "Workspaces") || source.Evidence.Receipt.ComponentVersion != record.ReleaseSource.ComponentVersion {
 		return false, errors.New("recovery user/source binding changed")
 	}
+	if err := validateLegacyRecoverySource(record.SourceRecovery, record.ReleaseSource, source.Evidence); err != nil {
+		return false, err
+	}
 	journal, err := area.loadMigration(record.MigrationName, record.MigrationSHA256)
 	if err != nil {
 		return false, err

@@ -103,6 +103,44 @@ func TestLegacySourceRequiresPublishedExecutableNotJustVersion(t *testing.T) {
 	}
 }
 
+func TestLegacyRecoveryAdmissionRequiresExplicitIntentAndExactApplication(t *testing.T) {
+	source := serviceEvidence{SchemaVersion: 1, ExecutableSHA256: legacyHb12Executable,
+		Receipt: installReceipt{ComponentVersion: legacyHb12Component, ExecutableSHA256: legacyHb12Executable}}
+	release := nativeReleaseSource{AppVersion: legacySourceAppVersion, ComponentVersion: legacyHb12Component}
+	if err := validateLegacyRecoverySource(legacyHb12Recovery, release, source); err != nil {
+		t.Fatal(err)
+	}
+	for _, scenario := range []string{"implicit", "unknown", "application", "component", "executable", "receipt", "recovery-ready"} {
+		t.Run(scenario, func(t *testing.T) {
+			mode, r, evidence := legacyHb12Recovery, release, source
+			switch scenario {
+			case "implicit":
+				mode = ""
+			case "unknown":
+				mode = "force"
+			case "application":
+				r.AppVersion = "0.1.0-beta.36"
+			case "component":
+				r.ComponentVersion = "0.0.0+cfa606fd4143.hb13"
+			case "executable":
+				evidence.ExecutableSHA256 = strings.Repeat("f", 64)
+			case "receipt":
+				evidence.Receipt.ExecutableSHA256 = strings.Repeat("f", 64)
+			case "recovery-ready":
+				evidence.RecoveryReady = true
+			}
+			if err := validateLegacyRecoverySource(mode, r, evidence); err == nil {
+				t.Fatal("unbound legacy admission accepted")
+			}
+		})
+	}
+	ordinary := source
+	ordinary.Receipt.ComponentVersion = "0.0.0+cfa606fd4143.hb13"
+	if err := validateLegacyRecoverySource("", nativeReleaseSource{}, ordinary); err != nil {
+		t.Fatal("ordinary maintenance changed", err)
+	}
+}
+
 func TestLegacyRollbackStartsNormallyOnlyForProtectedDetachedOriginal(t *testing.T) {
 	source := serviceEvidence{SchemaVersion: 1, ExecutableSHA256: legacyHb12Executable,
 		Receipt: installReceipt{ComponentVersion: legacyHb12Component, ExecutableSHA256: legacyHb12Executable}}

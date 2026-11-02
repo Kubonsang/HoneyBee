@@ -78,6 +78,7 @@ export function createNativeServiceUpdate(
         sourcePointerSha256: identity.sourcePointerSha256,
         targetPointerSha256: options.targetPointerSha256,
         manifestSha256: identity.manifestSha256,
+        ...(sourceRecovery ? { sourceRecovery, sourceObservationSha256 } : {}),
       },
       "Native service transaction belongs to another application pair",
     );
@@ -116,6 +117,9 @@ export function createNativeServiceUpdate(
         );
         assert.equal(sha256(Buffer.from(admission.manifest, "base64")), identity.manifestSha256);
         assert.equal(admission.ownerPid, process.pid);
+        assert.equal(admission.sourceRecovery, sourceRecovery);
+        if (sourceRecovery)
+          assert.equal(admission.sourceObservationSha256, sourceObservationSha256);
         const result = await request({ schemaVersion: 1, operation: "stage", admission });
         assert.equal(result.state, "Prepared");
         accept(result.registration, result.binding);

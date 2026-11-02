@@ -118,6 +118,13 @@ export async function activateInstalledCombinedUpdate({
     capabilities.schemaVersion === 1 && capabilities.serviceUpdateSession === 1,
     "Installed service companion requires a bootstrapper upgrade",
   );
+  if (context.sourceRecovery) {
+    assert.equal(
+      capabilities.legacyHb12Recovery,
+      1,
+      "Target companion lacks preserving hb12 recovery",
+    );
+  }
   await persistCombinedApplicationContext(root, context);
   if (options.activationJob) {
     const { directory, requestSha256 } = options.activationJob;
@@ -152,6 +159,7 @@ export async function activateInstalledCombinedUpdate({
       sourcePointer: context.sourcePointer,
       targetPointer: context.targetPointer,
       sourceObservationSha256: plan.identity.sourceEvidenceSha256,
+      ...(context.sourceRecovery ? { sourceRecovery: context.sourceRecovery } : {}),
       source: {
         AppVersion: source.activeVersion,
         BootstrapperVersion: plan.source.bootstrapperVersion,

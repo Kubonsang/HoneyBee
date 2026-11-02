@@ -22,6 +22,22 @@ import (
 // A version label alone never permits skipping the maintenance pause.
 const legacyHb12Component = "0.0.0+cfa606fd4143.hb12"
 const legacyHb12Executable = "0cad87d53bc974063f4f524a4b05b801cdb00a71eaeedb694414972c6e8438f3"
+const legacyHb12Recovery = "legacy-hb12-detached"
+const legacySourceAppVersion = "0.1.0-beta.35"
+const legacySourceLaunchManifest = "272b131a2d3deaffedee07f94e904f9ec1d822d868b8eb2494b60576f947b2cb"
+
+func validateLegacyRecoverySource(mode string, release nativeReleaseSource, source serviceEvidence) error {
+	if mode == "" {
+		if exactLegacyHb12Source(source) {
+			return errors.New("legacy service requires explicit preserving recovery intent")
+		}
+		return nil
+	}
+	if mode != legacyHb12Recovery || release.AppVersion != legacySourceAppVersion || release.ComponentVersion != legacyHb12Component || !exactLegacyHb12Source(source) {
+		return errors.New("unsupported legacy recovery source identity")
+	}
+	return nil
+}
 
 func exactLegacyHb12Source(source serviceEvidence) bool {
 	return source.SchemaVersion == 1 && !source.RecoveryReady &&

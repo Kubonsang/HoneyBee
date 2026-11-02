@@ -34,10 +34,12 @@ type serviceUpdateResult struct {
 }
 
 type serviceUpdateBinding struct {
-	ApplicationRoot     string `json:"applicationRoot"`
-	SourcePointerSHA256 string `json:"sourcePointerSha256"`
-	TargetPointerSHA256 string `json:"targetPointerSha256"`
-	ManifestSHA256      string `json:"manifestSha256"`
+	ApplicationRoot         string `json:"applicationRoot"`
+	SourcePointerSHA256     string `json:"sourcePointerSha256"`
+	TargetPointerSHA256     string `json:"targetPointerSha256"`
+	ManifestSHA256          string `json:"manifestSha256"`
+	SourceRecovery          string `json:"sourceRecovery,omitempty"`
+	SourceObservationSHA256 string `json:"sourceObservationSha256,omitempty"`
 }
 
 func decodeServiceUpdateRequest(input io.Reader) (serviceUpdateRequest, error) {
@@ -117,7 +119,10 @@ func executeServiceUpdateRequest(ctx context.Context, request serviceUpdateReque
 		result.OK = true
 		result.State = "Prepared"
 		result.Registration = &registration
-		result.Binding = &serviceUpdateBinding{request.Admission.ApplicationRoot, evidenceHash(request.Admission.SourcePointer), evidenceHash(request.Admission.TargetPointer), evidenceHash(request.Admission.Manifest)}
+		result.Binding = &serviceUpdateBinding{ApplicationRoot: request.Admission.ApplicationRoot, SourcePointerSHA256: evidenceHash(request.Admission.SourcePointer), TargetPointerSHA256: evidenceHash(request.Admission.TargetPointer), ManifestSHA256: evidenceHash(request.Admission.Manifest), SourceRecovery: request.Admission.SourceRecovery}
+		if request.Admission.SourceRecovery != "" {
+			result.Binding.SourceObservationSHA256 = request.Admission.SourceObservationSHA256
+		}
 		return result, nil
 	}
 	if request.Operation == "lookup" {
@@ -179,7 +184,7 @@ func executeServiceUpdateRequest(ctx context.Context, request serviceUpdateReque
 	if err != nil {
 		return result, err
 	}
-	result.Binding = &serviceUpdateBinding{record.ApplicationRoot, record.SourcePointerSHA256, record.TargetPointerSHA256, replacement.TargetManifestSHA256}
+	result.Binding = &serviceUpdateBinding{ApplicationRoot: record.ApplicationRoot, SourcePointerSHA256: record.SourcePointerSHA256, TargetPointerSHA256: record.TargetPointerSHA256, ManifestSHA256: replacement.TargetManifestSHA256, SourceRecovery: record.SourceRecovery, SourceObservationSHA256: record.SourceObservationSHA256}
 	result.Decision = "undecided"
 	if _, decisionErr := readServicePairCommit(area, record, request.ContextSHA256); decisionErr == nil {
 		result.Decision = "commit"
