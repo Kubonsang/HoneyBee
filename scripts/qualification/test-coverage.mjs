@@ -14,6 +14,13 @@ const nativeGo = new Set([
   "TestDifferencingParentLongPath",
   "TestNativeChildGeometry",
 ]);
+// This probe deliberately requires the pinned disposable hb12/beta.35 fixture
+// and an explicit opt-in even on hosted Windows. Its pass belongs to the native
+// lane; a generic Windows runner must neither execute it nor count its skip as a
+// pass. Keep the package binding so another package cannot inherit this exception.
+const pinnedNativeGo = new Set([
+  "github.com/Kubonsang/HoneyBee/tools/workspace-storage-host:TestLegacyRetainedReservationPinnedVM",
+]);
 const unixGo = new Set([
   "TestNativeManagerRestartRecoversLiveLease",
   "TestNativeManagerRestartCleansDeadClientLease",
@@ -108,7 +115,7 @@ export function auditCoverage({ vitest, nodeLog, goLogs, platform, root, ignored
         else
           skip(
             id,
-            nativeGo.has(event.Test)
+            nativeGo.has(event.Test) || pinnedNativeGo.has(`${event.Package}:${event.Test}`)
               ? "native"
               : platform !== "win32" && launcherGo.has(event.Test)
                 ? "windows"
@@ -125,7 +132,9 @@ export function auditCoverage({ vitest, nodeLog, goLogs, platform, root, ignored
     else if (!passed.has(id) && !deferred.has(id))
       skip(
         id,
-        nativeGo.has(item.name) ? "native" : "windows",
+        nativeGo.has(item.name) || pinnedNativeGo.has(`${item.package}:${item.name}`)
+          ? "native"
+          : "windows",
         "Windows build-tagged test not executed here",
       );
   }
