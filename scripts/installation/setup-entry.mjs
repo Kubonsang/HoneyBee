@@ -17,7 +17,9 @@ import { ensureSetupService } from "./service-setup.mjs";
 import { repairInstalledComponents } from "./component-repair.mjs";
 import { adoptInstalledProjects } from "./adopt-projects.mjs";
 
-const bundle = path.dirname(fileURLToPath(import.meta.url));
+// NSIS may execute from an 8.3 TEMP alias. Normalize its own bundle before
+// passing paths to the strict managed-installation and recovery validators.
+const bundle = await realpath(path.dirname(fileURLToPath(import.meta.url)));
 const target = process.argv[2];
 const runSetup = async () => {
   let repairActivity;
