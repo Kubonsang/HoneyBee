@@ -66,7 +66,8 @@ func resumeInstalledPair(ctx context.Context, area *maintenanceArea, record serv
 		return err
 	}
 	defer bound.close()
-	_, err = area.restoreRecordStorage(area.assertHeld, 16<<20).read("service-topology-" + record.TransactionSHA256 + ".json")
+	topologyTransaction := pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected)
+	_, err = area.restoreRecordStorage(area.assertHeld, 16<<20).read("service-topology-" + topologyTransaction + ".json")
 	if os.IsNotExist(err) {
 		status, err := bound.handle.Query()
 		if err != nil {
@@ -80,7 +81,7 @@ func resumeInstalledPair(ctx context.Context, area *maintenanceArea, record serv
 	if err != nil {
 		return err
 	}
-	return bound.resumeRecordedTopology(ctx, area, pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected), source.Evidence, automatic)
+	return bound.resumeRecordedTopology(ctx, area, topologyTransaction, source.Evidence, automatic)
 }
 
 // Concrete forward transaction. Only a previously authenticated, armed native
@@ -179,18 +180,18 @@ func prepareInstalledServiceUpdate(ctx context.Context, area *maintenanceArea, r
 		ReserveDisks: func() error {
 			var err error
 			if exactLegacyHb12Source(source.Evidence) {
-				reservation, err = bound.reserveLegacyDetached(area, record.TransactionSHA256)
+				reservation, err = bound.reserveLegacyRetained(area, record.TransactionSHA256)
 				if err != nil {
 					return err
 				}
-				return area.recordLegacyTargetTopology(source)
+				return area.recordLegacyColdTopology(source)
 			}
 			reservation, err = bound.reserve(area, record.TransactionSHA256)
 			return err
 		},
 		StopSource: func() error {
 			if exactLegacyHb12Source(source.Evidence) {
-				return bound.stopLegacyDetached(ctx, area, record.TransactionSHA256, reservation)
+				return bound.stopLegacyRetained(ctx, area, record.TransactionSHA256, reservation)
 			}
 			return bound.stop(ctx)
 		},

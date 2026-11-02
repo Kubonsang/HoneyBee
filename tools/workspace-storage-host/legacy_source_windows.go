@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 )
 
@@ -28,9 +29,10 @@ func exactLegacyHb12Source(source serviceEvidence) bool {
 		source.Receipt.ExecutableSHA256 == legacyHb12Executable
 }
 
-// Keep the cold source snapshot immutable for rollback. The target broker needs
-// a separate protected intent to attach the retained workspaces after upgrade.
-func legacyTargetTopology(source serviceSourceRecord, topology maintenanceTopology) (serviceSourceRecord, maintenanceTopology, error) {
+// Preserve the observed live topology for the target. The old broker cannot
+// restore attachments on startup, so its rollback intent must instead describe
+// the same retained children detached. Neither intent modifies lease journals.
+func legacyColdTopology(source serviceSourceRecord, topology maintenanceTopology) (serviceSourceRecord, maintenanceTopology, error) {
 	if !exactLegacyHb12Source(source.Evidence) || !migrationDigest(source.TransactionSHA256) ||
 		topology.SchemaVersion != 1 || topology.TransactionSHA256 != source.TransactionSHA256 ||
 		topology.SourceEvidenceSHA256 != source.SourceEvidenceSHA256 || topology.Mounts == nil || len(topology.Mounts) > 10000 {
@@ -41,47 +43,47 @@ func legacyTargetTopology(source serviceSourceRecord, topology maintenanceTopolo
 		return serviceSourceRecord{}, maintenanceTopology{}, errors.New("legacy source evidence changed")
 	}
 	result := topology
-	result.TransactionSHA256 = evidenceHash([]byte("legacy-target-topology:" + source.TransactionSHA256))
+	result.TransactionSHA256 = evidenceHash([]byte("legacy-cold-topology:" + source.TransactionSHA256))
 	result.Mounts = make([]maintenanceMount, len(topology.Mounts))
 	seen := map[string]bool{}
 	for i, mount := range topology.Mounts {
-		if mount.Attached || seen[mount.Lease.LeaseID] {
-			return serviceSourceRecord{}, maintenanceTopology{}, errors.New("unique detached legacy workspaces required")
+		if seen[mount.Lease.LeaseID] {
+			return serviceSourceRecord{}, maintenanceTopology{}, errors.New("unique retained legacy workspaces required")
 		}
 		if err := validateMaintenanceLease(mount.Lease, source.Evidence.Receipt); err != nil {
 			return serviceSourceRecord{}, maintenanceTopology{}, err
 		}
 		seen[mount.Lease.LeaseID] = true
-		result.Mounts[i] = maintenanceMount{Lease: mount.Lease, Attached: true}
+		result.Mounts[i] = maintenanceMount{Lease: mount.Lease, Attached: false}
 	}
 	source.TransactionSHA256 = result.TransactionSHA256
 	return source, result, nil
 }
 
-func (area *maintenanceArea) recordLegacyTargetTopology(source serviceSourceRecord) error {
+func (area *maintenanceArea) recordLegacyColdTopology(source serviceSourceRecord) error {
 	check := area.assertHeld
 	records := area.restoreRecordStorage(check, 16<<20)
 	topology, err := loadMaintenanceTopology(source.TransactionSHA256, source.SourceEvidenceSHA256, source.Evidence.Receipt, records, check)
 	if err != nil {
 		return err
 	}
-	derivedSource, target, err := legacyTargetTopology(source, topology)
+	derivedSource, cold, err := legacyColdTopology(source, topology)
 	if err != nil {
 		return err
 	}
 	if err := persistServiceSourceRecord(derivedSource, filepath.Dir(area.Path), records, check); err != nil {
 		return err
 	}
-	data, err := json.Marshal(target)
+	data, err := json.Marshal(cold)
 	if err != nil {
 		return err
 	}
-	return persistRestoreRecord("service-topology-"+target.TransactionSHA256+".json", data, 16<<20, records, check)
+	return persistRestoreRecord("service-topology-"+cold.TransactionSHA256+".json", data, 16<<20, records, check)
 }
 
 func pairTopologyTransaction(transaction string, source, expected serviceEvidence) string {
-	if exactLegacyHb12Source(source) && expected != source {
-		return evidenceHash([]byte("legacy-target-topology:" + transaction))
+	if exactLegacyHb12Source(source) && expected == source {
+		return evidenceHash([]byte("legacy-cold-topology:" + transaction))
 	}
 	return transaction
 }
@@ -109,7 +111,7 @@ func topologyResumeArguments(selected, original serviceEvidence, topology mainte
 	return nil, nil
 }
 
-func validateLegacyDetachedJournals(topology maintenanceTopology, leases []workspace.LeaseJournal) error {
+func validateLegacyRetainedJournals(topology maintenanceTopology, leases []workspace.LeaseJournal) error {
 	if len(leases) != len(topology.Mounts) {
 		return errors.New("legacy workspace inventory changed before cold maintenance")
 	}
@@ -122,15 +124,57 @@ func validateLegacyDetachedJournals(topology maintenanceTopology, leases []works
 	}
 	for _, mount := range topology.Mounts {
 		lease, exists := current[mount.Lease.LeaseID]
-		if !exists || mount.Attached || !reflect.DeepEqual(mount.Lease, lease) {
-			return errors.New("legacy lease changed or was not detached")
+		if !exists || !reflect.DeepEqual(mount.Lease, lease) {
+			return errors.New("legacy lease changed during volume reservation")
 		}
 		delete(current, mount.Lease.LeaseID)
 	}
 	return nil
 }
 
-func (b *boundMaintenanceService) reserveLegacyDetached(area *maintenanceArea, transaction string) (*maintenanceVolumeReservation, error) {
+// Every originally attached child needs its own still-owned kernel lock. A
+// same-length reservation for a different image is not authority to stop hb12.
+func validateLegacyReservedVolumes(topology maintenanceTopology, reservation *maintenanceVolumeReservation, verifyDevices bool) (map[string]bool, error) {
+	if reservation == nil || reservation.closed || reservation.assertHeld == nil || reservation.releaseGuards == nil || reservation.legacySourcePID == 0 {
+		return nil, errors.New("live legacy reservation and path/process guards required")
+	}
+	if err := reservation.assertHeld(); err != nil {
+		return nil, err
+	}
+	children := map[string]bool{}
+	for _, mount := range topology.Mounts {
+		if mount.Attached {
+			key := strings.ToLower(mount.Lease.ChildPath)
+			if children[key] {
+				return nil, errors.New("duplicate reserved legacy image")
+			}
+			children[key] = true
+		}
+	}
+	if len(children) != len(reservation.volumes) {
+		return nil, errors.New("legacy volume reservation does not cover the original topology")
+	}
+	seen := map[string]bool{}
+	for _, operation := range reservation.volumes {
+		volume, ok := operation.(*maintenanceVolume)
+		if !ok || volume == nil || !volume.locked || volume.volume == 0 || volume.volume == windows.InvalidHandle || volume.image == 0 || volume.image == windows.InvalidHandle {
+			return nil, errors.New("owned exclusive legacy volume lock required")
+		}
+		key := strings.ToLower(volume.imagePath)
+		if !children[key] || seen[key] {
+			return nil, errors.New("legacy reservation image identity differs from original topology")
+		}
+		seen[key] = true
+		if verifyDevices {
+			if err := volume.verifyIdentity(); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return children, nil
+}
+
+func (b *boundMaintenanceService) reserveLegacyRetained(area *maintenanceArea, transaction string) (*maintenanceVolumeReservation, error) {
 	if b.service == nil || b.handle == nil || !exactLegacyHb12Source(b.evidence) {
 		return nil, errors.New("exact published legacy source required")
 	}
@@ -171,11 +215,11 @@ func (b *boundMaintenanceService) reserveLegacyDetached(area *maintenanceArea, t
 				return err
 			}
 			if now.State != svc.Running || now.ProcessId != before.ProcessId {
-				return errors.New("legacy source process changed during detached reservation")
+				return errors.New("legacy source process changed during retained reservation")
 			}
 			return nil
 		}
-		reservation, err = area.reserveTopologyMode(b.evidence, transaction, check, true)
+		reservation, err = area.reserveTopology(b.evidence, transaction, check)
 		if err == nil {
 			release := reservation.releaseGuards
 			reservation.releaseGuards = func() error {
@@ -193,7 +237,7 @@ func (b *boundMaintenanceService) reserveLegacyDetached(area *maintenanceArea, t
 // Compare complete journals, including state/PID/time fields. An intervening
 // attach, heartbeat or release is a refusal even if immutable ownership matches.
 // Source startup remains protected by the already armed recovery registration.
-func (area *maintenanceArea) assertLegacyDetachedSnapshot(ctx context.Context, source serviceEvidence, transaction string) error {
+func (area *maintenanceArea) assertLegacyReservedSnapshot(ctx context.Context, source serviceEvidence, transaction string, reservation *maintenanceVolumeReservation, stopped bool) error {
 	if area == nil || !exactLegacyHb12Source(source) {
 		return errors.New("protected legacy source required")
 	}
@@ -211,16 +255,38 @@ func (area *maintenanceArea) assertLegacyDetachedSnapshot(ctx context.Context, s
 	if err != nil {
 		return err
 	}
+	coldTransaction := pairTopologyTransaction(transaction, source, source)
+	cold, err := loadMaintenanceTopology(coldTransaction, evidenceHash(data), source.Receipt, area.restoreRecordStorage(check, 16<<20), check)
+	if err != nil {
+		return err
+	}
+	expectedCold := topology
+	expectedCold.TransactionSHA256 = coldTransaction
+	expectedCold.Mounts = make([]maintenanceMount, len(topology.Mounts))
+	for i, mount := range topology.Mounts {
+		expectedCold.Mounts[i] = maintenanceMount{Lease: mount.Lease}
+	}
+	if !reflect.DeepEqual(cold, expectedCold) {
+		return errors.New("durable legacy rollback topology differs from reserved workspaces")
+	}
 	leases, err := readMaintenanceLeases(source.Receipt.StoreRoot, source.Receipt.UserSID, check)
 	if err != nil {
 		return err
 	}
-	if err := validateLegacyDetachedJournals(topology, leases); err != nil {
+	if err := validateLegacyRetainedJournals(topology, leases); err != nil {
 		return err
 	}
+	lockedChildren, err := validateLegacyReservedVolumes(topology, reservation, !stopped)
+	if err != nil {
+		return err
+	}
+	parents := map[string]bool{}
 	for _, lease := range leases {
 		if err := validateMaintenanceOwnership(lease, source.Receipt); err != nil {
 			return err
+		}
+		if lockedChildren[strings.ToLower(lease.ChildPath)] {
+			parents[strings.ToLower(lease.ParentPath)] = true
 		}
 	}
 	// Include orphan/parent images and other users' images, not just valid leases.
@@ -250,18 +316,26 @@ func (area *maintenanceArea) assertLegacyDetachedSnapshot(ctx context.Context, s
 			return err
 		}
 		if loaded {
-			return errors.New("legacy recovery refuses any mounted store image")
+			if lockedChildren[strings.ToLower(name)] {
+				return nil
+			}
+			return admitLoadedBackingImage(name, parents[strings.ToLower(name)], maintenanceImageDirectlyAttached)
+		}
+		if !stopped && lockedChildren[strings.ToLower(name)] {
+			return errors.New("reserved legacy child detached before source stop")
 		}
 		return nil
 	})
 }
 
-func (b *boundMaintenanceService) stopLegacyDetached(ctx context.Context, area *maintenanceArea, transaction string, reservation *maintenanceVolumeReservation) error {
-	if b.service == nil || b.handle == nil || !exactLegacyHb12Source(b.evidence) || reservation == nil || reservation.closed || len(reservation.volumes) != 0 || reservation.legacySourcePID == 0 {
-		return errors.New("open, fully detached legacy reservation required")
+func (b *boundMaintenanceService) stopLegacyRetained(ctx context.Context, area *maintenanceArea, transaction string, reservation *maintenanceVolumeReservation) error {
+	if b.service == nil || b.handle == nil || !exactLegacyHb12Source(b.evidence) || reservation == nil || reservation.closed || reservation.legacySourcePID == 0 {
+		return errors.New("open, exclusively locked legacy reservation required")
 	}
 	return b.service.withSourceEvidence(b.evidence, func(s *maintenanceService) error {
-		proof := func() error { return area.assertLegacyDetachedSnapshot(ctx, b.evidence, transaction) }
+		proof := func() error {
+			return area.assertLegacyReservedSnapshot(ctx, b.evidence, transaction, reservation, true)
+		}
 		before := func() error {
 			status, err := b.handle.Query()
 			if err != nil {
@@ -270,7 +344,7 @@ func (b *boundMaintenanceService) stopLegacyDetached(ctx context.Context, area *
 			if status.State != svc.Running || status.ProcessId != reservation.legacySourcePID {
 				return errors.New("reserved legacy source process changed")
 			}
-			return proof()
+			return area.assertLegacyReservedSnapshot(ctx, b.evidence, transaction, reservation, false)
 		}
 		return s.stopFromState(ctx, svc.Running, before, proof)
 	})

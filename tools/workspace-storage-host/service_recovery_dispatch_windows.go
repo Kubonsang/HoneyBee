@@ -175,7 +175,8 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 			return err
 		}
 		defer bound.close()
-		_, err = records.read("service-topology-" + record.TransactionSHA256 + ".json")
+		topologyTransaction := pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected)
+		_, err = records.read("service-topology-" + topologyTransaction + ".json")
 		if os.IsNotExist(err) {
 			status, err := bound.handle.Query()
 			if err != nil {
@@ -189,7 +190,7 @@ func recoverInstalledService(ctx context.Context, area *maintenanceArea, record 
 		if err != nil {
 			return err
 		}
-		return bound.resumeRecordedTopology(ctx, area, pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected), source.Evidence, automatic)
+		return bound.resumeRecordedTopology(ctx, area, topologyTransaction, source.Evidence, automatic)
 	}
 	loadReplacement := func() (serviceReplacementRecord, error) {
 		var replacement serviceReplacementRecord

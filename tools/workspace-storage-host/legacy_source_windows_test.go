@@ -12,11 +12,12 @@ import (
 	"time"
 
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
 )
 
-func TestLegacyTargetTopologyKeepsRollbackSnapshotDetached(t *testing.T) {
+func TestLegacyColdTopologyKeepsTargetSnapshotAndOwnershipUnchanged(t *testing.T) {
 	receipt, lease := topologyLeaseFixture(t)
 	receipt.ComponentVersion = legacyHb12Component
 	receipt.ExecutableSHA256 = legacyHb12Executable
@@ -26,36 +27,34 @@ func TestLegacyTargetTopologyKeepsRollbackSnapshotDetached(t *testing.T) {
 	data, _ := json.Marshal(source.Evidence)
 	source.SourceEvidenceSHA256 = evidenceHash(data)
 	topology := maintenanceTopology{SchemaVersion: 1, TransactionSHA256: source.TransactionSHA256,
-		SourceEvidenceSHA256: source.SourceEvidenceSHA256, Mounts: []maintenanceMount{{Lease: lease}}}
+		SourceEvidenceSHA256: source.SourceEvidenceSHA256, Mounts: []maintenanceMount{{Lease: lease, Attached: true}}}
 	originalSource := source
-	derived, target, err := legacyTargetTopology(source, topology)
+	derived, cold, err := legacyColdTopology(source, topology)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !reflect.DeepEqual(source, originalSource) || derived.Evidence != source.Evidence || !reflect.DeepEqual(derived.Original, source.Original) ||
-		derived.TransactionSHA256 == source.TransactionSHA256 || derived.TransactionSHA256 != target.TransactionSHA256 ||
-		target.SourceEvidenceSHA256 != source.SourceEvidenceSHA256 || !target.Mounts[0].Attached || topology.Mounts[0].Attached ||
-		!reflect.DeepEqual(target.Mounts[0].Lease, lease) {
-		t.Fatal("target topology changed source ownership or rollback state")
+		derived.TransactionSHA256 == source.TransactionSHA256 || derived.TransactionSHA256 != cold.TransactionSHA256 ||
+		cold.SourceEvidenceSHA256 != source.SourceEvidenceSHA256 || cold.Mounts[0].Attached || !topology.Mounts[0].Attached ||
+		!reflect.DeepEqual(cold.Mounts[0].Lease, lease) {
+		t.Fatal("cold topology changed original ownership or target attachment state")
 	}
-	target.Mounts[0].Lease.OwnershipToken = "changed-target"
+	cold.Mounts[0].Lease.OwnershipToken = "changed-rollback"
 	if topology.Mounts[0].Lease.OwnershipToken != lease.OwnershipToken {
 		t.Fatal("source and target topology share mutable storage")
 	}
 	other := source.Evidence
 	other.Receipt.ComponentVersion = "0.0.0+cfa606fd4143.hb17"
-	if pairTopologyTransaction(source.TransactionSHA256, source.Evidence, source.Evidence) != source.TransactionSHA256 ||
-		pairTopologyTransaction(source.TransactionSHA256, source.Evidence, other) != derived.TransactionSHA256 ||
+	if pairTopologyTransaction(source.TransactionSHA256, source.Evidence, source.Evidence) != derived.TransactionSHA256 ||
+		pairTopologyTransaction(source.TransactionSHA256, source.Evidence, other) != source.TransactionSHA256 ||
 		pairTopologyTransaction(source.TransactionSHA256, other, source.Evidence) != source.TransactionSHA256 {
-		t.Fatal("source rollback or ordinary update selected the legacy target topology")
+		t.Fatal("source rollback or target update selected an incorrect topology")
 	}
-	for _, scenario := range []string{"attached", "duplicate", "nil", "transaction", "evidence", "foreign", "version", "owner"} {
+	for _, scenario := range []string{"duplicate", "nil", "transaction", "evidence", "foreign", "version", "owner"} {
 		t.Run(scenario, func(t *testing.T) {
 			s, snapshot := source, topology
 			snapshot.Mounts = append([]maintenanceMount{}, topology.Mounts...)
 			switch scenario {
-			case "attached":
-				snapshot.Mounts[0].Attached = true
 			case "duplicate":
 				snapshot.Mounts = append(snapshot.Mounts, snapshot.Mounts[0])
 			case "nil":
@@ -72,13 +71,13 @@ func TestLegacyTargetTopologyKeepsRollbackSnapshotDetached(t *testing.T) {
 			case "owner":
 				snapshot.Mounts[0].Lease.OwnershipToken = ""
 			}
-			if _, _, err := legacyTargetTopology(s, snapshot); err == nil {
+			if _, _, err := legacyColdTopology(s, snapshot); err == nil {
 				t.Fatal("invalid source topology admitted")
 			}
 		})
 	}
 	topology.Mounts = []maintenanceMount{}
-	if _, empty, err := legacyTargetTopology(source, topology); err != nil || empty.Mounts == nil {
+	if _, empty, err := legacyColdTopology(source, topology); err != nil || empty.Mounts == nil {
 		t.Fatal("empty inventory lost its complete-snapshot representation", err)
 	}
 }
@@ -146,11 +145,11 @@ func TestLegacyRollbackStartsNormallyOnlyForProtectedDetachedOriginal(t *testing
 	}
 }
 
-func TestLegacyDetachedJournalsRejectDynamicDriftAndAdditionalWorkspaces(t *testing.T) {
+func TestLegacyRetainedJournalsRejectDynamicDriftAndAdditionalWorkspaces(t *testing.T) {
 	_, lease := topologyLeaseFixture(t)
 	lease.State = "released"
 	topology := maintenanceTopology{Mounts: []maintenanceMount{{Lease: lease}}}
-	if err := validateLegacyDetachedJournals(topology, []workspace.LeaseJournal{lease}); err != nil {
+	if err := validateLegacyRetainedJournals(topology, []workspace.LeaseJournal{lease}); err != nil {
 		t.Fatal(err)
 	}
 	for _, change := range []func(*workspace.LeaseJournal){
@@ -161,28 +160,77 @@ func TestLegacyDetachedJournalsRejectDynamicDriftAndAdditionalWorkspaces(t *test
 	} {
 		current := lease
 		change(&current)
-		if err := validateLegacyDetachedJournals(topology, []workspace.LeaseJournal{current}); err == nil {
+		if err := validateLegacyRetainedJournals(topology, []workspace.LeaseJournal{current}); err == nil {
 			t.Fatal("lease drift was admitted")
 		}
 	}
 	for _, current := range [][]workspace.LeaseJournal{nil, {lease, lease}} {
-		if err := validateLegacyDetachedJournals(topology, current); err == nil {
+		if err := validateLegacyRetainedJournals(topology, current); err == nil {
 			t.Fatal("changed complete inventory was admitted")
 		}
 	}
 	topology.Mounts[0].Attached = true
-	if err := validateLegacyDetachedJournals(topology, []workspace.LeaseJournal{lease}); err == nil {
-		t.Fatal("an attached legacy image was admitted")
+	if err := validateLegacyRetainedJournals(topology, []workspace.LeaseJournal{lease}); err != nil {
+		t.Fatal("unchanged attached retained journal refused", err)
 	}
 	topology.Mounts[0].Attached = false
 	second := lease
 	second.LeaseID = "lease-2"
 	topology.Mounts = append(topology.Mounts, maintenanceMount{Lease: second})
-	if err := validateLegacyDetachedJournals(topology, []workspace.LeaseJournal{second, lease}); err != nil {
+	if err := validateLegacyRetainedJournals(topology, []workspace.LeaseJournal{second, lease}); err != nil {
 		t.Fatal("directory enumeration order changed a complete snapshot", err)
 	}
-	if err := validateLegacyDetachedJournals(topology, []workspace.LeaseJournal{lease, lease}); err == nil {
+	if err := validateLegacyRetainedJournals(topology, []workspace.LeaseJournal{lease, lease}); err == nil {
 		t.Fatal("duplicate lease identity admitted")
+	}
+}
+
+func TestLegacyReservationRequiresEveryOriginalChildAndOwnedLocks(t *testing.T) {
+	_, lease := topologyLeaseFixture(t)
+	topology := maintenanceTopology{Mounts: []maintenanceMount{{Lease: lease, Attached: true}}}
+	for _, scenario := range []string{"valid", "closed", "missing", "extra", "foreign", "unlocked", "closed-volume", "invalid-image", "no-guards", "no-process", "exclusion-lost"} {
+		t.Run(scenario, func(t *testing.T) {
+			// Numeric handles are never passed to Windows in this unit test. Device
+			// identity is exercised by the separate native VM qualification lane.
+			volume := &maintenanceVolume{imagePath: lease.ChildPath, image: 1, volume: 2, locked: true}
+			r := &maintenanceVolumeReservation{volumes: []maintenanceVolumeOperation{volume}, assertHeld: func() error { return nil }, releaseGuards: func() error { return nil }, legacySourcePID: 123}
+			switch scenario {
+			case "closed":
+				r.closed = true
+			case "missing":
+				r.volumes = nil
+			case "extra":
+				r.volumes = append(r.volumes, volume)
+			case "foreign":
+				volume.imagePath += ".foreign.vhdx"
+			case "unlocked":
+				volume.locked = false
+			case "closed-volume":
+				volume.volume = 0
+			case "invalid-image":
+				volume.image = windows.InvalidHandle
+			case "no-guards":
+				r.releaseGuards = nil
+			case "no-process":
+				r.legacySourcePID = 0
+			case "exclusion-lost":
+				r.assertHeld = func() error { return errors.New("lost exclusion") }
+			}
+			children, err := validateLegacyReservedVolumes(topology, r, false)
+			if (err == nil) != (scenario == "valid") {
+				t.Fatal("incorrect reservation admission", err)
+			}
+			if err == nil && !children[strings.ToLower(lease.ChildPath)] {
+				t.Fatal("missing original child binding")
+			}
+		})
+	}
+	// Detached retained children need no volume lock and must stay detached in
+	// the target topology; neither source rollback nor target invents attachments.
+	topology.Mounts[0].Attached = false
+	r := &maintenanceVolumeReservation{assertHeld: func() error { return nil }, releaseGuards: func() error { return nil }, legacySourcePID: 123}
+	if _, err := validateLegacyReservedVolumes(topology, r, false); err != nil {
+		t.Fatal(err)
 	}
 }
 

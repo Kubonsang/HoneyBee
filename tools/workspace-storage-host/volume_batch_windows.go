@@ -21,7 +21,7 @@ type maintenanceVolumeReservation struct {
 	assertHeld    func() error
 	closed        bool
 	releaseGuards func() error
-	// Nonzero only for a legacy detached reservation that retains a handle to
+	// Nonzero only for a legacy retained reservation that retains a handle to
 	// the original process, preventing PID reuse until reservation close.
 	legacySourcePID uint32
 }
