@@ -90,7 +90,7 @@ func runContainedDoctor(node, cli, directory, timeout string) error {
 		os.Exit(2)
 	})
 	defer timer.Stop()
-	cmd := exec.Command(node, cli, "doctor", "--json")
+	cmd := exec.Command(node, cli, "doctor", "--scope", "installation", "--json")
 	cmd.Dir = directory
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
 	var stdout, stderr doctorBuffer

@@ -34,6 +34,15 @@ test("complete Doctor report permits no-project warning", () => {
   assert.equal(parseDoctorHealth(JSON.stringify(report())).ready, true);
 });
 
+test("installation reports retain required checks and reject unrelated checks or scopes", () => {
+  const r = { ...report(), scope: "installation" };
+  assert.equal(parseDoctorHealth(JSON.stringify(r)).ready, true);
+  assert.throws(() => parseDoctorHealth(JSON.stringify({ ...r, scope: "anything" })));
+  r.checks.push({ code: "workspace.ready", status: "pass", message: "unrelated" });
+  r.summary.pass++;
+  assert.throws(() => parseDoctorHealth(JSON.stringify(r)), /Unexpected installation/u);
+});
+
 windowsTest("nonzero child exit preserves stdout and stderr diagnostics", async () => {
   const cwd = await directory(),
     cli = path.join(cwd, "failure.cjs");
@@ -146,7 +155,7 @@ windowsTest(
       const result = JSON.parse(
         (await runDoctorProcess({ node: process.execPath, cli, cwd })).stdout,
       );
-      assert.deepEqual(result, { args: ["doctor", "--json"] });
+      assert.deepEqual(result, { args: ["doctor", "--scope", "installation", "--json"] });
     } finally {
       if (previous === undefined) delete process.env.NODE_OPTIONS;
       else process.env.NODE_OPTIONS = previous;

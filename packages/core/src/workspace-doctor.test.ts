@@ -280,5 +280,30 @@ describe("Workspace doctor", () => {
     expect(report.checks).toContainEqual(
       expect.objectContaining({ code: "workspace.repair-required", status: "fail" }),
     );
+    const registry = new WorkspaceRegistryStore(dataRoot);
+    await registry.putProject({
+      ...project,
+      storageCommand: path.join(root, "removed", "old.exe"),
+    });
+    const before = await readFile(registry.path, "utf8");
+    const installation = await core.doctor({ storageCommand, scope: "installation" });
+    expect(installation.scope).toBe("installation");
+    expectPlatformReadiness(installation);
+    expect(installation.checks.some((item) => item.code.startsWith("workspace."))).toBe(false);
+    const full = await core.doctor({ storageCommand });
+    expect(full.ready).toBe(false);
+    expect(full.checks).toContainEqual(
+      expect.objectContaining({ code: "project.storage-tools", status: "fail" }),
+    );
+    expect(full.checks).toContainEqual(
+      expect.objectContaining({ code: "workspace.repair-required", status: "fail" }),
+    );
+    storage.userMatches = false;
+    const invalidInstallation = await core.doctor({ storageCommand, scope: "installation" });
+    expect(invalidInstallation.ready).toBe(false);
+    expect(invalidInstallation.checks).toContainEqual(
+      expect.objectContaining({ code: "storage.install-receipt", status: "fail" }),
+    );
+    expect(await readFile(registry.path, "utf8")).toBe(before);
   });
 });

@@ -20,6 +20,7 @@ import type {
 const execFileAsync = promisify(execFile);
 
 export interface WorkspaceDoctorOptions {
+  readonly scope?: "installation";
   readonly storageCommand?: string;
   readonly expectedComponentVersion?: string;
   readonly expectedClientSha256?: string;
@@ -109,7 +110,7 @@ export const runWorkspaceDoctor = async (
         error instanceof Error ? error.message : "Workspace registry could not be read.",
       ),
     );
-    return report(checks);
+    return report(checks, options.scope);
   }
 
   const selected = resolver.resolve(options.storageCommand ?? value.projects[0]?.storageCommand);
@@ -125,7 +126,7 @@ export const runWorkspaceDoctor = async (
           error instanceof Error ? error.message : "Selected storage tools are invalid.",
         ),
       );
-      return report(checks);
+      return report(checks, options.scope);
     }
   }
   for (const field of [
@@ -145,7 +146,7 @@ export const runWorkspaceDoctor = async (
           "Selected storage identity conflicts with the required package identity.",
         ),
       );
-      return report(checks);
+      return report(checks, options.scope);
     }
   }
   // A selection can supply missing expectations, never relax caller requirements.
@@ -350,6 +351,9 @@ export const runWorkspaceDoctor = async (
           `${value.projects.length} Unity project(s) registered.`,
         ),
   );
+  // Updating the application must not require repairing unrelated user projects.
+  // The default Doctor continues to inspect every project and Workspace.
+  if (options.scope === "installation") return report(checks, options.scope);
   for (const project of value.projects) {
     const subject = `${project.label} (${project.projectId})`;
     let projectTools;
@@ -499,14 +503,20 @@ export const runWorkspaceDoctor = async (
         : check("workspace.ready", "pass", "Workspace is ready.", { subject }),
     );
   }
-  return report(checks);
+  return report(checks, options.scope);
 };
 
-const report = (checks: readonly DoctorCheckV1[]): DoctorReportV1 => {
+const report = (checks: readonly DoctorCheckV1[], scope?: "installation"): DoctorReportV1 => {
   const summary = {
     pass: checks.filter((item) => item.status === "pass").length,
     warning: checks.filter((item) => item.status === "warning").length,
     fail: checks.filter((item) => item.status === "fail").length,
   };
-  return { schemaVersion: 1, ready: summary.fail === 0, summary, checks };
+  return {
+    schemaVersion: 1,
+    ...(scope === undefined ? {} : { scope }),
+    ready: summary.fail === 0,
+    summary,
+    checks,
+  };
 };

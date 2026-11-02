@@ -24,6 +24,7 @@ const required = [
 
 export const parseDoctorHealth = (stdout) => {
   const report = JSON.parse(stdout);
+  assert(report.scope === undefined || report.scope === "installation", "Unsupported Doctor scope");
   assert(
     report.schemaVersion === 1 &&
       report.ok === true &&
@@ -35,6 +36,9 @@ export const parseDoctorHealth = (stdout) => {
   const counts = { pass: 0, warning: 0, fail: 0 };
   const codes = new Map();
   for (const check of report.checks) {
+    if (report.scope === "installation") {
+      assert(required.includes(check.code), "Unexpected installation Doctor check");
+    }
     assert(
       typeof check.code === "string" &&
         check.code.length > 0 &&
