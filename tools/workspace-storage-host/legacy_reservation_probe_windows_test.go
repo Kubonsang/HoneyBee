@@ -120,6 +120,10 @@ func TestLegacyRetainedReservationPinnedVM(t *testing.T) {
 	if err := r.close(); err != nil {
 		t.Fatal(err)
 	}
+	resumed, err := bound.resumeLegacyRunningTopology(context.Background(), area, transaction, source, false)
+	if err != nil || !resumed {
+		t.Fatal("unchanged running source cancellation proof failed", err)
+	}
 	after, err := bound.handle.Query()
 	if err != nil || after.State != svc.Running || after.ProcessId != before.ProcessId {
 		t.Fatal("reservation changed original service process", err)

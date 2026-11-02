@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 
+	"github.com/Kubonsang/unity-workspace-storage/storage"
 	"github.com/Kubonsang/unity-workspace-storage/workspace"
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
@@ -348,4 +349,68 @@ func (b *boundMaintenanceService) stopLegacyRetained(ctx context.Context, area *
 		}
 		return s.stopFromState(ctx, svc.Running, before, proof)
 	})
+}
+
+// Reservation failure/cancellation can leave the original live topology wholly
+// unchanged. Do not try to apply a detached rollback intent to that running
+// process. Verify the original topology without any detach/attach operations.
+// Missing original attachments fall back to the separate cold rollback proof;
+// changed owners, extra attachments and unknown journals always remain errors.
+func (b *boundMaintenanceService) resumeLegacyRunningTopology(ctx context.Context, area *maintenanceArea, transaction string, original serviceEvidence, automatic bool) (bool, error) {
+	if b.evidence != original || !exactLegacyHb12Source(original) {
+		return false, nil
+	}
+	status, err := b.handle.Query()
+	if err != nil {
+		return false, err
+	}
+	if status.State != svc.Running || status.ProcessId == 0 {
+		return false, nil
+	}
+	data, err := json.Marshal(original)
+	if err != nil {
+		return false, err
+	}
+	records := area.restoreRecordStorage(area.assertHeld, 16<<20)
+	topology, err := loadMaintenanceTopology(transaction, evidenceHash(data), original.Receipt, records, area.assertHeld)
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	err = b.service.withSourceEvidence(original, func(s *maintenanceService) error {
+		check := func() error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if err := s.check(); err != nil {
+				return err
+			}
+			now, err := b.handle.Query()
+			if err != nil {
+				return err
+			}
+			if now.State != svc.Running || now.ProcessId != status.ProcessId {
+				return errors.New("original legacy process changed during live rollback proof")
+			}
+			return nil
+		}
+		if err := verifyBrokerMounts(topology, original.Receipt, check, maintenanceImageLoaded, storage.FileIdentity, func(lease workspace.LeaseJournal) ([]string, error) {
+			if err := verifyMaintenanceVolumeReadOnly(lease.ChildPath, lease.VolumeGUID, check); err != nil {
+				return nil, err
+			}
+			return maintenanceMountPaths(lease.VolumeGUID)
+		}); err != nil {
+			return err
+		}
+		if automatic {
+			return s.restoreStartup()
+		}
+		return check()
+	})
+	if errors.Is(err, errRestoredAttachmentMissing) {
+		return false, nil
+	}
+	return err == nil, err
 }

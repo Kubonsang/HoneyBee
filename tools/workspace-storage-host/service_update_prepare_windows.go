@@ -66,6 +66,9 @@ func resumeInstalledPair(ctx context.Context, area *maintenanceArea, record serv
 		return err
 	}
 	defer bound.close()
+	if resumed, err := bound.resumeLegacyRunningTopology(ctx, area, record.TransactionSHA256, source.Evidence, automatic); err != nil || resumed {
+		return err
+	}
 	topologyTransaction := pairTopologyTransaction(record.TransactionSHA256, source.Evidence, expected)
 	_, err = area.restoreRecordStorage(area.assertHeld, 16<<20).read("service-topology-" + topologyTransaction + ".json")
 	if os.IsNotExist(err) {
