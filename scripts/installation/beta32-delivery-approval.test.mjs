@@ -13,6 +13,7 @@ import {
   beta37DeliveryApprovalId,
   beta38DeliveryApprovalId,
   deliveryCompletionPolicy,
+  requiresWingetManifest,
   validateOperatorDeliveryApproval,
   validateBeta36Approval,
   loadDeliveryApproval,
@@ -84,6 +85,7 @@ test("completion verification remains mandatory for all supported operator versi
     [beta38DeliveryApprovalId, "0.1.0-beta.38"],
   ]) {
     const record = { ...beta36, id, version };
+    assert.equal(requiresWingetManifest(version), true);
     assert.deepEqual(deliveryCompletionPolicy(record, record.sourceCommit), {
       includeWingetManifest: true,
       requireUnifiedVerification: true,
@@ -94,6 +96,13 @@ test("completion verification remains mandatory for all supported operator versi
     requireUnifiedVerification: false,
   });
   assert.throws(() => deliveryCompletionPolicy({ ...beta36, id: "unknown" }, beta36.sourceCommit));
+});
+
+test("WinGet publication requirement does not disappear without an approval record", () => {
+  for (const version of ["0.1.0-beta.35", "0.1.0-beta.36", "0.1.0-beta.37", "0.1.0-beta.38"])
+    assert.equal(requiresWingetManifest(version), true);
+  assert.equal(requiresWingetManifest("0.1.0-beta.32"), false);
+  assert.equal(requiresWingetManifest("0.1.0-beta.39"), false);
 });
 
 test("beta.37 requires its own approval and rejects stale version, source and artifact pins", async () => {

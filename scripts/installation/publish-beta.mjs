@@ -11,6 +11,7 @@ import { readBounded } from "../update/prepare-release.mjs";
 import {
   beta35DeliveryApproval,
   isOperatorDeliveryApproval,
+  requiresWingetManifest,
   loadDeliveryApproval,
 } from "./beta32-delivery-approval.mjs";
 import { requireReleaseVerification } from "../qualification/release-verify.mjs";
@@ -75,9 +76,7 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
-const includeWinget =
-  receipt.version === beta35DeliveryApproval.version ||
-  ["0.1.0-beta.36", "0.1.0-beta.37"].includes(receipt.version);
+const includeWinget = requiresWingetManifest(receipt.version);
 if (includeWinget) {
   const pinned =
     receipt.version === beta35DeliveryApproval.version ? beta35DeliveryApproval : deliveryApproval;

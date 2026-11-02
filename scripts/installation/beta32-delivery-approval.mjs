@@ -35,6 +35,11 @@ const operatorVersions = new Map([
 
 export const isOperatorDeliveryApproval = (id) => operatorVersions.has(id);
 
+// Asset requirements depend on the release version even when approval is absent;
+// the publisher must then reject missing approval rather than omit the manifest.
+export const requiresWingetManifest = (version) =>
+  version === beta35DeliveryApproval.version || [...operatorVersions.values()].includes(version);
+
 export function validateOperatorDeliveryApproval(record, sourceCommit) {
   assert(isOperatorDeliveryApproval(record?.id), "Unknown delivery approval");
   return validatePinnedApproval(record, sourceCommit, record.id, operatorVersions.get(record.id));
@@ -51,7 +56,7 @@ export function deliveryCompletionPolicy(approval, sourceCommit) {
       "Unknown delivery completion approval",
     );
   return {
-    includeWingetManifest: operator || approval === beta35DeliveryApproval,
+    includeWingetManifest: requiresWingetManifest(approval.version),
     requireUnifiedVerification: operator,
   };
 }

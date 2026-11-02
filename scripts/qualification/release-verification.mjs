@@ -199,7 +199,7 @@ export function policyOnlySourceChange(files) {
         /^(scripts\/qualification\/|docs\/)/u.test(file) ||
         // These publication-only approval/completion tools are not embedded in
         // Setup or the recovery runtime. Artifact hashes still must match.
-        /^scripts\/installation\/(beta32-delivery-approval(?:\.test)?|complete-public-beta)\.mjs$/u.test(
+        /^scripts\/installation\/(beta32-delivery-approval(?:\.test)?|complete-public-beta|publish-beta)\.mjs$/u.test(
           file,
         ),
     )

@@ -198,13 +198,14 @@ test("source equivalence refuses product and package changes", () => {
       "scripts/installation/beta32-delivery-approval.mjs",
       "scripts/installation/beta32-delivery-approval.test.mjs",
       "scripts/installation/complete-public-beta.mjs",
+      "scripts/installation/publish-beta.mjs",
     ]),
   );
   for (const file of [
     "scripts/installation/setup-entry.mjs",
     "scripts/installation/build-setup.mjs",
     "scripts/update/setup-upgrade.mjs",
-    "scripts/installation/publish-beta.mjs",
+    "scripts/installation/prepare-distribution.mjs",
   ])
     assert(!policyOnlySourceChange(["scripts/installation/beta32-delivery-approval.mjs", file]));
   assert(!policyOnlySourceChange(["packages/core/src/workspace-storage.ts"]));
