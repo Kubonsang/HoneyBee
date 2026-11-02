@@ -116,3 +116,14 @@ the published follow-up. All three runtime executables reproduced byte-for-byte,
 and Go tests/vet plus both package smoke checks passed against the final pin.
 The planned installed-compatibility gate passed, including one physical reboot
 and exact fixture cleanup. See HoneyBee's changelog for consuming app releases.
+
+### Preserving legacy recovery host: hb17 (candidate)
+
+hb17 adds explicit maintenance admission for the exact published hb12 host under
+its reproduced public beta.35 Setup-managed installation. It reserves exclusive
+volume locks while the original broker runs, stops it only with the complete
+retained inventory and durable rollback topology pinned, and uses the existing
+protected backup/replacement transaction. Ordinary sources still require Pause.
+The client protocol and external Bee overlay patch are unchanged. Source tests
+and reservation mechanism probes are separate from exact-candidate service
+replacement and interruption qualification; no public release is implied here.

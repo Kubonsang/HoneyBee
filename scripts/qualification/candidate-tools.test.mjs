@@ -84,9 +84,18 @@ test("hb16 production candidate binds the long-parent-path fix", async (t) => {
   assert.equal(result.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
 });
 
-test("an unreviewed future component version is rejected", async (t) => {
+test("hb17 production candidate binds the preserving legacy recovery host", async (t) => {
   const f = await fixture(t);
   f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb17";
+  await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
+  const bound = await bindCandidateTools(f.directory, f.compatibility, false);
+  assert.equal(bound.workspaceStorage[0].version, f.manifest.workspaceStorageVersion);
+  assert.equal(bound.workspaceStorage[0].payloads[0].sha256, f.manifest.files["host.exe"].sha256);
+});
+
+test("an unreviewed future component version is rejected", async (t) => {
+  const f = await fixture(t);
+  f.manifest.workspaceStorageVersion = "0.0.0+cfa606fd4143.hb18";
   await writeFile(path.join(f.directory, "manifest.json"), JSON.stringify(f.manifest));
   await assert.rejects(bindCandidateTools(f.directory, f.compatibility, false));
 });
