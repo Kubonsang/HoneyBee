@@ -193,7 +193,16 @@ export function versionOnlyManifestChange(before, after) {
 
 export function policyOnlySourceChange(files) {
   return (
-    files.length > 0 && files.every((file) => /^(scripts\/qualification\/|docs\/)/u.test(file))
+    files.length > 0 &&
+    files.every(
+      (file) =>
+        /^(scripts\/qualification\/|docs\/)/u.test(file) ||
+        // These publication-only approval/completion tools are not embedded in
+        // Setup or the recovery runtime. Artifact hashes still must match.
+        /^scripts\/installation\/(beta32-delivery-approval(?:\.test)?|complete-public-beta)\.mjs$/u.test(
+          file,
+        ),
+    )
   );
 }
 

@@ -11,6 +11,8 @@ import {
   publicDeliveryAdmission,
   beta36DeliveryApprovalId,
   beta37DeliveryApprovalId,
+  beta38DeliveryApprovalId,
+  deliveryCompletionPolicy,
   validateOperatorDeliveryApproval,
   validateBeta36Approval,
   loadDeliveryApproval,
@@ -27,6 +29,72 @@ const beta36 = {
   manifestSha256: approval.manifestSha256,
   wingetManifestSha256: "d".repeat(64),
 };
+
+test("beta.38 ordering requires its own frozen source and artifact approval", async () => {
+  const record = { ...beta36, id: beta38DeliveryApprovalId, version: "0.1.0-beta.38" };
+  const root = await mkdtemp(path.join(tmpdir(), "hb-beta38-"));
+  const file = path.join(root, "approval.json");
+  const bytes = JSON.stringify(record);
+  await writeFile(file, bytes);
+  const options = {
+    deliveryApproval: record.id,
+    deliveryApprovalPath: file,
+    deliveryApprovalSha256: createHash("sha256").update(bytes).digest("hex"),
+    releaseCommit: record.sourceCommit,
+  };
+  assert.deepEqual(await loadDeliveryApproval(options), record);
+  assert.deepEqual(deliveryCompletionPolicy(record, record.sourceCommit), {
+    includeWingetManifest: true,
+    requireUnifiedVerification: true,
+  });
+  assert.throws(() => deliveryCompletionPolicy(record, "e".repeat(40)));
+  assert.equal(
+    publicDeliveryAdmission(policy, fixture(), record.version, record.id, record)
+      .publicDeliveryVerificationAllowed,
+    true,
+  );
+  await assert.rejects(loadDeliveryApproval({ ...options, releaseCommit: "e".repeat(40) }));
+  await assert.rejects(
+    loadDeliveryApproval({ ...options, deliveryApproval: beta37DeliveryApprovalId }),
+  );
+  for (const change of [
+    { version: "0.1.0-beta.37" },
+    { version: "0.1.0-beta.39" },
+    { setupSha256: "" },
+    { manifestSha256: "" },
+    { wingetManifestSha256: "" },
+    { id: "beta39-public-delivery-20261102", version: "0.1.0-beta.39" },
+  ])
+    assert.throws(() =>
+      validateOperatorDeliveryApproval({ ...record, ...change }, record.sourceCommit),
+    );
+  const incomplete = fixture();
+  incomplete.gates[5].status = "pending";
+  assert.throws(() =>
+    publicDeliveryAdmission(policy, incomplete, record.version, record.id, record),
+  );
+  await writeFile(file, bytes + " ");
+  await assert.rejects(loadDeliveryApproval(options), /changed/u);
+});
+
+test("completion verification remains mandatory for all supported operator versions", () => {
+  for (const [id, version] of [
+    [beta36DeliveryApprovalId, "0.1.0-beta.36"],
+    [beta37DeliveryApprovalId, "0.1.0-beta.37"],
+    [beta38DeliveryApprovalId, "0.1.0-beta.38"],
+  ]) {
+    const record = { ...beta36, id, version };
+    assert.deepEqual(deliveryCompletionPolicy(record, record.sourceCommit), {
+      includeWingetManifest: true,
+      requireUnifiedVerification: true,
+    });
+  }
+  assert.deepEqual(deliveryCompletionPolicy(beta35DeliveryApproval), {
+    includeWingetManifest: true,
+    requireUnifiedVerification: false,
+  });
+  assert.throws(() => deliveryCompletionPolicy({ ...beta36, id: "unknown" }, beta36.sourceCommit));
+});
 
 test("beta.37 requires its own approval and rejects stale version, source and artifact pins", async () => {
   const record = { ...beta36, id: beta37DeliveryApprovalId, version: "0.1.0-beta.37" };

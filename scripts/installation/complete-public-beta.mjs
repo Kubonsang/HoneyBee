@@ -7,8 +7,7 @@ import process from "node:process";
 import { promisify } from "node:util";
 import {
   beta32DeliveryApproval,
-  beta35DeliveryApproval,
-  beta36DeliveryApprovalId,
+  deliveryCompletionPolicy,
   loadDeliveryApproval,
 } from "./beta32-delivery-approval.mjs";
 import { requireReleaseVerification } from "../qualification/release-verify.mjs";
@@ -35,7 +34,7 @@ const commit =
     ? "67c1712e6fcf846a9179b5ea595cf0807950f844"
     : options.releaseCommit;
 assert(/^[a-f0-9]{40}$/.test(commit), "Pinned release source commit required");
-if (approval.id === beta36DeliveryApprovalId) assert.equal(commit, approval.sourceCommit);
+const completionPolicy = deliveryCompletionPolicy(approval, commit);
 const assets = [
   "HoneyBeeSetup.exe",
   "application.zip",
@@ -43,7 +42,7 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
-if (approval === beta35DeliveryApproval || approval.id === beta36DeliveryApprovalId) {
+if (completionPolicy.includeWingetManifest) {
   assert.equal(
     (await digestDistributionFile(path.join(options.directory, "Kubonsang.HoneyBee.yaml"))).sha256,
     approval.wingetManifestSha256,
@@ -75,7 +74,7 @@ try {
   const review = await reviewDistribution(finalOptions);
   assert.equal(review.candidate.setupSha256, approval.setupSha256);
   assert.equal(review.candidate.manifestSha256, approval.manifestSha256);
-  if (approval.id === beta36DeliveryApprovalId) {
+  if (completionPolicy.requireUnifiedVerification) {
     assert(options.verificationReportPath, "Unified release verification required");
     await requireReleaseVerification(
       options.verificationReportPath,
@@ -126,7 +125,7 @@ try {
     "Acceptance changed during public verification",
   );
   const exactNotes = path.join(attempt, "final-notes.md");
-  if (approval.id === beta36DeliveryApprovalId) {
+  if (completionPolicy.requireUnifiedVerification) {
     assert.deepEqual(await loadDeliveryApproval(options), approval, "Delivery approval changed");
     await requireReleaseVerification(
       options.verificationReportPath,

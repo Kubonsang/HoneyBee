@@ -25,18 +25,35 @@ export const beta35DeliveryApproval = Object.freeze({
 export const beta36DeliveryApprovalId = "beta36-public-delivery-20260920";
 // Support a future explicit operator approval; this constant does not grant it.
 export const beta37DeliveryApprovalId = "beta37-public-delivery-20261004";
+export const beta38DeliveryApprovalId = "beta38-public-delivery-20261102";
 
-export const isOperatorDeliveryApproval = (id) =>
-  id === beta36DeliveryApprovalId || id === beta37DeliveryApprovalId;
+const operatorVersions = new Map([
+  [beta36DeliveryApprovalId, "0.1.0-beta.36"],
+  [beta37DeliveryApprovalId, "0.1.0-beta.37"],
+  [beta38DeliveryApprovalId, "0.1.0-beta.38"],
+]);
+
+export const isOperatorDeliveryApproval = (id) => operatorVersions.has(id);
 
 export function validateOperatorDeliveryApproval(record, sourceCommit) {
   assert(isOperatorDeliveryApproval(record?.id), "Unknown delivery approval");
-  return validatePinnedApproval(
-    record,
-    sourceCommit,
-    record.id,
-    record.id === beta36DeliveryApprovalId ? "0.1.0-beta.36" : "0.1.0-beta.37",
-  );
+  return validatePinnedApproval(record, sourceCommit, record.id, operatorVersions.get(record.id));
+}
+
+/** Completion keeps WinGet and unified verification mandatory for every
+ * explicitly supported operator release, including newly added versions. */
+export function deliveryCompletionPolicy(approval, sourceCommit) {
+  const operator = isOperatorDeliveryApproval(approval?.id);
+  if (operator) validateOperatorDeliveryApproval(approval, sourceCommit);
+  else
+    assert(
+      approval === beta32DeliveryApproval || approval === beta35DeliveryApproval,
+      "Unknown delivery completion approval",
+    );
+  return {
+    includeWingetManifest: operator || approval === beta35DeliveryApproval,
+    requireUnifiedVerification: operator,
+  };
 }
 
 // The user approved this version's ordering, not an unbound future release.
