@@ -223,6 +223,15 @@ test("change impact selects behavior, while unknown production changes block adm
   assert.deepEqual(unknown.unclassified, ["new-build-system.config"]);
   assert(!unknown.rerunGates.includes("interruption-matrix"));
 });
+test("dependency resolution changes require every acceptance gate", () => {
+  for (const file of ["pnpm-lock.yaml", "pnpm-workspace.yaml"]) {
+    const result = impact([file]);
+    assert.deepEqual(result.unclassified, []);
+    assert.deepEqual(new Set(result.rerunGates), new Set(fixedAcceptanceGates));
+    assert.deepEqual(result.reasons, [{ file, scope: "dependency-resolution" }]);
+  }
+  assert.deepEqual(impact(["other-workspace.yaml"]).unclassified, ["other-workspace.yaml"]);
+});
 test("capacity admission includes expected growth, guest service floor and child reserve", () => {
   const base = { hostFreeBytes: 60 * GiB, guestFreeBytes: 30 * GiB, vmBytes: 29 * GiB };
   assert(capacity(base, GiB).admitted);

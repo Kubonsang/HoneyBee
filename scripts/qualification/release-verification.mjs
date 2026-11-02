@@ -156,6 +156,11 @@ export function impact(files) {
     } else if (/^(apps\/|packages\/)/u.test(file)) {
       gates.add("workspace-preservation");
       reasons.push({ file, scope: "application" });
+    } else if (["pnpm-lock.yaml", "pnpm-workspace.yaml"].includes(file)) {
+      // Resolution and overrides may change both the application runtime and
+      // the installed update tools, even when declarations stay unchanged.
+      fixedAcceptanceGates.forEach((gate) => gates.add(gate));
+      reasons.push({ file, scope: "dependency-resolution" });
     } else if (file === "package.json" || file.endsWith("/package.json")) {
       gates.add("artifact-integrity");
       reasons.push({ file, scope: "build-manifest" });
