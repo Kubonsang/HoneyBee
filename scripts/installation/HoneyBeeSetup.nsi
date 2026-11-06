@@ -23,6 +23,12 @@ Section
     StrCpy $1 "--install-service"
   ${GetParameters} $2
   ClearErrors
+  ${GetOptions} $2 "/INSTALLSERVICE" $3
+  IfErrors service_option_done
+  StrCmp $3 "" 0 stopped
+  StrCpy $1 "$1 --install-service"
+service_option_done:
+  ClearErrors
   ${GetOptions} $2 "/REPAIR" $3
   IfErrors repair_option_done
   StrCpy $1 "$1 --repair"

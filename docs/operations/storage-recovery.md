@@ -18,6 +18,21 @@ The recovery screen reads diagnostics; opening it never changes the service. It 
 
 **Important:** legacy preservation is not established merely by adding versions to a compatibility list. If the original service/source cannot pass the supported migration preflight, keep all data and stop. Retain the diagnostic details, app version, installed/required component versions, installation path and original Setup version for a supported recovery. Do not use `install --replace` as a GUI fallback. The released Setup must explicitly support the source installation; the diagnostic screen itself does not perform service migration.
 
+## Unattended Setup (beta.39 and later)
+
+Automation can explicitly request a matching service installation or preserving
+service update with `HoneyBeeSetup.exe /S /INSTALLSERVICE`. Plain `/S` continues
+to install or update the application without authorizing a service change.
+`/INSTALLSERVICE` does not bypass Windows elevation: use an already authorized
+administrator session, or complete the normal UAC request. Package signatures,
+installation ownership, source compatibility and Workspace volume locks still
+apply. Existing Workspaces and branches must be preserved.
+
+For installation health, run `bin\honeybee.exe doctor --scope installation --json`.
+Default Doctor also inspects individual projects and Workspaces; existing repair
+errors remain visible after a healthy update and require their own repair. They
+are not a reason to repeat Setup or delete Workspaces.
+
 ## ZIP or development build
 
 A new ZIP package may expect a newer machine-wide service. Use the original managed installation and its supported Setup update path. Do not copy individual new binaries into the old installation. If no managed installation exists, official Setup must diagnose the existing service rather than take it over.
