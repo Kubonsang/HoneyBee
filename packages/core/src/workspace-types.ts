@@ -124,6 +124,7 @@ export interface DoctorCheckV1 {
 
 export interface DoctorReportV1 {
   readonly schemaVersion: 1;
+  readonly scope?: "installation";
   readonly ready: boolean;
   readonly summary: Readonly<{ pass: number; warning: number; fail: number }>;
   readonly checks: readonly DoctorCheckV1[];

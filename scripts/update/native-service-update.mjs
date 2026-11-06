@@ -139,7 +139,11 @@ export function createNativeServiceUpdate(
     },
     async validateDoctor() {
       const checked = await health("target");
-      if (checked.ready !== true) return false;
+      if (checked.ready !== true) {
+        // Keep failed diagnostics before rollback; never use them as commit evidence.
+        await persist(directory, `failed-health-${sha256(JSON.stringify(checked))}.json`, checked);
+        return false;
+      }
       // The report is durable before the user journal can enter Committing.
       await persist(
         directory,

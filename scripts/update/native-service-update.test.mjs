@@ -31,6 +31,32 @@ const legacyBaseline = () => ({
   sourceEvidenceSha256: "e".repeat(64),
 });
 
+test("failed target diagnostics survive rollback without becoming commit evidence", async () => {
+  const options = legacyBridgeOptions();
+  options.installationRoot = await mkdtemp(path.join(os.tmpdir(), "hb-failed-health-"));
+  const checked = {
+    ready: false,
+    failure: { code: "update.health-failed", message: "diagnostic transport failed" },
+  };
+  const bridge = createNativeServiceUpdate(options, {
+    health: async () => checked,
+    sessionFactory: () => assert.fail("failed health cannot request commit"),
+  });
+  assert.equal(await bridge.validateDoctor(), false);
+  const directory = path.join(
+    options.installationRoot,
+    "update/service-contexts",
+    options.identity.serviceTransactionSha256,
+  );
+  assert.deepEqual(
+    JSON.parse(
+      await readFile(path.join(directory, `failed-health-${sha256(JSON.stringify(checked))}.json`)),
+    ),
+    checked,
+  );
+  await assert.rejects(readFile(path.join(directory, "doctor.json")), { code: "ENOENT" });
+});
+
 test("explicit legacy rollback accepts only its bound unready baseline; target still requires Doctor", async () => {
   const options = legacyBridgeOptions();
   const bridge = createNativeServiceUpdate(options, {

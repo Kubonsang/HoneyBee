@@ -63,6 +63,24 @@ describe("Workspace CLI", () => {
         checks: readonly { code: string; status: string }[];
       }
     ).checks;
+    const scoped = await runCli(
+      [
+        "doctor",
+        "--scope",
+        "installation",
+        "--storage-command",
+        storageCommand,
+        "--data-root",
+        dataRoot,
+        "--json",
+      ],
+      root,
+    );
+    expect(scoped.exitCode).toBe(1);
+    expect(JSON.parse(scoped.stdout)).toMatchObject({ scope: "installation", ready: false });
+    const unknownScope = await runCli(["doctor", "--scope", "unknown", "--json"], root);
+    expect(unknownScope.exitCode).toBe(1);
+    expect(unknownScope.stderr).toContain("Doctor scope must be installation.");
     expect(missingControlChecks).toContainEqual({
       code: "storage.command",
       status: "pass",

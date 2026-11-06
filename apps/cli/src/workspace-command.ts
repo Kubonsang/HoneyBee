@@ -43,7 +43,7 @@ Usage:
   honeybee workspace path <name-or-id> [--project <id>] [--json]
   honeybee workspace repair <name-or-id> [--project <id>] [--json]
   honeybee workspace remove <name-or-id> [--project <id>] [--json]
-  honeybee doctor [--json]
+  honeybee doctor [--scope installation] [--json]
   honeybee version
 
 HoneyBee owns Git worktree and Unity Library CoW lifecycle only. Run tools
@@ -475,6 +475,10 @@ const executeWorkspace = async (args: readonly string[]): Promise<void> => {
 };
 
 const executeDoctor = async (args: readonly string[]): Promise<void> => {
+  const scope = option(args, "--scope");
+  if (scope !== undefined && scope !== "installation") {
+    throw new WorkspaceCoreError("cli.invalid-option", "Doctor scope must be installation.");
+  }
   const core = await coreFor(args);
   const json = jsonEnabled(args);
   const storageCommand = await resolveStorageCommand(args, false).catch(() => undefined);
@@ -482,6 +486,7 @@ const executeDoctor = async (args: readonly string[]): Promise<void> => {
   const expectedClientSha256 = manifest?.files["unity-workspace-storage.exe"]?.sha256;
   const expectedControlSha256 = manifest?.files["honeybee-workspace-storage-host.exe"]?.sha256;
   const report = await core.doctor({
+    ...(scope === "installation" ? { scope } : {}),
     ...(storageCommand === undefined ? {} : { storageCommand }),
     ...(manifest === undefined ||
     expectedClientSha256 === undefined ||
@@ -499,6 +504,7 @@ const executeDoctor = async (args: readonly string[]): Promise<void> => {
           schemaVersion: CLI_JSON_SCHEMA_VERSION,
           ok: true,
           ready: report.ready,
+          ...(report.scope === undefined ? {} : { scope: report.scope }),
           summary: report.summary,
           checks: report.checks,
         }

@@ -4,7 +4,7 @@
 
 `scripts/update/version-health.mjs` adds an internal `checkVersionHealth` runner.
 It executes the selected version's private `runtime/node.exe` with absolute
-`cli/dist/cli.js doctor --json` arguments, without a shell or stable shim lookup.
+`cli/dist/cli.js doctor --scope installation --json` arguments, without a shell or stable shim lookup.
 The working directory is that version's directory. It does not select a version,
 write an activation journal, run Repair or request elevation.
 
@@ -45,8 +45,18 @@ integrity, service, receipt, compatibility, workspace root, status and project
 registration. Required component checks cannot be duplicated or omitted.
 
 All required component checks must pass. The no-project registration warning is
-allowed. Other project/workspace warnings follow existing Doctor readiness policy;
-any failed check fails health. Repeated per-project check codes are allowed.
+allowed. Installation-scoped Doctor checks the real registry, package, installed
+owner, service, component version and storage status, without inspecting individual
+project bindings or Workspace states. Its JSON declares `scope: "installation"`;
+unknown scopes or unexpected scoped checks fail validation. Default
+`honeybee doctor --json` still performs the full inspection and reports damaged
+projects and Workspaces as failures. Installation readiness does not authorize
+those Workspaces for use or perform repair/cleanup. Failed target health is saved
+separately before rollback and never becomes commit evidence.
+
+This scope prevents old project tool paths and pre-existing repair-required
+Workspaces from rolling back an otherwise healthy application/service update.
+Repeated per-project check codes remain allowed in unscoped reports.
 Future Doctor schemas or renamed required checks need an explicit compatibility
 update rather than silently passing an incomplete report.
 
