@@ -9,7 +9,7 @@ import { discoverRelease } from "../../../../scripts/update/release-discovery.mj
 import { stageAuthenticatedRelease } from "../../../../scripts/update/authenticated-release.mjs";
 import { DesktopUpdateCheck } from "./update-check.js";
 import { appInfo } from "./app-info.js";
-import { recoveryDiagnostics } from "../shared/recovery-diagnostics.js";
+import { diagnosticOperation, recoveryDiagnostics } from "../shared/recovery-diagnostics.js";
 import { SetupRecoveryController } from "../../../../scripts/update/setup-recovery-controller.mjs";
 import { readUpdateOutcome } from "../../../../scripts/update/update-outcome.mjs";
 import {
@@ -388,7 +388,7 @@ const registerIpc = (): void => {
       const report = recoveryDiagnostics(
         info,
         doctor,
-        setupOperation.state === "Idle" ? updateCheck.operationStatus() : setupOperation,
+        diagnosticOperation(setupOperation, updateCheck.operationStatus()),
       );
       const chosen = await dialog.showSaveDialog(mainWindow, {
         title: "Save HoneyBee diagnostics / 진단 저장",

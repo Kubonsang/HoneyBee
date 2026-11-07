@@ -45,6 +45,20 @@ const storageVersion = (value: string | null) =>
 const timestamp = (value: string | null) =>
   value !== null && Number.isFinite(Date.parse(value)) ? new Date(value).toISOString() : null;
 
+export function diagnosticOperation(
+  setup: DesktopRecoveryOperationV2,
+  application: DesktopRecoveryOperationV2,
+): DesktopRecoveryOperationV2 {
+  const terminal = new Set(["Idle", "Succeeded", "RolledBack", "Cancelled", "Failed", "Blocked"]);
+  if (!terminal.has(setup.state)) return setup;
+  if (!terminal.has(application.state)) return application;
+  if (setup.state === "Idle") return application;
+  if (application.state === "Idle") return setup;
+  const time = (operation: DesktopRecoveryOperationV2) =>
+    Date.parse(operation.lastProgressAt ?? operation.startedAt ?? "") || 0;
+  return time(application) > time(setup) ? application : setup;
+}
+
 /** Explicit projection, never recursive serialization/redaction of arbitrary diagnostics. */
 export function recoveryDiagnostics<
   T extends { readonly checks: readonly { code: string; status: "pass" | "warning" | "fail" }[] },

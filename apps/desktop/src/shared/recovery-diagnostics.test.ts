@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { recoveryDiagnostics } from "./recovery-diagnostics.js";
+import { diagnosticOperation, recoveryDiagnostics } from "./recovery-diagnostics.js";
 import type { DesktopRecoveryOperationV2 } from "./ipc.js";
 
 const operation: DesktopRecoveryOperationV2 = {
@@ -18,6 +18,28 @@ const operation: DesktopRecoveryOperationV2 = {
   canCancel: false,
 };
 describe("local recovery diagnostics", () => {
+  it("does not hide a current update failure behind a completed old Setup job", () => {
+    const setup = {
+      ...operation,
+      state: "Succeeded" as const,
+      lastProgressAt: "2026-11-07T10:00:00Z",
+    };
+    const update = {
+      ...operation,
+      state: "Failed" as const,
+      route: "application-update" as const,
+      lastProgressAt: "2026-11-07T11:00:00Z",
+    };
+    expect(diagnosticOperation(setup, update)).toBe(update);
+    expect(diagnosticOperation({ ...setup, state: "Running" }, update).state).toBe("Running");
+    expect(
+      diagnosticOperation(setup, { ...update, state: "Unresolved", lastProgressAt: null }).state,
+    ).toBe("Unresolved");
+    expect(diagnosticOperation(setup, { ...update, state: "Idle" })).toBe(setup);
+    expect(
+      diagnosticOperation({ ...setup, lastProgressAt: "2026-11-07T12:00:00Z" }, update).state,
+    ).toBe("Succeeded");
+  });
   it("exports allowlisted states without user paths, messages, project names or credentials", () => {
     const result = recoveryDiagnostics(
       {
