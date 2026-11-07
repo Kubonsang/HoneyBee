@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { reviewDistribution } from "./review-distribution.mjs";
+import { requiresSetupDescriptor } from "../update/setup-descriptor.mjs";
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { assertDistributionActionAllowed } from "./distribution-policy.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
@@ -77,6 +78,7 @@ const assets = [
   "SHA256SUMS.txt",
 ];
 const includeWinget = requiresWingetManifest(receipt.version);
+if (requiresSetupDescriptor(receipt.version)) assets.push("setup.json", "setup.sig.json");
 if (includeWinget) {
   const pinned =
     receipt.version === beta35DeliveryApproval.version ? beta35DeliveryApproval : deliveryApproval;

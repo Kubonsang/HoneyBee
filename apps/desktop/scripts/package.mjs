@@ -139,7 +139,7 @@ const paths = await packager({
   out: output,
   overwrite: true,
   asar: { unpack: "**/node_modules/node-pty/prebuilds/win32-x64/**/*" },
-  extraResource: [bundledTools, compatibilityManifest, brandPng],
+  extraResource: [bundledTools, compatibilityManifest, brandPng, path.join(appRoot, "dist/setup")],
   icon: windowsIcon,
   appCopyright: "Copyright HoneyBee contributors",
   win32metadata: {

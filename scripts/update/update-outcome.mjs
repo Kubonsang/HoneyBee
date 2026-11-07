@@ -26,7 +26,7 @@ export async function trackActivationJob(root, job) {
 
 const status = (state, version = null) => ({ schemaVersion: 1, state, version, mandatory: false });
 /** Read-only display evidence; never resumes a job or grants update authority. */
-export async function readUpdateOutcome(installationRoot) {
+export async function readUpdateOutcome(installationRoot, expected = undefined) {
   const root = path.resolve(installationRoot),
     marker = path.join(root, "update/latest-activation.json");
   let bytes;
@@ -49,6 +49,15 @@ export async function readUpdateOutcome(installationRoot) {
     const requestBytes = await readBounded(path.join(directory, "request.json"));
     assert.equal(sha256(requestBytes), job.sha256);
     const request = JSON.parse(requestBytes);
+    if (expected) {
+      assert.equal(request.sourcePointerSha256, expected.sourcePointerSha256);
+      assert(/^job-[A-Za-z0-9]+$/u.test(request.preparationJob));
+      const preparation = await readBounded(
+        path.join(root, "update/jobs", request.preparationJob, "request.json"),
+      );
+      assert.equal(sha256(preparation), request.preparationSha256);
+      assert.equal(JSON.parse(preparation).manifestSha256, expected.manifestSha256);
+    }
     assert(
       request.schemaVersion === 1 && ["activate", "setup-activate"].includes(request.operation),
     );
