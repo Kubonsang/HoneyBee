@@ -167,7 +167,8 @@ export class SetupRecoveryController {
       await withSetupRecoveryLock(runtime.helper, root, async () => {
         const events = await recoveryEvents(job);
         assert(!terminalRecoveryStates.includes(events.at(-1)?.state));
-        await recordRecoveryEvent(job, "Starting", { code: "recovery.approval-step" });
+        if (action === "execute")
+          await recordRecoveryEvent(job, "Starting", { code: "recovery.approval-step" });
       });
       // The independent version-scoped worker revalidates everything under its OS lock.
       await new Promise((resolve, reject) => {
@@ -186,9 +187,9 @@ export class SetupRecoveryController {
       });
       this.state = {
         ...this.state,
-        state: "Starting",
+        state: action === "execute" ? "Starting" : this.state.state,
         canCancel: false,
-        userAction: "approve-windows",
+        userAction: action === "execute" ? "approve-windows" : "check-setup",
       };
     } finally {
       this.busy = false;

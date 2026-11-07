@@ -24,6 +24,7 @@ import {
 import { parseDoctorHealth } from "./version-health.mjs";
 import { sha256 } from "./release-manifest.mjs";
 import { readUpdateOutcome } from "./update-outcome.mjs";
+import { recoveryResumeDecision } from "./setup-recovery-resume.mjs";
 import { setTimeout as delay } from "node:timers/promises";
 
 // This bundle is shipped outside ASAR, inside the authenticated version inventory.
@@ -87,12 +88,13 @@ await withSetupRecoveryLock(helper, root, async (assertHeld) => {
     job.request.sourceVersion,
     "Worker belongs to another source",
   );
-  const state = (await recoveryEvents(job)).at(-1)?.state;
+  const events = await recoveryEvents(job);
+  const state = events.at(-1)?.state;
   assert(
     !terminalRecoveryStates.includes(state) &&
       ["Review", "Starting", "Running", "Verifying", "Unresolved"].includes(state),
   );
-  let executed = false;
+  let executed = events.some(({ state }) => ["Running", "Verifying"].includes(state));
   try {
     const release = authenticateReleaseManifest(
       await readBounded(path.join(job.directory, "release.json")),
@@ -107,16 +109,38 @@ await withSetupRecoveryLock(helper, root, async (assertHeld) => {
     );
     assert.equal(descriptor.version, job.request.version);
     const current = await readBounded(path.join(root, "current.json"));
-    if (sha256(current) !== job.request.sourcePointerSha256) {
-      assert.equal(
-        JSON.parse(current).activeVersion,
-        job.request.version,
-        "Installation changed; recovery plan is stale",
-      );
-      await recordRecoveryEvent(job, "Verifying");
-      await verifyResult(job, job.request.version);
+    const pointerChanged = sha256(current) !== job.request.sourcePointerSha256;
+    // A previous worker may have died while the native helper/Setup was still alive.
+    // Rechecking must not request Desktop shutdown or launch another installer.
+    const decision = recoveryResumeDecision(
+      events,
+      executed
+        ? await readUpdateOutcome(root, {
+            sourcePointerSha256: job.request.sourcePointerSha256,
+            manifestSha256: release.manifestSha256,
+          })
+        : undefined,
+      job.request.version,
+    );
+    if (decision !== "launch") {
+      if (decision === "verify") {
+        await recordRecoveryEvent(job, "Verifying", { preservation: "unknown" });
+        await verifyResult(job, job.request.version);
+      } else {
+        await recordRecoveryEvent(job, decision, {
+          code:
+            decision === "RolledBack"
+              ? "recovery.rolled-back"
+              : decision === "Cancelled"
+                ? "recovery.cancelled"
+                : "recovery.verification-required",
+          preservation: "unknown",
+        });
+      }
       return;
     }
+    if (pointerChanged) executed = true; // The old unchanged claim is no longer provable.
+    assert(!pointerChanged, "Installation changed; recovery plan is stale");
     const source = await inspectSetupRecoverySource(root, trust);
     assert.equal(source.pointerSha256, job.request.sourcePointerSha256);
     assert.equal(
