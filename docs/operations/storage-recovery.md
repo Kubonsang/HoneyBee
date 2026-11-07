@@ -28,6 +28,21 @@ administrator session, or complete the normal UAC request. Package signatures,
 installation ownership, source compatibility and Workspace volume locks still
 apply. Existing Workspaces and branches must be preserved.
 
+When the installed and required storage versions match, Setup verifies that both
+authenticated applications contain the same storage client and service binaries.
+It then updates only the application, even if the release also supports migration
+from older storage versions. Changed storage binaries require a new component
+version. Plain `/S` is sufficient for this matching-storage path.
+
+Setup authenticates the original bootstrapper and its pinned recovery runtime,
+then runs the new Setup's update coordinator. This lets fixes apply to an older
+installation without replacing its original recovery infrastructure. For an
+application-only upgrade from an older CLI that ignores `--scope`, the new
+authenticated Doctor checks the unchanged storage installation. Source and target
+application integrity are checked separately; a failed Doctor process or a failed
+installation check still blocks the update. Background update errors are recorded
+and exit without waiting on a hidden launcher dialog.
+
 For installation health, run `bin\honeybee.exe doctor --scope installation --json`.
 Default Doctor also inspects individual projects and Workspaces; existing repair
 errors remain visible after a healthy update and require their own repair. They

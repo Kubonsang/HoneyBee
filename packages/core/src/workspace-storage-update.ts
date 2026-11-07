@@ -138,7 +138,11 @@ export const planStorageUpdate = async (
     if (JSON.stringify(after) !== canonical)
       return blocked("source-service-changed-during-preflight");
     const sourceEvidenceSha256 = createHash("sha256").update(canonical).digest("hex");
-    const migration = requirement.kind === "service-replacement";
+    // A release may support both older storage installations and an already
+    // matching one. Native replacement deliberately rejects identical versions.
+    // This is only an advisory plan: publication and activation still verify
+    // the authenticated payload and the unchanged installed service evidence.
+    const migration = requirement.componentVersion !== admittedSourceVersion;
     return {
       ...base,
       ...(legacy

@@ -108,16 +108,15 @@ it.each([0, 4])("requires recoverable migration even with %i parents", async (pa
   });
   expect(plan.remainingGates).toContain("qualified-service-backup-and-rollback");
 });
-it("honors explicit service replacement even for the same compatibility identifier", async () => {
+it("keeps a verified matching service when the release also supports older storage", async () => {
   const f = await fixture();
   expect(
-    (
-      await planStorageUpdate(f.storage, f.tools, {
-        ...f.target,
-        migration: { ...f.target.migration, kind: "service-replacement" },
-      })
-    ).status,
-  ).toBe("migration-required");
+    await planStorageUpdate(f.storage, f.tools, {
+      ...f.target,
+      migration: { ...f.target.migration, kind: "service-replacement" },
+    }),
+  ).toMatchObject({ status: "app-only-candidate", elevation: "none", activationAllowed: false });
+  expect(f.serviceEvidence).toHaveBeenCalledTimes(2);
 });
 it.each([
   "serviceExists",

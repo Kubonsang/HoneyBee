@@ -10,7 +10,6 @@ import { plainDirectory } from "./stage-release.mjs";
 import { authenticateReleaseManifest } from "./release-authentication.mjs";
 import { stageAuthenticatedRelease } from "./authenticated-release.mjs";
 import { resolveRecoverySource, verifyRecoverySourceFiles } from "./recovery-source.mjs";
-import { dispatchPreparation, dispatchActivation } from "./dispatch-preparation.mjs";
 import { sha256 } from "./release-manifest.mjs";
 import {
   readInstalledStorage,
@@ -185,10 +184,7 @@ async function inspectLegacySetupSource({ root, pointer, sourceInstallation, man
 /** Keep the initially installed bootstrapper while repairing a later approved
  * application. Both the original infrastructure receipt and native runtime pin
  * must match; this function never repairs or replaces infrastructure. */
-export async function authorizeMatchingSetup(
-  { installationRoot, sourceInstallation, verifyActive = true },
-  { run = promisify(execFile) } = {},
-) {
+export async function authorizeSetupRuntime(installationRoot, { run = promisify(execFile) } = {}) {
   const root = path.resolve(installationRoot),
     runtime = path.join(root, "recovery/v1");
   const original = JSON.parse(
@@ -215,6 +211,15 @@ export async function authorizeMatchingSetup(
     sha256(await readBounded(path.join(runtime, "manifest.json"))),
     checked.recoveryManifestSha256,
   );
+  return { runtime };
+}
+
+export async function authorizeMatchingSetup(
+  { installationRoot, sourceInstallation, verifyActive = true },
+  hooks = {},
+) {
+  const root = path.resolve(installationRoot);
+  const { runtime } = await authorizeSetupRuntime(root, hooks);
   const pointerBytes = await readBounded(path.join(root, "current.json")),
     pointer = JSON.parse(pointerBytes);
   const supplied = JSON.parse(await readBounded(path.join(sourceInstallation, "current.json")));
@@ -235,8 +240,8 @@ export async function authorizeMatchingSetup(
   return { runtime };
 }
 
-/** Local media is transport only: installed trust, release admission and the
- * ordinary pinned worker still authenticate and execute every update step. */
+/** Local media is transport only: installed trust and release admission still
+ * authenticate every update step performed by the new Setup. */
 export async function createEmbeddedReleaseTransport(directory, trustedPublicKeys) {
   directory = path.resolve(directory);
   await plainDirectory(directory);
@@ -281,6 +286,9 @@ export async function prepareSetupUpgrade({
   await plainDirectory(root);
   const pointerBytes = await readBounded(path.join(root, "current.json"));
   const pointer = JSON.parse(pointerBytes);
+  // Authenticate the installed trust before hosting an update in the new Setup.
+  // Older pinned workers cannot acquire fixes shipped in the new application.
+  await authorizeSetupRuntime(root);
   const trust = JSON.parse(await readBounded(path.join(runtime, "update-trust.json")));
   assert.equal(trust.schemaVersion, 1);
   const media = await createEmbeddedReleaseTransport(mediaDirectory, trust.publicKeys);
@@ -289,14 +297,21 @@ export async function prepareSetupUpgrade({
     expectedVersion,
     "Setup and update media versions differ",
   );
-  if (media.authenticated.manifest.components.storage.migration.kind === "service-replacement")
-    assert.equal(allowServiceUpdate, true, "Service update requires interactive Setup");
   const legacyRecovery = await inspectLegacySetupSource({
     root,
     pointer,
     sourceInstallation,
     manifest: media.authenticated.manifest,
   });
+  const installation = JSON.parse(
+    await readBounded(path.join(root, "versions", pointer.activeVersion, "installation.json")),
+  );
+  if (
+    legacyRecovery ||
+    installation.componentVersion !==
+      media.authenticated.manifest.components.storage.componentVersion
+  )
+    assert.equal(allowServiceUpdate, true, "Service update requires interactive Setup");
   const capabilities = JSON.parse(
     (
       await promisify(execFile)(
@@ -320,9 +335,6 @@ export async function prepareSetupUpgrade({
     });
     if (preparation) return { installationRoot: root, preparation, externalSetupRecovery: true };
   }
-  const installation = JSON.parse(
-    await readBounded(path.join(root, "versions", pointer.activeVersion, "installation.json")),
-  );
   const staged = await stageAuthenticatedRelease({
     installationRoot: root,
     ...media,
@@ -342,7 +354,7 @@ export async function prepareSetupUpgrade({
     pointerBytes,
     "Active source changed",
   );
-  if (legacyRecovery) {
+  {
     const job = await createPrepareJob({
       installationRoot: root,
       stageAttempt: staged.attempt,
@@ -356,17 +368,15 @@ export async function prepareSetupUpgrade({
         trustedPublicKeys: trust.publicKeys,
         bootstrapperVersion: trust.bootstrapperVersion,
         channel: trust.channel,
-        sourceRecovery: "legacy-hb12-detached",
+        ...(legacyRecovery ? { sourceRecovery: "legacy-hb12-detached" } : {}),
       }),
     );
     return {
       installationRoot: root,
       preparation: { name: job.name, sha256: job.sha256 },
-      externalSetupRecovery: true,
+      ...(legacyRecovery ? { externalSetupRecovery: true } : {}),
     };
   }
-  const preparation = await dispatchPreparation({ installationRoot: root, stage: staged });
-  return { installationRoot: root, preparation };
 }
 
 export async function upgradeFromSetup(options) {
@@ -376,7 +386,7 @@ export async function upgradeFromSetup(options) {
     externalSetupRecovery,
   } = await prepareSetupUpgrade(options);
   let state;
-  if (externalSetupRecovery) {
+  {
     const job = await createActivationJob({
       installationRoot: root,
       preparation,
@@ -392,7 +402,7 @@ export async function upgradeFromSetup(options) {
         runtime: path.join(root, "recovery/v1"),
         request,
         activationJob: { directory: job.directory, requestSha256: job.sha256 },
-        externalSetupRecovery: true,
+        ...(externalSetupRecovery ? { externalSetupRecovery: true } : {}),
       }),
     );
     assert(["Committed", "RolledBack", "Cancelled"].includes(result.state));
@@ -402,12 +412,7 @@ export async function upgradeFromSetup(options) {
       "Recovery completed but Desktop restart failed; evidence retained",
     );
     state = result.state;
-  } else
-    state = await dispatchActivation({
-      installationRoot: root,
-      preparation,
-      setupActivation: true,
-    });
+  }
   return {
     schemaVersion: 1,
     installed: true,

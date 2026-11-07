@@ -14,6 +14,7 @@ import {
 } from "./recovery-source.mjs";
 import { updateAndRestartDesktopWithDoctor } from "./desktop-session.mjs";
 import { activateInstalledCombinedUpdate } from "./installed-combined-update.mjs";
+import { createMatchingStorageDoctor } from "./matching-storage-doctor.mjs";
 
 export async function activateAuthenticatedUpdate(
   { installationRoot, runtime, request, activationJob, externalSetupRecovery },
@@ -130,7 +131,24 @@ export async function activateAuthenticatedUpdate(
   await authorize(target);
   await revalidateUpdatePlan(options, observe ? { observe } : undefined);
   const serviceCandidate =
-    authenticated.manifest.components.storage.migration.kind === "service-replacement";
+    plan.identity.sourceComponentVersion !==
+    authenticated.manifest.components.storage.componentVersion;
+  assert.equal(
+    typeof plan.identity.sourceComponentVersion,
+    "string",
+    "Source component identity required",
+  );
+  assert.equal(
+    plan.identity.status,
+    serviceCandidate ? "migration-required" : "app-only-candidate",
+    "Storage transition differs from authenticated plan",
+  );
+  if (serviceCandidate)
+    assert.equal(
+      authenticated.manifest.components.storage.migration.kind,
+      "service-replacement",
+      "Storage change requires an authenticated migration declaration",
+    );
   await verifyPublishedVersion({
     ...options,
     ...(serviceCandidate ? { allowServiceCandidate: true } : {}),
@@ -152,6 +170,16 @@ export async function activateAuthenticatedUpdate(
   };
   try {
     return await execute(options, {
+      ...(request.operation === "setup-activate"
+        ? {
+            runDoctor: createMatchingStorageDoctor({
+              installationRoot: root,
+              source,
+              target,
+              authorize,
+            }),
+          }
+        : {}),
       ...(checkpoint ? { checkpoint } : {}),
       ...(observe ? { observe } : {}),
       admit: async () => {

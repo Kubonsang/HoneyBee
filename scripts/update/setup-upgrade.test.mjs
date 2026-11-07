@@ -7,6 +7,7 @@ import test from "node:test";
 import {
   createEmbeddedReleaseTransport,
   authorizeMatchingSetup,
+  authorizeSetupRuntime,
   runExternalSetupJob,
   resumeLegacySetupUpgrade,
   findReusableLegacyPreparation,
@@ -282,6 +283,25 @@ test("later matching Setup repairs only the approved app while retaining origina
     };
   };
   const options = { installationRoot: root, sourceInstallation: source };
+  await assert.rejects(
+    authorizeSetupRuntime(root, {
+      run: async () => ({
+        stdout: JSON.stringify({
+          schemaVersion: 1,
+          recoveryManifestSha256: sha256("other runtime"),
+        }),
+      }),
+    }),
+  );
+  await assert.rejects(
+    authorizeSetupRuntime(root, {
+      run: async () => {
+        throw new Error("runtime verification failed");
+      },
+    }),
+    /runtime verification failed/,
+  );
+  assert.equal((await authorizeSetupRuntime(root, { run })).runtime, runtime);
   assert.equal((await authorizeMatchingSetup(options, { run })).runtime, runtime);
   await writeFile(path.join(root, "versions", version, "desktop/app"), "damaged app");
   await assert.rejects(authorizeMatchingSetup(options, { run }), /payload changed/);

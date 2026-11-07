@@ -40,7 +40,10 @@ func main() {
 	if err != nil {
 		message := fmt.Sprintf("HoneyBee could not launch. Update and recovery records were preserved.\n\n%v", err)
 		_, cli, _ := installationRoot(executable)
-		reportError(message, cli)
+		// Update jobs are supervised background workers. A modal dialog here
+		// prevents Setup from observing the worker's failed exit indefinitely.
+		backgroundJob := len(os.Args) > 1 && (os.Args[1] == "--update-job" || os.Args[1] == "--verify-recovery-runtime")
+		reportError(message, cli || backgroundJob)
 		code = 1
 	}
 	os.Exit(code)

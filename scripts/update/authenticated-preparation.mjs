@@ -43,10 +43,13 @@ export const prepareAuthenticatedUpdate = async (
   const root = path.resolve(options.installationRoot);
   const stage = path.resolve(options.stageAttempt);
   const authenticated = await authenticateStagedRelease(options);
-  const serviceCandidate =
-    authenticated.manifest.components.storage.migration.kind === "service-replacement";
+  let serviceCandidate;
   if (options.sourceRecovery)
-    assert(serviceCandidate, "Legacy recovery requires service replacement");
+    assert.equal(
+      authenticated.manifest.components.storage.migration.kind,
+      "service-replacement",
+      "Legacy recovery requires service replacement",
+    );
   const request = {
     installationRoot: root,
     manifestPath: path.join(stage, "release.json"),
@@ -64,6 +67,23 @@ export const prepareAuthenticatedUpdate = async (
       options.sourceRecovery,
       "Source recovery intent changed",
     );
+    assert.equal(
+      typeof observation.sourceComponentVersion,
+      "string",
+      "Source component identity required",
+    );
+    const replacement =
+      observation.sourceComponentVersion !==
+      authenticated.manifest.components.storage.componentVersion;
+    if (replacement)
+      assert.equal(
+        authenticated.manifest.components.storage.migration.kind,
+        "service-replacement",
+        "Storage change requires an authenticated migration declaration",
+      );
+    if (serviceCandidate !== undefined)
+      assert.equal(replacement, serviceCandidate, "Storage transition changed during preparation");
+    serviceCandidate = replacement;
     assert(
       observation.status === (serviceCandidate ? "migration-required" : "app-only-candidate") &&
         observation.activationAllowed === false,
