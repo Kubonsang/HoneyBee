@@ -4,10 +4,12 @@ import path from "node:path";
 import process from "node:process";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { synchronizeProductVersion } from "../../../scripts/installation/product-version.mjs";
 
 const execFileAsync = promisify(execFile);
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
+await synchronizeProductVersion(repositoryRoot, { check: true });
 const outputDirectory = process.env.HONEYBEE_CLI_PACKAGE_DIR ?? "release";
 if (path.basename(outputDirectory) !== outputDirectory || outputDirectory === ".") {
   throw new Error("Packaging output must be one directory inside the CLI app.");

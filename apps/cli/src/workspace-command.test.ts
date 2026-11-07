@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import { afterEach, describe, expect, it } from "vitest";
+import { WORKSPACE_CLI_VERSION } from "./product-version.js";
 
 const execFileAsync = promisify(execFile);
 const cliPath = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
@@ -40,7 +41,7 @@ describe("Workspace CLI", () => {
     const root = await mkdtemp(path.join(tmpdir(), "honeybee-workspace-cli-"));
     roots.push(root);
     const version = await runCli(["--version"], root);
-    expect(version).toEqual({ stdout: "0.1.0-beta.11\n", stderr: "", exitCode: 0 });
+    expect(version).toEqual({ stdout: `${WORKSPACE_CLI_VERSION}\n`, stderr: "", exitCode: 0 });
 
     const source = path.join(root, "source");
     const workspaces = path.join(root, "workspaces");

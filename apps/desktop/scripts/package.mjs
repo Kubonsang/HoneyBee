@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 
 import { packager } from "@electron/packager";
+import { synchronizeProductVersion } from "../../../scripts/installation/product-version.mjs";
 
 const appRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const staging = path.join(appRoot, "dist", "package");
@@ -18,6 +19,7 @@ const compatibilityManifest = path.join(appRoot, "resources", "component-compati
 const brandPng = path.join(appRoot, "resources", "brand", "honeybee.png");
 const windowsIcon = path.join(appRoot, "resources", "brand", "honeybee.ico");
 const repositoryRoot = path.resolve(appRoot, "..", "..");
+await synchronizeProductVersion(repositoryRoot, { check: true });
 const require = createRequire(import.meta.url);
 const nodePtyRoot = path.dirname(require.resolve("node-pty/package.json"));
 const nodeAddonApiRoot = path.join(path.dirname(nodePtyRoot), "node-addon-api");

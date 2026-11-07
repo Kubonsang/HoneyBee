@@ -60,7 +60,7 @@ A missing/corrupt receipt, missing/changed installed executable and a different 
 
 제목 표시줄의 **스토리지 복구**에서 설치 버전과 필요한 버전을 확인하세요. 같은 설치의 보존 업데이트를 사용하고, 업데이트가 거부되면 공식 Setup에서 **원래 설치 경로**를 선택하세요. 기존 Workspace와 브랜치는 유지합니다. hb12 같은 구형 서비스의 보존 전환은 실제 사전 검사와 검증을 통과해야 하며, 지원되지 않는 설치는 데이터를 보존한 상태로 중단합니다. 설치 기록 삭제나 무조건적인 서비스 교체로 우회하지 마세요.
 
-## Preserving legacy recovery (hb17 candidate)
+## Preserving legacy recovery (hb17)
 
 The new Setup has an explicit preserving path for the reproduced public beta.35 installation whose package expects hb13 but whose installed service is the exact published hb12. It authenticates the original launcher, recovery runtime, application files, Windows user, installation root and service executable. A missing/changed receipt, another user's installation or an unknown source is refused. This is not a general `install --replace` fallback.
 
@@ -68,7 +68,7 @@ Close Unity and Workspace tools, then run the complete supported Setup interacti
 
 If interrupted, rerun the same Setup version. Setup finds the bound pending transaction and resumes its recovery rather than starting another service transaction. A restored hb12 baseline remains explicitly unready for Workspace use until a preserving update succeeds. Keep the evidence and existing data if authentication or recovery refuses to continue.
 
-This repository's hb17 implementation is still a release candidate. Do not treat a compatibility declaration, UI screenshot or source-test pass as complete cross-version qualification. Freeze the signed Setup/application artifacts and verify actual replacement, cold backup, owner rejection, cancellation, interruption/rollback, final Doctor and normal launch before public release.
+Public beta.39 includes hb17 and the preserving recovery implementation. Its release qualification distinguishes current application/Setup checks from reused evidence for unchanged native code. This does not authorize arbitrary old versions or establish qualification for a newer build. Do not treat a compatibility declaration, UI screenshot or source-test pass as complete cross-version qualification. Each release must bind its frozen artifacts to actual replacement or applicable unchanged-engine evidence, cold backup, owner rejection, cancellation, interruption/rollback, final Doctor and normal launch checks.
 
 ## Mechanism evidence
 
@@ -79,3 +79,17 @@ An important negative probe found that old hb12 retaining release succeeded even
 The new transaction retains the original live topology for the target, and a separate detached retained topology for hb12 rollback. Cancellation before stop may verify an unchanged running topology. Recovery intent and source observation are bound into protected native records. Additional user-side recovery metadata preserves the original strict bootstrapper context format. Original hb12 startup is never given unsupported maintenance-resume instructions.
 
 These mechanism probes did not replace the service and do not qualify the final release artifacts. Production host services and Workspaces were not modified by these tests.
+
+## Supported recovery paths
+
+<!-- recovery-support:start -->
+
+This table describes supported paths, not authorization. Setup and the native service must still admit each operation.
+
+- **matching-update**: Matching storage: authenticated application update after installation checks. 스토리지가 일치하면 설치 검사 후 인증된 앱 업데이트를 진행합니다.
+- **same-version-repair**: Same product version: authenticated Setup Repair at the original installation path. 같은 앱 버전은 인증된 Setup의 복구 기능을 원래 설치 경로에서 사용합니다.
+- **legacy-beta35-hb12**: Legacy preservation: only the verified public beta.35 installation with the exact published hb12 service; Setup must authenticate the owner, files and topology. 구형 보존 전환은 공개 beta.35 설치와 정확히 일치하는 hb12 서비스만 지원합니다. Setup에서 소유자·파일·스토리지 구성을 검증해야 합니다.
+- **resume**: Interrupted operation: reconcile the recorded transaction and resume with the same Setup version. 중단된 작업은 기록된 트랜잭션을 확인하고 같은 버전의 Setup으로 재개합니다.
+- **refuse**: Unknown source, changed trusted files or another owner: preserve data and stop. Never erase receipts or force replacement. 알 수 없는 설치, 변조된 신뢰 파일 또는 다른 소유자는 데이터를 보존하고 중단합니다. 설치 기록 삭제나 강제 교체로 우회하지 않습니다.
+
+<!-- recovery-support:end -->

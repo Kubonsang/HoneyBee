@@ -1,6 +1,7 @@
 import { desktopApi } from "../desktop-api.js";
 import { ArrowsOutSimple, Minus, X } from "@phosphor-icons/react";
-import type { ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { About } from "./About.js";
 
 import type { Locale, MessageKey } from "../i18n.js";
 import { UpdateCheck } from "./UpdateCheck.js";
@@ -18,6 +19,7 @@ export function AppFrame({
   setLocale: (locale: Locale) => void;
   t: (key: MessageKey) => string;
 }) {
+  const [aboutOpen, setAboutOpen] = useState(false);
   return (
     <main className="app-shell">
       <header className="titlebar">
@@ -26,6 +28,9 @@ export function AppFrame({
           <strong>HoneyBee</strong>
         </div>
         <div className="titlebar-drag" />
+        <button className="locale-button" onClick={() => setAboutOpen(true)}>
+          {locale === "ko" ? "앱 정보" : "About"}
+        </button>
         <button
           className="locale-button"
           data-testid="storage-recovery-open"
@@ -64,6 +69,7 @@ export function AppFrame({
         </div>
       </header>
       {children}
+      {aboutOpen && <About locale={locale} onClose={() => setAboutOpen(false)} />}
     </main>
   );
 }
