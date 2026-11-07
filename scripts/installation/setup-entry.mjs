@@ -245,7 +245,10 @@ const runSetup = async () => {
           {
             ...serviceHooks,
             verifyApplication: verifySetupApplication,
-            doctor: () => new core.HoneyBeeWorkspaceCore({ storageTools: options }).doctor(),
+            doctor: () =>
+              new core.HoneyBeeWorkspaceCore({ storageTools: options }).doctor({
+                scope: "installation",
+              }),
           },
         )
       : await ensureSetupService(serviceHooks);

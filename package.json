@@ -43,7 +43,7 @@
     "test:watch": "vitest",
     "typecheck": "corepack pnpm -r --if-present typecheck",
     "verify": "corepack pnpm security:scan && corepack pnpm licenses:check && corepack pnpm format:check && corepack pnpm lint && corepack pnpm typecheck && corepack pnpm build && corepack pnpm test:run && corepack pnpm deps:check",
-    "test:run": "corepack pnpm test:product-version && vitest run && corepack pnpm test:storage-host && corepack pnpm test:launcher && corepack pnpm test:setup && corepack pnpm test:update && corepack pnpm test:update-trust && corepack pnpm test:application-repair && corepack pnpm test:release-key && corepack pnpm test:combined-update && corepack pnpm test:qualification-flow",
+    "test:run": "corepack pnpm test:setup-recovery && corepack pnpm test:product-version && vitest run && corepack pnpm test:storage-host && corepack pnpm test:launcher && corepack pnpm test:setup && corepack pnpm test:update && corepack pnpm test:update-trust && corepack pnpm test:application-repair && corepack pnpm test:release-key && corepack pnpm test:combined-update && corepack pnpm test:qualification-flow",
     "test:update-trust": "node --test scripts/update/storage-transition.test.mjs scripts/update/matching-storage-doctor.test.mjs scripts/update/release-authentication.test.mjs scripts/update/authenticated-preparation.test.mjs scripts/update/update-job.test.mjs scripts/update/recovery-source.test.mjs scripts/update/activate-authenticated.test.mjs scripts/update/update-outcome.test.mjs scripts/update/setup-upgrade.test.mjs scripts/update/legacy-setup-source.test.mjs scripts/recovery/reconnect-workspaces.test.mjs",
     "test:launcher": "go -C tools/honeybee-launcher test ./... && go -C tools/honeybee-launcher vet ./...",
     "test:storage-host": "go -C tools/workspace-storage-host test ./...",
@@ -71,7 +71,9 @@
     "transaction:update": "node scripts/update/transaction.mjs",
     "package:update-media": "node scripts/installation/build-update-media.mjs",
     "support:sync": "node scripts/installation/recovery-support.mjs",
-    "support:check": "node scripts/installation/recovery-support.mjs --check"
+    "support:check": "node scripts/installation/recovery-support.mjs --check",
+    "sign:setup-descriptor": "node scripts/update/sign-setup.mjs",
+    "test:setup-recovery": "node --test scripts/update/setup-descriptor.test.mjs scripts/update/setup-recovery.test.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

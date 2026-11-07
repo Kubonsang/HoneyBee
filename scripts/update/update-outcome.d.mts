@@ -1,4 +1,7 @@
-export function readUpdateOutcome(root: string): Promise<
+export function readUpdateOutcome(
+  root: string,
+  expected?: { sourcePointerSha256: string; manifestSha256: string },
+): Promise<
   | undefined
   | {
       schemaVersion: 1;

@@ -285,6 +285,10 @@ func main() {
 		err = holdActivity(os.Args[2], os.Args[3], os.Args[4])
 	} else if len(os.Args) == 6 && os.Args[1] == "doctor" {
 		err = runContainedDoctor(os.Args[2], os.Args[3], os.Args[4], os.Args[5])
+	} else if len(os.Args) == 3 && os.Args[1] == "recovery-lock" {
+		err = holdSetupRecoveryLock(os.Args[2])
+	} else if len(os.Args) == 7 && os.Args[1] == "run-setup" {
+		err = runVerifiedSetup(os.Args[2], os.Args[3], os.Args[4], os.Args[5], os.Args[6])
 	} else if len(os.Args) == 3 && os.Args[1] == "lock" {
 		err = holdUpdateLock(os.Args[2])
 	} else if len(os.Args) == 4 && os.Args[1] == "pack" {
