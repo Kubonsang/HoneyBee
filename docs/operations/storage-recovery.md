@@ -18,6 +18,36 @@ The recovery screen reads diagnostics; opening it never changes the service. It 
 
 **Important:** legacy preservation is not established merely by adding versions to a compatibility list. If the original service/source cannot pass the supported migration preflight, keep all data and stop. Retain the diagnostic details, app version, installed/required component versions, installation path and original Setup version for a supported recovery. Do not use `install --replace` as a GUI fallback. The released Setup must explicitly support the source installation; the diagnostic screen itself does not perform service migration.
 
+## Unattended Setup (beta.39 and later)
+
+Automation can explicitly request a matching service installation or preserving
+service update with `HoneyBeeSetup.exe /S /INSTALLSERVICE`. Plain `/S` continues
+to install or update the application without authorizing a service change.
+`/INSTALLSERVICE` does not bypass Windows elevation: use an already authorized
+administrator session, or complete the normal UAC request. Package signatures,
+installation ownership, source compatibility and Workspace volume locks still
+apply. Existing Workspaces and branches must be preserved.
+
+When the installed and required storage versions match, Setup verifies that both
+authenticated applications contain the same storage client and service binaries.
+It then updates only the application, even if the release also supports migration
+from older storage versions. Changed storage binaries require a new component
+version. Plain `/S` is sufficient for this matching-storage path.
+
+Setup authenticates the original bootstrapper and its pinned recovery runtime,
+then runs the new Setup's update coordinator. This lets fixes apply to an older
+installation without replacing its original recovery infrastructure. For an
+application-only upgrade from an older CLI that ignores `--scope`, the new
+authenticated Doctor checks the unchanged storage installation. Source and target
+application integrity are checked separately; a failed Doctor process or a failed
+installation check still blocks the update. Background update errors are recorded
+and exit without waiting on a hidden launcher dialog.
+
+For installation health, run `bin\honeybee.exe doctor --scope installation --json`.
+Default Doctor also inspects individual projects and Workspaces; existing repair
+errors remain visible after a healthy update and require their own repair. They
+are not a reason to repeat Setup or delete Workspaces.
+
 ## ZIP or development build
 
 A new ZIP package may expect a newer machine-wide service. Use the original managed installation and its supported Setup update path. Do not copy individual new binaries into the old installation. If no managed installation exists, official Setup must diagnose the existing service rather than take it over.

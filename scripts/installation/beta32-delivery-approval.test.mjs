@@ -12,6 +12,7 @@ import {
   beta36DeliveryApprovalId,
   beta37DeliveryApprovalId,
   beta38DeliveryApprovalId,
+  beta39DeliveryApprovalId,
   deliveryCompletionPolicy,
   requiresWingetManifest,
   validateOperatorDeliveryApproval,
@@ -30,6 +31,36 @@ const beta36 = {
   manifestSha256: approval.manifestSha256,
   wingetManifestSha256: "d".repeat(64),
 };
+
+test("beta.39 delivery requires its own unchanged approval and source", async () => {
+  const record = { ...beta36, id: beta39DeliveryApprovalId, version: "0.1.0-beta.39" };
+  const root = await mkdtemp(path.join(tmpdir(), "hb-beta39-"));
+  const file = path.join(root, "approval.json");
+  const bytes = JSON.stringify(record);
+  await writeFile(file, bytes);
+  const options = {
+    deliveryApproval: record.id,
+    deliveryApprovalPath: file,
+    deliveryApprovalSha256: createHash("sha256").update(bytes).digest("hex"),
+    releaseCommit: record.sourceCommit,
+  };
+  assert.deepEqual(await loadDeliveryApproval(options), record);
+  await assert.rejects(loadDeliveryApproval({ ...options, releaseCommit: "e".repeat(40) }));
+  await assert.rejects(
+    loadDeliveryApproval({ ...options, deliveryApproval: beta38DeliveryApprovalId }),
+  );
+  for (const change of [
+    { version: "0.1.0-beta.38" },
+    { setupSha256: "" },
+    { manifestSha256: "" },
+    { wingetManifestSha256: "" },
+  ])
+    assert.throws(() =>
+      validateOperatorDeliveryApproval({ ...record, ...change }, record.sourceCommit),
+    );
+  await writeFile(file, bytes + " ");
+  await assert.rejects(loadDeliveryApproval(options), /changed/u);
+});
 
 test("beta.38 ordering requires its own frozen source and artifact approval", async () => {
   const record = { ...beta36, id: beta38DeliveryApprovalId, version: "0.1.0-beta.38" };
@@ -83,6 +114,7 @@ test("completion verification remains mandatory for all supported operator versi
     [beta36DeliveryApprovalId, "0.1.0-beta.36"],
     [beta37DeliveryApprovalId, "0.1.0-beta.37"],
     [beta38DeliveryApprovalId, "0.1.0-beta.38"],
+    [beta39DeliveryApprovalId, "0.1.0-beta.39"],
   ]) {
     const record = { ...beta36, id, version };
     assert.equal(requiresWingetManifest(version), true);
@@ -99,10 +131,16 @@ test("completion verification remains mandatory for all supported operator versi
 });
 
 test("WinGet publication requirement does not disappear without an approval record", () => {
-  for (const version of ["0.1.0-beta.35", "0.1.0-beta.36", "0.1.0-beta.37", "0.1.0-beta.38"])
+  for (const version of [
+    "0.1.0-beta.35",
+    "0.1.0-beta.36",
+    "0.1.0-beta.37",
+    "0.1.0-beta.38",
+    "0.1.0-beta.39",
+  ])
     assert.equal(requiresWingetManifest(version), true);
   assert.equal(requiresWingetManifest("0.1.0-beta.32"), false);
-  assert.equal(requiresWingetManifest("0.1.0-beta.39"), false);
+  assert.equal(requiresWingetManifest("0.1.0-beta.40"), false);
 });
 
 test("beta.37 requires its own approval and rejects stale version, source and artifact pins", async () => {

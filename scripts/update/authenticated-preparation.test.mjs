@@ -217,6 +217,8 @@ for (const failure of [
         signReleaseManifest(bytes, keys.privateKey),
       );
       f.options.expectedManifestSha256 = sha256(bytes);
+      // A real version change cannot be admitted as an app-only observation.
+      f.observation.sourceComponentVersion = "older.managed.service";
     }
     if (failure === "wrong-directory") f.options.stageAttempt = f.options.installationRoot;
     let planned = false;

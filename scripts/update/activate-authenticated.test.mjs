@@ -12,7 +12,7 @@ import { prepareAuthenticatedUpdate } from "./authenticated-preparation.mjs";
 import { createPrepareJob, createActivationJob } from "./update-job.mjs";
 import { activateAuthenticatedUpdate } from "./activate-authenticated.mjs";
 
-async function setup(service = false) {
+async function setup(service = false, matching = false) {
   let files;
   const f = await fixture((payload) => {
     const installation = JSON.parse(payload["installation.json"]);
@@ -26,6 +26,7 @@ async function setup(service = false) {
       payload[name] = JSON.stringify({ schemaVersion: 1, protocol: 1 });
     files = { ...payload };
   });
+  f.source = { ...f.source };
   const root = f.installationRoot,
     runtime = path.join(root, "recovery/v1");
   const inventory = Object.fromEntries(
@@ -35,7 +36,15 @@ async function setup(service = false) {
     ]),
   );
   const manifest = JSON.parse(await readFile(path.join(f.stageAttempt, "release.json")));
-  if (service) manifest.components.storage.migration.kind = "service-replacement";
+  if (service) {
+    manifest.components.storage.migration.kind = "service-replacement";
+    if (!matching) {
+      f.source.storageComponentVersion = "older.managed.service";
+      manifest.components.storage.migration.supportedSourceVersions = [
+        f.source.storageComponentVersion,
+      ];
+    }
+  }
   manifest.recovery = {
     schemaVersion: 1,
     inventorySha256: sha256(recoveryInventoryBytes(inventory)),
@@ -60,7 +69,11 @@ async function setup(service = false) {
   );
   const sourceVersion = f.source.currentVersion,
     sourceFiles = {
-      "installation.json": JSON.stringify({ activity: { protocol: 1 } }),
+      "installation.json": JSON.stringify({
+        ...JSON.parse(files["installation.json"]),
+        componentVersion: f.source.storageComponentVersion,
+        activity: { protocol: 1 },
+      }),
       "launch.json": "source launch",
     };
   for (const [name, data] of Object.entries(sourceFiles)) {
@@ -87,7 +100,7 @@ async function setup(service = false) {
   await writeFile(path.join(root, "current.json"), pointer);
   await writeFile(path.join(root, "HoneyBeeLauncher.exe"), "fixture launcher");
   const observe = async () => ({
-    status: service ? "migration-required" : "app-only-candidate",
+    status: service && !matching ? "migration-required" : "app-only-candidate",
     activationAllowed: false,
     sourceVersion,
     targetVersion: manifest.version,
@@ -132,6 +145,28 @@ async function setup(service = false) {
     target: manifest.version,
   };
 }
+windowsTest(
+  "migration-capable release retains identical storage without native replacement",
+  async () => {
+    const f = await setup(true, true);
+    let appCalls = 0;
+    const result = await activateAuthenticatedUpdate(
+      { installationRoot: f.root, runtime: f.runtime, request: f.request },
+      {
+        observe: f.observe,
+        execute: async () => {
+          appCalls++;
+          return { state: "Cancelled", restart: "NotRequested" };
+        },
+        activateCombined: async () => {
+          assert.fail("Matching storage must not be replaced");
+        },
+      },
+    );
+    assert.equal(result.state, "Cancelled");
+    assert.equal(appCalls, 1);
+  },
+);
 for (const outcome of ["cancel", "signature-changed", "source-changed", "target-changed"])
   windowsTest(`authenticated activation ${outcome} validates before shutdown`, async () => {
     const f = await setup();

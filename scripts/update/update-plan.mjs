@@ -5,6 +5,7 @@ import { observeUpdateSource } from "./observe-source.mjs";
 import { prepareRelease, readBounded, validatePreparedPayload } from "./prepare-release.mjs";
 import { plainDirectory } from "./stage-release.mjs";
 import { sha256, parseReleaseManifest, admitRelease } from "./release-manifest.mjs";
+import { verifyMatchingStoragePayload } from "./storage-transition.mjs";
 
 const child = (root, name, prefix) => {
   assert(
@@ -80,6 +81,16 @@ export const createUpdatePlan = async (
     manifestSha256,
     source,
   });
+  const manifest = parseReleaseManifest(await readBounded(request.manifestPath), manifestSha256);
+  if (
+    manifest.components.storage.migration.kind === "service-replacement" &&
+    first.status === "app-only-candidate"
+  ) {
+    await verifyMatchingStoragePayload(
+      path.join(root, "versions", first.sourceVersion),
+      prepared.directory,
+    );
+  }
   const attempt = path.dirname(path.dirname(prepared.directory));
   const inventoryBytes = await readBounded(path.join(attempt, "inventory.json"), 8 * 1024 * 1024);
   const second = await observe(request);
@@ -158,6 +169,15 @@ export const revalidateUpdatePlan = async (
   assert.equal(inventory.schemaVersion, 1);
   const directory = path.join(attempt, "versions", manifest.version);
   const metadata = await validatePreparedPayload(directory, inventory.files, manifest);
+  if (
+    manifest.components.storage.migration.kind === "service-replacement" &&
+    plan.identity.status === "app-only-candidate"
+  ) {
+    await verifyMatchingStoragePayload(
+      path.join(root, "versions", plan.identity.sourceVersion),
+      directory,
+    );
+  }
   assert.equal(metadata.launchManifestSha256, plan.launchManifestSha256, "Launch manifest changed");
   assert.deepEqual(
     binding(await observe(request)),
