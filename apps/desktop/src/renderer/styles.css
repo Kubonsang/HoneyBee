@@ -973,6 +973,31 @@ dialog.app-info {
 dialog.app-info::backdrop {
   background: rgb(0 0 0 / 60%);
 }
+
+.recovery-actions {
+  border-top: 1px solid #373d41;
+  margin-top: 16px;
+  padding-top: 12px;
+}
+
+.recovery-actions progress {
+  width: 100%;
+  accent-color: #ffc629;
+}
+
+.recovery-buttons,
+.recovery-diagnostics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  margin: 12px 0;
+}
+
+.recovery-actions button:focus-visible {
+  outline: 2px solid #ffc629;
+  outline-offset: 3px;
+}
 .workspace-create-modal {
   color-scheme: dark;
   width: min(640px, calc(100vw - 32px));

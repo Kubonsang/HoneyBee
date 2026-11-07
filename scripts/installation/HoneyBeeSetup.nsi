@@ -1,7 +1,7 @@
 Unicode true
 !include "FileFunc.nsh"
 RequestExecutionLevel user
-Name "HoneyBee installation preview"
+Name "HoneyBee Setup"
 VIProductVersion "${APP_VERSION_NUMERIC}"
 VIAddVersionKey "ProductName" "HoneyBee"
 VIAddVersionKey "ProductVersion" "${APP_VERSION}"
@@ -12,6 +12,7 @@ OutFile "${SETUP_OUTPUT}"
 InstallDir "$LOCALAPPDATA\HoneyBee"
 SetCompressor zlib
 ShowInstDetails show
+AutoCloseWindow true
 Page instfiles
 
 Section
@@ -41,8 +42,10 @@ adopt_option_done:
   DetailPrint "Checking the existing installation and its storage version."
   DetailPrint "Supported storage recovery preserves Workspaces and Git branches. Close Unity and Workspace tools before continuing."
   ClearErrors
-  ExecWait '"$PLUGINSDIR\bundle\payload\versions\${APP_VERSION}\runtime\node.exe" "$PLUGINSDIR\bundle\setup-entry.mjs" "$INSTDIR" $1' $0
-  IfErrors stopped
+  nsExec::ExecToLog '"$PLUGINSDIR\bundle\payload\versions\${APP_VERSION}\runtime\node.exe" "$PLUGINSDIR\bundle\setup-entry.mjs" "$INSTDIR" $1 --progress'
+  Pop $0
+  StrCmp $0 "error" stopped
+  StrCmp $0 "timeout" stopped
   StrCmp $0 0 ready
   StrCmp $0 4 updated
   StrCmp $0 2 needs_service

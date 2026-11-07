@@ -63,6 +63,17 @@ export async function resumeLegacySetupUpgrade({mediaDirectory}) {
     );
   };
   await check(bundle);
+  await assert.rejects(
+    run(process.execPath, [path.join(bundle, "setup-entry.mjs"), target, "--progress"]),
+    (error) => {
+      assert.equal(error.code, 2);
+      assert.match(error.stdout, /Checking Git/u);
+      assert.match(error.stdout, /recorded operations/u);
+      assert.match(error.stdout, /needs attention/u);
+      assert(!error.stdout.includes(target) && !error.stdout.includes("canonicalBundle"));
+      return true;
+    },
+  );
   if (process.platform === "win32") {
     const { stdout } = await run("cmd.exe", ["/d", "/c", `for %I in ("${bundle}") do @echo %~sI`], {
       windowsVerbatimArguments: true,

@@ -1,4 +1,4 @@
-import type { DesktopUpdateStatusV1 } from "../shared/ipc.js";
+import type { DesktopUpdateStatusV1, DesktopRecoveryOperationV2 } from "../shared/ipc.js";
 import type {
   StageOptions,
   AuthenticatedStage,
@@ -16,12 +16,28 @@ type Discovery = (options: {
 
 /** The renderer supplies no URLs, keys, installation paths or source compatibility facts. */
 export class DesktopUpdateCheck {
-  private state: DesktopUpdateStatusV1 = {
+  private currentState: DesktopUpdateStatusV1 = {
     schemaVersion: 1,
     state: "Idle",
     version: null,
     mandatory: false,
   };
+  private startedAt: string | null = null;
+  private lastProgressAt: string | null = null;
+  private activationStarted = false;
+  private get state(): DesktopUpdateStatusV1 {
+    return this.currentState;
+  }
+  private set state(next: DesktopUpdateStatusV1) {
+    if (JSON.stringify(next) !== JSON.stringify(this.currentState))
+      this.lastProgressAt = new Date().toISOString();
+    if (next.state === "Checking" && this.currentState.state !== "Checking") {
+      this.startedAt = this.lastProgressAt;
+      this.activationStarted = false;
+    }
+    if (next.state === "Applying") this.activationStarted = true;
+    this.currentState = next;
+  }
   private active: AbortController | undefined;
   private disposed = false;
   private offer: AvailableRelease | undefined;
@@ -51,6 +67,48 @@ export class DesktopUpdateCheck {
   }
   public status(): DesktopUpdateStatusV1 {
     return { ...this.state };
+  }
+  public operationStatus(): DesktopRecoveryOperationV2 {
+    const mapped: Record<DesktopUpdateStatusV1["state"], DesktopRecoveryOperationV2["state"]> = {
+      Idle: "Idle",
+      Checking: "Checking",
+      Available: "Review",
+      UpToDate: "Idle",
+      Unavailable: "Blocked",
+      Failed: "Failed",
+      Downloading: "Downloading",
+      Downloaded: "Verifying",
+      Preparing: "Verifying",
+      Prepared: "Review",
+      Applying: "Running",
+      Updated: "Succeeded",
+      RolledBack: "RolledBack",
+      Unresolved: "Unresolved",
+      UpdateCancelled: "Cancelled",
+    };
+    return {
+      schemaVersion: 2,
+      jobId: null,
+      route: "application-update",
+      state: mapped[this.state.state],
+      version: this.state.version,
+      startedAt: this.startedAt,
+      lastProgressAt: this.lastProgressAt,
+      received: this.state.received ?? null,
+      total: this.state.total ?? null,
+      code:
+        this.state.state === "Failed"
+          ? "recovery.application-update-failed"
+          : this.state.state === "Unresolved"
+            ? "recovery.verification-required"
+            : null,
+      preservation:
+        this.activationStarted || ["Updated", "RolledBack", "Unresolved"].includes(this.state.state)
+          ? "unknown"
+          : "unchanged",
+      userAction: ["Available", "Prepared"].includes(this.state.state) ? "review" : "none",
+      canCancel: ["Checking", "Downloading"].includes(this.state.state),
+    };
   }
   public async refresh(): Promise<DesktopUpdateStatusV1> {
     if (!this.restoreEligible || this.disposed || this.active || !this.options.restore)

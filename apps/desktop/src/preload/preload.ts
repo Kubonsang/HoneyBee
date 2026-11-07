@@ -31,6 +31,7 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  exportRecoveryDiagnostics: () => invoke(DesktopIpcChannels.recoveryExport, z.boolean()),
   recoveryOperation: () =>
     invoke(DesktopIpcChannels.recoveryOperation, DesktopRecoveryOperationV2Schema),
   recoveryAction: (request) =>
@@ -41,6 +42,8 @@ const api: HoneyBeeDesktopApi = {
   storageRecoveryAction: (request) =>
     invoke(DesktopIpcChannels.storageRecoveryAction, z.boolean(), request),
   updateStatus: () => invoke(DesktopIpcChannels.updateStatus, DesktopUpdateStatusV1Schema),
+  updateOperation: () =>
+    invoke(DesktopIpcChannels.updateOperation, DesktopRecoveryOperationV2Schema),
   checkUpdate: () => invoke(DesktopIpcChannels.updateCheck, DesktopUpdateStatusV1Schema),
   cancelUpdateCheck: () => invoke(DesktopIpcChannels.updateCancel, DesktopUpdateStatusV1Schema),
   downloadUpdate: () => invoke(DesktopIpcChannels.updateDownload, DesktopUpdateStatusV1Schema),

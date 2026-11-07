@@ -27,12 +27,14 @@ export const beta36DeliveryApprovalId = "beta36-public-delivery-20260920";
 export const beta37DeliveryApprovalId = "beta37-public-delivery-20261004";
 export const beta38DeliveryApprovalId = "beta38-public-delivery-20261102";
 export const beta39DeliveryApprovalId = "beta39-public-delivery-20261107";
+export const beta40DeliveryApprovalId = "beta40-public-delivery-20261108";
 
 const operatorVersions = new Map([
   [beta36DeliveryApprovalId, "0.1.0-beta.36"],
   [beta37DeliveryApprovalId, "0.1.0-beta.37"],
   [beta38DeliveryApprovalId, "0.1.0-beta.38"],
   [beta39DeliveryApprovalId, "0.1.0-beta.39"],
+  [beta40DeliveryApprovalId, "0.1.0-beta.40"],
 ]);
 
 export const isOperatorDeliveryApproval = (id) => operatorVersions.has(id);

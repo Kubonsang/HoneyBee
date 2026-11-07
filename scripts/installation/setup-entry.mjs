@@ -21,6 +21,19 @@ import { adoptInstalledProjects } from "./adopt-projects.mjs";
 // passing paths to the strict managed-installation and recovery validators.
 const bundle = await realpath(path.dirname(fileURLToPath(import.meta.url)));
 const target = process.argv[2];
+const showProgress = process.argv.slice(3).includes("--progress");
+const progress = (message) => {
+  if (showProgress) process.stdout.write(message + "\n");
+};
+const resultOutput = (result) => {
+  if (showProgress)
+    progress(
+      result.ready
+        ? "Installation checks completed. Starting HoneyBee."
+        : "Setup needs attention. Keep existing Workspaces and recovery records.",
+    );
+  else process.stdout.write(JSON.stringify(result) + "\n");
+};
 const runSetup = async () => {
   let repairActivity;
   try {
@@ -39,11 +52,10 @@ const runSetup = async () => {
         ),
       ).href
     );
+    progress("Checking Git and the installation prerequisites.");
     const git = await sourceCore.checkGitExecutable();
     if (git.status !== "pass") {
-      process.stdout.write(
-        JSON.stringify({ installed: false, ready: false, prerequisite: git }) + "\n",
-      );
+      resultOutput({ installed: false, ready: false, prerequisite: git });
       process.exitCode = 3;
       return;
     }
@@ -57,6 +69,7 @@ const runSetup = async () => {
       if (error.code !== "ENOENT") throw error;
     }
     if (!repair && installedPointer) {
+      progress("Checking recorded operations for supported interruption recovery.");
       const { resumeLegacySetupUpgrade } = await import(
         pathToFileURL(path.join(bundle, "scripts/update/setup-upgrade.mjs")).href
       );
@@ -67,7 +80,7 @@ const runSetup = async () => {
         allowServiceUpdate: allowInstall,
       });
       if (recovered) {
-        process.stdout.write(JSON.stringify(recovered) + "\n");
+        resultOutput(recovered);
         process.exitCode = recovered.ready ? 4 : 2;
         return;
       }
@@ -77,6 +90,9 @@ const runSetup = async () => {
       installedPointer &&
       installedPointer.activeVersion !== sourceActivation.activeVersion
     ) {
+      progress(
+        "Authenticating the update and preparing the preserving transaction. Close Unity and Workspace tools when requested.",
+      );
       const { upgradeFromSetup } = await import(
         pathToFileURL(path.join(bundle, "scripts/update/setup-upgrade.mjs")).href
       );
@@ -87,7 +103,7 @@ const runSetup = async () => {
         allowServiceUpdate: allowInstall,
         sourceInstallation: source,
       });
-      process.stdout.write(JSON.stringify(result) + "\n");
+      resultOutput(result);
       // The update lifecycle already restarted the selected version.
       process.exitCode = result.ready ? 4 : 2;
       return;
@@ -104,6 +120,7 @@ const runSetup = async () => {
       }
     };
     const prepareRepair = async () => {
+      progress("Checking the installed files and preparing matching-version repair.");
       try {
         await verifySetupApplication();
         await sourceCore.assertApplicationRepairAdmission?.(target);
@@ -193,6 +210,9 @@ const runSetup = async () => {
       diagnose: () => storage.diagnose(tools),
       validate: () => core.requireCompatibleStorage(storage, tools),
       install: async () => {
+        progress(
+          "Starting the approved service setup step. Windows may request administrator approval.",
+        );
         repairActivity?.assertHeld();
         await core.validateStorageTools(tools);
         await promisify(execFile)(
@@ -208,6 +228,7 @@ const runSetup = async () => {
         );
       },
       repairExisting: async () => {
+        progress("Checking and restarting the matching installed service.");
         repairActivity?.assertHeld();
         await core.validateStorageTools(tools);
         const { createServiceUpdateSession } = await import(
@@ -239,6 +260,7 @@ const runSetup = async () => {
         }
       },
     };
+    progress("Checking storage and installation health.");
     const health = repair
       ? await repairInstalledComponents(
           { allowServiceInstall: allowInstall },
@@ -275,12 +297,14 @@ const runSetup = async () => {
         2,
       ),
     );
-    process.stdout.write(
-      JSON.stringify({ installed: true, ready, reason, evidence: pending }) + "\n",
-    );
+    resultOutput({ installed: true, ready, reason, evidence: pending });
     process.exitCode = finalGit.status !== "pass" ? 3 : ready ? 0 : 2;
   } catch (error) {
-    process.stderr.write(`HoneyBee setup stopped: ${error.message}\n`);
+    if (showProgress)
+      progress(
+        "Setup stopped. Keep the existing installation and recovery evidence; use HoneyBee's recovery diagnostics.",
+      );
+    else process.stderr.write(`HoneyBee setup stopped: ${error.message}\n`);
     process.exitCode = 1;
   } finally {
     await repairActivity?.release();

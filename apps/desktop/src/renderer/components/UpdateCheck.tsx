@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import type { DesktopUpdateStatusV1 } from "../../shared/ipc.js";
+import type { DesktopUpdateStatusV1, DesktopRecoveryOperationV2 } from "../../shared/ipc.js";
 import { desktopApi } from "../desktop-api.js";
 import type { Locale } from "../i18n.js";
+import { recoveryElapsed } from "../recovery-copy.js";
 
 const text = {
   ko: {
@@ -47,11 +48,39 @@ const text = {
     prepared: "Update prepared. The new version has not been activated.",
   },
 };
-export function UpdateCheck({ locale }: { locale: Locale }) {
+export function UpdateCheck({ locale, onRecovery }: { locale: Locale; onRecovery?: () => void }) {
   const [status, setStatus] = useState<DesktopUpdateStatusV1>();
   const [open, setOpen] = useState(false);
+  const [operation, setOperation] = useState<DesktopRecoveryOperationV2>();
+  const [now, setNow] = useState(Date.now());
+  const [diagnosticMessage, setDiagnosticMessage] = useState("");
   const sequence = useRef(0);
   const t = text[locale];
+  useEffect(() => {
+    if (!open) return;
+    let stopped = false;
+    let timer: ReturnType<typeof setTimeout>;
+    const refresh = async (): Promise<void> => {
+      try {
+        const next = await desktopApi.updateOperation();
+        if (!stopped) {
+          setOperation(next);
+          setNow(Date.now());
+        }
+      } catch {
+        /* The v1 controls remain usable if detail retrieval fails. */
+      }
+      if (!stopped)
+        timer = setTimeout(() => {
+          void refresh();
+        }, 1000);
+    };
+    void refresh();
+    return () => {
+      stopped = true;
+      clearTimeout(timer);
+    };
+  }, [open]);
   useEffect(() => {
     let cancelled = false;
     const current = sequence.current;
@@ -132,6 +161,18 @@ export function UpdateCheck({ locale }: { locale: Locale }) {
   const preparing = status?.state === "Preparing";
   const applying = status?.state === "Applying";
   const busy = checking || downloading || preparing || applying;
+  const elapsed = recoveryElapsed(operation?.startedAt ?? null, now);
+  const sinceProgress = recoveryElapsed(operation?.lastProgressAt ?? null, now);
+  const exportDiagnostics = async (): Promise<void> => {
+    try {
+      if (await desktopApi.exportRecoveryDiagnostics())
+        setDiagnosticMessage(locale === "ko" ? "진단 파일을 저장했습니다." : "Diagnostics saved.");
+    } catch {
+      setDiagnosticMessage(
+        locale === "ko" ? "진단 파일을 저장하지 못했습니다." : "Could not save diagnostics.",
+      );
+    }
+  };
   const message =
     status?.state === "Unresolved"
       ? t.unresolved
@@ -176,6 +217,41 @@ export function UpdateCheck({ locale }: { locale: Locale }) {
           <p role="status" aria-live="polite">
             {message}
           </p>
+          {elapsed !== null && (
+            <p className="form-note">
+              {locale === "ko" ? `시작 후 ${elapsed}초` : `${elapsed}s since start`}
+              {sinceProgress !== null
+                ? locale === "ko"
+                  ? ` · 마지막 진행 기록 ${sinceProgress}초 전`
+                  : ` · Last progress ${sinceProgress}s ago`
+                : ""}
+            </p>
+          )}
+          {(preparing || applying) && sinceProgress !== null && sinceProgress >= 30 && (
+            <p className="form-note">
+              {locale === "ko"
+                ? "설치와 실행 검증을 기다리고 있습니다. 새 진행 기록을 받으면 갱신됩니다."
+                : "Waiting for installation and startup verification. This view updates when new progress is recorded."}
+            </p>
+          )}
+          {status && ["Failed", "Unresolved", "RolledBack"].includes(status.state) && (
+            <div className="recovery-buttons">
+              {onRecovery && (
+                <button
+                  onClick={() => {
+                    setOpen(false);
+                    onRecovery();
+                  }}
+                >
+                  {locale === "ko" ? "설치 복구 열기" : "Open installation recovery"}
+                </button>
+              )}
+              <button onClick={() => void exportDiagnostics()}>
+                {locale === "ko" ? "진단 파일 저장" : "Save diagnostics"}
+              </button>
+            </div>
+          )}
+          {diagnosticMessage && <p role="status">{diagnosticMessage}</p>}
           {downloading && status.total !== undefined && (
             <progress aria-label={t.downloading} value={status.received ?? 0} max={status.total} />
           )}

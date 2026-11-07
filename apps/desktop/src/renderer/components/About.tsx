@@ -36,7 +36,9 @@ export function About({ locale, onClose }: { locale: Locale; onClose: () => void
     >
       <header>
         <h2 id="app-info-title">{ko ? "HoneyBee 정보" : "About HoneyBee"}</h2>
-        <button onClick={onClose}>{ko ? "닫기" : "Close"}</button>
+        <button className="secondary" onClick={onClose}>
+          {ko ? "닫기" : "Close"}
+        </button>
       </header>
       {!info && (
         <p role={failed ? "alert" : "status"}>
@@ -87,6 +89,7 @@ export function About({ locale, onClose }: { locale: Locale; onClose: () => void
       </details>
       <footer>
         <button
+          className="secondary"
           onClick={() => {
             void desktopApi
               .storageRecoveryAction({ action: "download-setup" })
