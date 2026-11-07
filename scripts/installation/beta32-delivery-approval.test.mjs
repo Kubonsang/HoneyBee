@@ -13,6 +13,7 @@ import {
   beta37DeliveryApprovalId,
   beta38DeliveryApprovalId,
   beta39DeliveryApprovalId,
+  beta40DeliveryApprovalId,
   deliveryCompletionPolicy,
   requiresWingetManifest,
   validateOperatorDeliveryApproval,
@@ -31,6 +32,22 @@ const beta36 = {
   manifestSha256: approval.manifestSha256,
   wingetManifestSha256: "d".repeat(64),
 };
+
+test("beta.40 cannot reuse beta.39 approval or another source", () => {
+  const record = { ...beta36, id: beta40DeliveryApprovalId, version: "0.1.0-beta.40" };
+  assert.deepEqual(validateOperatorDeliveryApproval(record, record.sourceCommit), record);
+  assert.throws(() => validateOperatorDeliveryApproval(record, "e".repeat(40)));
+  assert.throws(() =>
+    validateOperatorDeliveryApproval(
+      { ...record, id: beta39DeliveryApprovalId },
+      record.sourceCommit,
+    ),
+  );
+  for (const field of ["setupSha256", "manifestSha256", "wingetManifestSha256"])
+    assert.throws(() =>
+      validateOperatorDeliveryApproval({ ...record, [field]: "" }, record.sourceCommit),
+    );
+});
 
 test("beta.39 delivery requires its own unchanged approval and source", async () => {
   const record = { ...beta36, id: beta39DeliveryApprovalId, version: "0.1.0-beta.39" };
@@ -115,6 +132,7 @@ test("completion verification remains mandatory for all supported operator versi
     [beta37DeliveryApprovalId, "0.1.0-beta.37"],
     [beta38DeliveryApprovalId, "0.1.0-beta.38"],
     [beta39DeliveryApprovalId, "0.1.0-beta.39"],
+    [beta40DeliveryApprovalId, "0.1.0-beta.40"],
   ]) {
     const record = { ...beta36, id, version };
     assert.equal(requiresWingetManifest(version), true);
@@ -137,10 +155,11 @@ test("WinGet publication requirement does not disappear without an approval reco
     "0.1.0-beta.37",
     "0.1.0-beta.38",
     "0.1.0-beta.39",
+    "0.1.0-beta.40",
   ])
     assert.equal(requiresWingetManifest(version), true);
   assert.equal(requiresWingetManifest("0.1.0-beta.32"), false);
-  assert.equal(requiresWingetManifest("0.1.0-beta.40"), false);
+  assert.equal(requiresWingetManifest("0.1.0-beta.41"), false);
 });
 
 test("beta.37 requires its own approval and rejects stale version, source and artifact pins", async () => {
