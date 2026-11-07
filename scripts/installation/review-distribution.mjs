@@ -6,6 +6,10 @@ import process from "node:process";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { promisify } from "node:util";
 import { authenticateReleaseManifest } from "../update/release-authentication.mjs";
+import {
+  authenticateSetupDescriptor,
+  requiresSetupDescriptor,
+} from "../update/setup-descriptor.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
 import { plainDirectory } from "../update/stage-release.mjs";
 import { summarizeFinalAcceptance } from "../qualification/final-acceptance.mjs";
@@ -48,6 +52,19 @@ export async function reviewDistribution(options) {
   const setupPath = path.join(directory, "HoneyBeeSetup.exe");
   const setup = await digestDistributionFile(setupPath);
   assert.deepEqual(setup, receipt.setup, "Setup changed after distribution assembly");
+  if (requiresSetupDescriptor(receipt.version)) {
+    const { descriptor } = authenticateSetupDescriptor(
+      await read("setup.json", 16384),
+      await read("setup.sig.json", 4096),
+      options.trustedPublicKeys,
+      authenticated,
+    );
+    assert.deepEqual(
+      { sha256: descriptor.setup.sha256, size: descriptor.setup.size },
+      setup,
+      "Signed Setup descriptor differs from distribution",
+    );
+  }
   const result = await promisify(execFile)(
     "powershell.exe",
     [

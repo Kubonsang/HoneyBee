@@ -12,6 +12,10 @@ import { authenticateReleaseManifest } from "../update/release-authentication.mj
 import { renderWingetManifest } from "./winget-manifest.mjs";
 import { createFinalAcceptance } from "../qualification/final-acceptance.mjs";
 import { distributionPolicy } from "./distribution-policy.mjs";
+import {
+  authenticateSetupDescriptor,
+  requiresSetupDescriptor,
+} from "../update/setup-descriptor.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 export const digestDistributionFile = async (file) => {
@@ -40,6 +44,22 @@ export async function prepareDistribution(options) {
   const expected = authenticated.manifest.packages.application;
   const policy = distributionPolicy(options, authenticated.manifest);
   const originalSetup = await digestDistributionFile(options.setupPath);
+  let setupDescriptorBytes, setupSignatureBytes;
+  if (requiresSetupDescriptor(authenticated.manifest.version)) {
+    setupDescriptorBytes = await readBounded(options.setupDescriptorPath, 16384);
+    setupSignatureBytes = await readBounded(options.setupSignaturePath, 4096);
+    const { descriptor } = authenticateSetupDescriptor(
+      setupDescriptorBytes,
+      setupSignatureBytes,
+      options.trustedPublicKeys,
+      authenticated,
+    );
+    assert.deepEqual(
+      { sha256: descriptor.setup.sha256, size: descriptor.setup.size },
+      originalSetup,
+      "Setup differs from its signed descriptor",
+    );
+  }
   assert.deepEqual(
     await digestDistributionFile(options.applicationPath),
     { sha256: expected.sha256, size: expected.size },
@@ -92,6 +112,10 @@ export async function prepareDistribution(options) {
   });
   await writeFile(path.join(directory, "release.json"), manifestBytes, { flag: "wx" });
   await writeFile(path.join(directory, "release.sig.json"), signatureBytes, { flag: "wx" });
+  if (setupDescriptorBytes) {
+    await writeFile(path.join(directory, "setup.json"), setupDescriptorBytes, { flag: "wx" });
+    await writeFile(path.join(directory, "setup.sig.json"), setupSignatureBytes, { flag: "wx" });
+  }
   const receipt = {
     schemaVersion: 1,
     version: authenticated.manifest.version,
@@ -129,6 +153,7 @@ export async function prepareDistribution(options) {
     { flag: "wx" },
   );
   const sums = ["HoneyBeeSetup.exe", applicationName, "release.json", "release.sig.json"];
+  if (setupDescriptorBytes) sums.push("setup.json", "setup.sig.json");
   await writeFile(
     path.join(directory, "SHA256SUMS.txt"),
     (

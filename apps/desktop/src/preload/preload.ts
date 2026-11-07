@@ -3,6 +3,7 @@ import { z } from "zod";
 
 import {
   DesktopAppInfoV1Schema,
+  DesktopRecoveryOperationV2Schema,
   DesktopBaseCommitV1Schema,
   DesktopBaseRefsV1Schema,
   DesktopBaseHistoryV1Schema,
@@ -30,6 +31,10 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  recoveryOperation: () =>
+    invoke(DesktopIpcChannels.recoveryOperation, DesktopRecoveryOperationV2Schema),
+  recoveryAction: (request) =>
+    invoke(DesktopIpcChannels.recoveryAction, DesktopRecoveryOperationV2Schema, request),
   appInfo: () => invoke(DesktopIpcChannels.appInfo, DesktopAppInfoV1Schema),
   storageRecoveryStatus: () =>
     invoke(DesktopIpcChannels.storageRecoveryStatus, DesktopStorageRecoveryV1Schema),

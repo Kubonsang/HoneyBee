@@ -9,6 +9,7 @@ import { discoverRelease } from "../../../../scripts/update/release-discovery.mj
 import { stageAuthenticatedRelease } from "../../../../scripts/update/authenticated-release.mjs";
 import { DesktopUpdateCheck } from "./update-check.js";
 import { appInfo } from "./app-info.js";
+import { SetupRecoveryController } from "../../../../scripts/update/setup-recovery-controller.mjs";
 import { readUpdateOutcome } from "../../../../scripts/update/update-outcome.mjs";
 import {
   dispatchPreparation,
@@ -37,6 +38,7 @@ import {
   DesktopGitDiffRequestV1Schema,
   DesktopIpcChannels,
   DesktopStorageRecoveryActionV1Schema,
+  DesktopRecoveryActionV2Schema,
   DesktopProjectPathRequestV1Schema,
   DesktopProjectRequestV1Schema,
   DesktopProjectSetupRequestV1Schema,
@@ -346,7 +348,47 @@ const updateCheck = new DesktopUpdateCheck({
       `Update check failed: ${error instanceof Error ? error.message : "unknown error"}\n`,
     ),
 });
+const recovery = new SetupRecoveryController({
+  enabled: () => app.isPackaged && !fixtureMode && installedStorageCommand !== undefined,
+  root: () => path.resolve(process.resourcesPath, "../../../.."),
+  trust: updateTrust,
+  applicationBusy: () =>
+    [
+      "Checking",
+      "Downloading",
+      "Downloaded",
+      "Preparing",
+      "Prepared",
+      "Applying",
+      "Unresolved",
+    ].includes(updateCheck.status().state),
+});
 const registerIpc = (): void => {
+  for (const [channel, action] of [
+    [
+      DesktopIpcChannels.recoveryOperation,
+      (value: unknown) => {
+        assert(value === undefined);
+        return recovery.status();
+      },
+    ],
+    [
+      DesktopIpcChannels.recoveryAction,
+      (value: unknown) => recovery.action(DesktopRecoveryActionV2Schema.parse(value)),
+    ],
+  ] as const) {
+    activityHandle(
+      channel,
+      handler((value, event) => {
+        assert(
+          mainWindow &&
+            event.sender === mainWindow.webContents &&
+            event.senderFrame === mainWindow.webContents.mainFrame,
+        );
+        return action(value);
+      }),
+    );
+  }
   activityHandle(
     DesktopIpcChannels.appInfo,
     handler(async (value, event) => {
@@ -442,7 +484,7 @@ const registerIpc = (): void => {
   ] as const) {
     activityHandle(
       channel,
-      handler((value, event) => {
+      handler(async (value, event) => {
         const window = mainWindow;
         assert(window !== undefined && event.sender === window.webContents);
         assert(
@@ -450,6 +492,17 @@ const registerIpc = (): void => {
           "Update request must originate in the main frame",
         );
         assert(value === undefined, "Update requests accept no external configuration");
+        if (
+          channel === DesktopIpcChannels.updateCheck ||
+          channel === DesktopIpcChannels.updateDownload ||
+          channel === DesktopIpcChannels.updateApply
+        ) {
+          await recovery.status();
+          assert(
+            !recovery.isBusy(),
+            "Resolve the current Setup recovery before starting an application update",
+          );
+        }
         return action();
       }),
     );

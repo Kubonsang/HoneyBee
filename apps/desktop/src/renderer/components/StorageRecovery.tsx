@@ -5,6 +5,7 @@ import { desktopApi } from "../desktop-api.js";
 import type { Locale } from "../i18n.js";
 import { storageRecoveryState } from "../storage-recovery.js";
 import { UpdateCheck } from "./UpdateCheck.js";
+import { RecoveryActions } from "./RecoveryActions.js";
 
 const copy = {
   ko: {
@@ -207,6 +208,9 @@ export function StorageRecovery({ locale, onClose }: { locale: Locale; onClose: 
                   .join("\n")}
               </pre>
             </details>
+            {report.installation === "managed" && state !== "identity" && (
+              <RecoveryActions locale={locale} />
+            )}
           </>
         )}
         <footer>

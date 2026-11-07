@@ -380,6 +380,64 @@ export const DesktopAppInfoV1Schema = z
   .strict();
 export type DesktopAppInfoV1 = z.infer<typeof DesktopAppInfoV1Schema>;
 
+export const DesktopRecoveryOperationV2Schema = z
+  .object({
+    schemaVersion: z.literal(2),
+    jobId: z
+      .string()
+      .regex(/^job-[a-f0-9-]{36}$/u)
+      .nullable(),
+    state: z.enum([
+      "Idle",
+      "Checking",
+      "Downloading",
+      "Review",
+      "Starting",
+      "Running",
+      "Verifying",
+      "Succeeded",
+      "RolledBack",
+      "Cancelled",
+      "Failed",
+      "Unresolved",
+      "Blocked",
+    ]),
+    route: z.enum(["application-update", "setup-repair", "setup-transition"]).nullable(),
+    version: z.string().max(80).nullable(),
+    startedAt: z.string().datetime().nullable(),
+    lastProgressAt: z.string().datetime().nullable(),
+    received: z.number().int().nonnegative().nullable(),
+    total: z.number().int().positive().nullable(),
+    code: z
+      .string()
+      .regex(/^recovery\.[a-z-]+$/u)
+      .nullable(),
+    preservation: z.enum(["unchanged", "verified", "unknown"]),
+    userAction: z.enum(["none", "review", "approve-windows", "check-setup"]),
+    canCancel: z.boolean(),
+  })
+  .strict();
+export type DesktopRecoveryOperationV2 = z.infer<typeof DesktopRecoveryOperationV2Schema>;
+export const DesktopRecoveryActionV2Schema = z.discriminatedUnion("action", [
+  z.object({ action: z.enum(["prepare-repair", "prepare-update"]) }).strict(),
+  z
+    .object({
+      action: z.enum(["execute", "resume"]),
+      jobId: z.string().regex(/^job-[a-f0-9-]{36}$/u),
+    })
+    .strict(),
+  z
+    .object({
+      action: z.literal("cancel"),
+      jobId: z
+        .string()
+        .regex(/^job-[a-f0-9-]{36}$/u)
+        .optional(),
+    })
+    .strict(),
+]);
+export type DesktopRecoveryActionV2 = z.infer<typeof DesktopRecoveryActionV2Schema>;
+
 export const DesktopStorageRecoveryV1Schema = z
   .object({
     schemaVersion: z.literal(1),
@@ -396,6 +454,8 @@ export const DesktopStorageRecoveryActionV1Schema = z
   .strict();
 
 export const DesktopIpcChannels = {
+  recoveryOperation: "desktop.recovery.operation.v2",
+  recoveryAction: "desktop.recovery.action.v2",
   appInfo: "desktop.app.info.v1",
   storageRecoveryStatus: "desktop.storage.recovery-status.v1",
   storageRecoveryAction: "desktop.storage.recovery-action.v1",
@@ -446,6 +506,8 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  recoveryOperation(): Promise<DesktopRecoveryOperationV2>;
+  recoveryAction(request: DesktopRecoveryActionV2): Promise<DesktopRecoveryOperationV2>;
   appInfo(): Promise<DesktopAppInfoV1>;
   storageRecoveryStatus(): Promise<DesktopStorageRecoveryV1>;
   storageRecoveryAction(

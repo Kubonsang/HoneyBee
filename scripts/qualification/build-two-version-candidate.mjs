@@ -7,13 +7,15 @@ import { promisify } from "node:util";
 import { bindCandidateTools } from "./candidate-tools.mjs";
 import { synchronizeProductVersion } from "../installation/product-version.mjs";
 const repo = path.resolve(import.meta.dirname, "../..");
+const sourceProduct = JSON.parse(await readFile(path.join(repo, "package.json")));
 const version = process.argv[2] ?? "0.1.0-beta.12";
 const maintenanceBaseline = process.argv[3] === "--maintenance-baseline";
 assert(
   (process.argv.length <= 3 &&
-    [12, 13, 14, 16, 17, 18, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36]
-      .map((n) => "0.1.0-beta." + n)
-      .includes(version)) ||
+    (version === sourceProduct.version ||
+      [12, 13, 14, 16, 17, 18, 23, 24, 25, 26, 27, 28, 30, 32, 33, 34, 35, 36]
+        .map((n) => "0.1.0-beta." + n)
+        .includes(version))) ||
     (process.argv.length === 4 &&
       maintenanceBaseline &&
       [
@@ -69,6 +71,7 @@ for (const name of [
   "apps/desktop/vite.config.ts",
   "apps/desktop/vite.main.config.ts",
   "apps/desktop/vite.preload.config.ts",
+  "apps/desktop/vite.setup.config.ts",
   "apps/cli/scripts",
   "apps/cli/tsconfig.build.json",
   "packages/core/tsconfig.build.json",
@@ -126,7 +129,12 @@ await run("build-cli", [
   "apps/cli/tsconfig.build.json",
 ]);
 const vite = path.join(repo, "apps/desktop/node_modules/vite/bin/vite.js");
-for (const config of ["vite.config.ts", "vite.preload.config.ts", "vite.main.config.ts"])
+for (const config of [
+  "vite.config.ts",
+  "vite.preload.config.ts",
+  "vite.main.config.ts",
+  "vite.setup.config.ts",
+])
   await run(
     "build-" + config,
     [vite, "build", "--config", config],
@@ -146,7 +154,7 @@ await writeFile(
       version,
       buildRoot: root,
       installation,
-      sourceVersion: "0.1.0-beta.11",
+      sourceVersion: sourceProduct.version,
       serviceMigration: false,
     },
     null,

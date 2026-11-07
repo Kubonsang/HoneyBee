@@ -13,10 +13,18 @@ import (
 
 // The sharing mode, not file existence or a PID, defines lock ownership.
 func holdUpdateLock(directory string) error {
+	return holdNamedLock(directory, "installation-update.lock")
+}
+
+func holdSetupRecoveryLock(directory string) error {
+	return holdNamedLock(directory, "setup-recovery.lock")
+}
+
+func holdNamedLock(directory, filename string) error {
 	if err := plainDir(directory); err != nil {
 		return err
 	}
-	name, err := syscall.UTF16PtrFromString(filepath.Join(directory, "installation-update.lock"))
+	name, err := syscall.UTF16PtrFromString(filepath.Join(directory, filename))
 	if err != nil {
 		return err
 	}

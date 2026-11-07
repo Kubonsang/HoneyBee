@@ -6,6 +6,7 @@ import {
   DesktopBaseRefsRequestV1Schema,
   DesktopCloneRequestV1Schema,
   DesktopIpcChannels,
+  DesktopRecoveryActionV2Schema,
   DesktopPtyCreateRequestV1Schema,
   DesktopResultSchema,
   DesktopWorkspaceCreateRequestV1Schema,
@@ -13,6 +14,17 @@ import {
 } from "./ipc.js";
 
 describe("Workspace Workbench IPC v2", () => {
+  it("recovery IPC never accepts paths, URLs, executable arguments or service identities", () => {
+    for (const field of ["path", "url", "executable", "args", "service", "installationRoot"]) {
+      expect(() =>
+        DesktopRecoveryActionV2Schema.parse({ action: "prepare-repair", [field]: "untrusted" }),
+      ).toThrow();
+    }
+    expect(() =>
+      DesktopRecoveryActionV2Schema.parse({ action: "execute", jobId: "../other" }),
+    ).toThrow();
+    expect(() => DesktopRecoveryActionV2Schema.parse({ action: "replace-force" })).toThrow();
+  });
   it("bounds starting point queries and requires immutable commit results", () => {
     expect(DesktopBaseRefsRequestV1Schema.parse({ projectId: "project" }).offset).toBe(0);
     expect(() =>

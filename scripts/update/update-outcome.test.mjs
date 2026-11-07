@@ -117,6 +117,44 @@ async function fixture(state = "Committed") {
   await trackActivationJob(root, { name: "job-ABC", sha256: sha256(request) });
   return { root, job, transaction, source, target, receipt };
 }
+test("Setup outcome lookup refuses a prior operation bound to another manifest", async () => {
+  const f = await fixture("RolledBack");
+  const preparationDirectory = path.join(f.root, "update/jobs/job-PREP");
+  await mkdir(preparationDirectory);
+  const preparation = JSON.stringify({ manifestSha256: sha256("this release") });
+  await writeFile(path.join(preparationDirectory, "request.json"), preparation);
+  const request = JSON.stringify({
+    schemaVersion: 1,
+    operation: "setup-activate",
+    sourcePointerSha256: sha256(f.source),
+    preparationJob: "job-PREP",
+    preparationSha256: sha256(preparation),
+  });
+  await writeFile(path.join(f.job, "request.json"), request);
+  await writeFile(
+    path.join(f.job, "result.json"),
+    JSON.stringify({ ...f.receipt, requestSha256: sha256(request) }),
+  );
+  await trackActivationJob(f.root, { name: "job-ABC", sha256: sha256(request) });
+  assert.equal(
+    (
+      await readUpdateOutcome(f.root, {
+        sourcePointerSha256: sha256(f.source),
+        manifestSha256: sha256("this release"),
+      })
+    ).state,
+    "RolledBack",
+  );
+  assert.equal(
+    (
+      await readUpdateOutcome(f.root, {
+        sourcePointerSha256: sha256(f.source),
+        manifestSha256: sha256("other release"),
+      })
+    ).state,
+    "Unresolved",
+  );
+});
 for (const state of ["Committed", "RolledBack"])
   test(`${state} requires terminal journal and exact current pointer`, async () => {
     const f = await fixture(state),

@@ -12,6 +12,7 @@ import {
 } from "./beta32-delivery-approval.mjs";
 import { requireReleaseVerification } from "../qualification/release-verify.mjs";
 import { reviewDistribution } from "./review-distribution.mjs";
+import { requiresSetupDescriptor } from "../update/setup-descriptor.mjs";
 import { digestDistributionFile } from "./prepare-distribution.mjs";
 import { readBounded } from "../update/prepare-release.mjs";
 
@@ -42,6 +43,7 @@ const assets = [
   "release.sig.json",
   "SHA256SUMS.txt",
 ];
+if (requiresSetupDescriptor(approval.version)) assets.push("setup.json", "setup.sig.json");
 if (completionPolicy.includeWingetManifest) {
   assert.equal(
     (await digestDistributionFile(path.join(options.directory, "Kubonsang.HoneyBee.yaml"))).sha256,
