@@ -3,6 +3,7 @@ import { Buffer } from "node:buffer";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
+import { recoveryResumeDecision } from "./setup-recovery-resume.mjs";
 import { sha256 } from "./release-manifest.mjs";
 import {
   listRecoveryJobs,
@@ -18,6 +19,37 @@ const source = () => ({
   bootstrapperVersion: "1.0.0",
   channel: "beta",
   storageComponentVersion: "hb17",
+});
+test("resume never repeats an uncertain native execution, including after a new Starting record", () => {
+  const events = [{ state: "Running" }, { state: "Unresolved" }, { state: "Starting" }];
+  assert.equal(recoveryResumeDecision(events, undefined, "0.1.0-beta.40"), "Unresolved");
+  assert.equal(
+    recoveryResumeDecision([{ state: "Starting" }], undefined, "0.1.0-beta.40"),
+    "launch",
+  );
+  assert.equal(
+    recoveryResumeDecision(
+      [...events, { state: "Verifying", exitCode: 0 }],
+      undefined,
+      "0.1.0-beta.40",
+    ),
+    "verify",
+  );
+  assert.equal(
+    recoveryResumeDecision(
+      [...events, { state: "Verifying", exitCode: 1 }],
+      undefined,
+      "0.1.0-beta.40",
+    ),
+    "Unresolved",
+  );
+  for (const [outcome, expected] of [
+    [{ state: "RolledBack" }, "RolledBack"],
+    [{ state: "UpdateCancelled" }, "Cancelled"],
+    [{ state: "Updated", version: "0.1.0-beta.40" }, "verify"],
+    [{ state: "Updated", version: "0.1.0-beta.41" }, "Unresolved"],
+  ])
+    assert.equal(recoveryResumeDecision(events, outcome, "0.1.0-beta.40"), expected);
 });
 const manifest = () => ({
   version: "0.1.0-beta.40",
