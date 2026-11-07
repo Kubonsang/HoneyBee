@@ -8,6 +8,7 @@ import assert from "node:assert/strict";
 import { discoverRelease } from "../../../../scripts/update/release-discovery.mjs";
 import { stageAuthenticatedRelease } from "../../../../scripts/update/authenticated-release.mjs";
 import { DesktopUpdateCheck } from "./update-check.js";
+import { appInfo } from "./app-info.js";
 import { readUpdateOutcome } from "../../../../scripts/update/update-outcome.mjs";
 import {
   dispatchPreparation,
@@ -347,6 +348,27 @@ const updateCheck = new DesktopUpdateCheck({
 });
 const registerIpc = (): void => {
   activityHandle(
+    DesktopIpcChannels.appInfo,
+    handler(async (value, event) => {
+      assert(value === undefined);
+      assert(
+        mainWindow &&
+          event.sender === mainWindow.webContents &&
+          event.senderFrame === mainWindow.webContents.mainFrame,
+      );
+      const releaseRoot = path.resolve(process.resourcesPath, "../..");
+      const installed =
+        app.isPackaged && !fixtureMode ? await readInstalledStorage(releaseRoot) : undefined;
+      return appInfo({
+        packaged: app.isPackaged,
+        buildVersion: compatibility.honeybeeVersion,
+        releaseRoot,
+        managed: installed?.managed !== undefined,
+        checks: (await desktopDoctor()).checks,
+      });
+    }),
+  );
+  activityHandle(
     DesktopIpcChannels.storageRecoveryStatus,
     handler(async (value, event) => {
       assert(value === undefined, "Recovery status accepts no external configuration");
@@ -359,7 +381,10 @@ const registerIpc = (): void => {
         schemaVersion: 1 as const,
         installation:
           installedStorageCommand === undefined ? ("portable" as const) : ("managed" as const),
-        applicationVersion: compatibility.honeybeeVersion,
+        applicationVersion:
+          installedStorageCommand === undefined
+            ? compatibility.honeybeeVersion
+            : path.basename(path.resolve(process.resourcesPath, "../..")),
         doctor: fixtureMode
           ? {
               schemaVersion: 1 as const,

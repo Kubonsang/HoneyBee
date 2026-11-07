@@ -5,6 +5,7 @@ import path from "node:path";
 import process from "node:process";
 import { promisify } from "node:util";
 import { bindCandidateTools } from "./candidate-tools.mjs";
+import { synchronizeProductVersion } from "../installation/product-version.mjs";
 const repo = path.resolve(import.meta.dirname, "../..");
 const version = process.argv[2] ?? "0.1.0-beta.12";
 const maintenanceBaseline = process.argv[3] === "--maintenance-baseline";
@@ -84,31 +85,12 @@ await cp(
   path.join(root, "apps/desktop/.tools/win32-x64"),
   { recursive: true, errorOnExist: true, force: false },
 );
-for (const name of [
-  "package.json",
-  "apps/desktop/package.json",
-  "apps/cli/package.json",
-  "packages/core/package.json",
-]) {
-  const file = path.join(root, name),
-    value = JSON.parse(await readFile(file));
-  value.version = version;
-  await writeFile(file, JSON.stringify(value, null, 2) + "\n");
-}
-const cliSource = path.join(root, "apps/cli/src/workspace-command.ts");
-const code = await readFile(cliSource, "utf8");
-assert(code.includes('WORKSPACE_CLI_VERSION = "0.1.0-beta.11"'));
-await writeFile(
-  cliSource,
-  code.replace(
-    'WORKSPACE_CLI_VERSION = "0.1.0-beta.11"',
-    'WORKSPACE_CLI_VERSION = "' + version + '"',
-  ),
-);
+const productPackage = path.join(root, "package.json");
+const product = JSON.parse(await readFile(productPackage));
+await writeFile(productPackage, JSON.stringify({ ...product, version }, null, 2) + "\n");
+await synchronizeProductVersion(root);
 const compatibilityFile = path.join(root, "apps/desktop/resources/component-compatibility-v1.json");
 let compatibility = JSON.parse(await readFile(compatibilityFile));
-compatibility.honeybeeVersion = version;
-for (const item of compatibility.workspaceStorage) item.honeybeeVersion = version;
 compatibility = await bindCandidateTools(
   path.join(root, "apps/desktop/.tools/win32-x64"),
   compatibility,

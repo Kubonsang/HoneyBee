@@ -963,6 +963,16 @@ pre,
 .modal h2 {
   margin: 4px 0 0;
 }
+
+dialog.app-info {
+  color: inherit;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
+}
+
+dialog.app-info::backdrop {
+  background: rgb(0 0 0 / 60%);
+}
 .workspace-create-modal {
   color-scheme: dark;
   width: min(640px, calc(100vw - 32px));

@@ -15,8 +15,10 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import runtimePin from "./runtime-pin.json" with { type: "json" };
 import { publishAssembly } from "./publish-assembly.mjs";
+import { synchronizeProductVersion } from "./product-version.mjs";
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+await synchronizeProductVersion(repository, { check: true });
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const json = async (target) => JSON.parse(await readFile(target, "utf8"));
 const version = (await json(path.join(repository, "package.json"))).version;
