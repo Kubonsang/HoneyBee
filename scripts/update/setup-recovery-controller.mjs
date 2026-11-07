@@ -197,13 +197,16 @@ export class SetupRecoveryController {
   }
   async prepare(intent) {
     const abort = this.abort;
+    let failureCode = "recovery.identity-unverified";
     try {
       const root = this.options.root();
       const source = await inspectSetupRecoverySource(root, this.options.trust);
       assert(source.identityVerified, "Installation owner or integrity could not be verified");
       abort.signal.throwIfAborted();
       await mkdir(path.join(root, "update"), { recursive: true });
+      failureCode = "recovery.operation-active";
       await withSetupRecoveryLock(source.helper, root, async (assertHeld) => {
+        failureCode = "recovery.release-unavailable";
         const offer = await discoverSetupRecovery({
           source,
           intent,
@@ -228,6 +231,7 @@ export class SetupRecoveryController {
           route: offer.route,
           version: offer.release.manifest.version,
         };
+        failureCode = "recovery.download-failed";
         const job = await prepareSetupRecovery({
           root,
           source,
@@ -252,7 +256,7 @@ export class SetupRecoveryController {
       this.state = {
         ...this.state,
         state: abort.signal.aborted ? "Cancelled" : "Failed",
-        code: abort.signal.aborted ? "recovery.cancelled" : "recovery.prepare-failed",
+        code: abort.signal.aborted ? "recovery.cancelled" : failureCode,
         canCancel: false,
         preservation: "unchanged",
         userAction: "none",

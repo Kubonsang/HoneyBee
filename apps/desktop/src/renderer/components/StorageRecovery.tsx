@@ -33,7 +33,7 @@ const copy = {
     identityHelp:
       "스토리지를 설치한 Windows 계정으로 실행하고, 같은 설치 경로의 Setup 복구를 사용하세요. 다른 사용자 소유의 설치를 교체할 수 없습니다.",
     legacyHelp:
-      "hb12 서비스는 현재 업데이트기가 요구하는 유지보수 기능이 없습니다. 일반 업데이트나 Setup 재실행만으로 해결된다고 보장할 수 없습니다. 기존 설치와 Workspace를 유지하고, 복구 안내에 따라 별도의 검증된 보존 복구를 진행해야 합니다.",
+      "공개 beta.35 설치와 정확히 일치하는 hb12 서비스는 Setup의 검증된 보존 전환 경로를 사용합니다. 소유자와 파일 검증을 통과해야 하며, 그 밖의 구형 설치는 기존 데이터와 기록을 유지한 상태로 복구 안내를 확인하세요.",
     setup: "공식 Setup 다운로드 페이지",
     guide: "복구 안내 열기",
     details: "진단 상세",
@@ -63,7 +63,7 @@ const copy = {
     identityHelp:
       "Run as the Windows account that installed storage and use Setup Repair at the same installation path. An installation owned by another user cannot be replaced.",
     legacyHelp:
-      "The hb12 service lacks the maintenance capability required by this updater. An ordinary update or rerunning Setup cannot be promised to fix it. Keep the installation and Workspaces; a separately verified preserving recovery is required.",
+      "The exact published beta.35 installation with hb12 can use Setup's verified preserving transition after owner and file checks. For other legacy installations, keep the data and records and consult the recovery guide.",
     setup: "Official Setup download page",
     guide: "Open recovery guide",
     details: "Diagnostic details",
@@ -208,9 +208,10 @@ export function StorageRecovery({ locale, onClose }: { locale: Locale; onClose: 
                   .join("\n")}
               </pre>
             </details>
-            {report.installation === "managed" && state !== "identity" && (
-              <RecoveryActions locale={locale} />
-            )}
+            <RecoveryActions
+              locale={locale}
+              allowPreparation={report.installation === "managed" && state !== "identity"}
+            />
           </>
         )}
         <footer>

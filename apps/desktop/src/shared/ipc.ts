@@ -454,12 +454,14 @@ export const DesktopStorageRecoveryActionV1Schema = z
   .strict();
 
 export const DesktopIpcChannels = {
+  recoveryExport: "desktop.recovery.export.v2",
   recoveryOperation: "desktop.recovery.operation.v2",
   recoveryAction: "desktop.recovery.action.v2",
   appInfo: "desktop.app.info.v1",
   storageRecoveryStatus: "desktop.storage.recovery-status.v1",
   storageRecoveryAction: "desktop.storage.recovery-action.v1",
   updateStatus: "desktop.update.status.v1",
+  updateOperation: "desktop.update.operation.v2",
   updateCheck: "desktop.update.check.v1",
   updateCancel: "desktop.update.cancel.v1",
   updateDownload: "desktop.update.download.v1",
@@ -506,6 +508,7 @@ export class DesktopApiError extends Error {
 }
 
 export interface HoneyBeeDesktopApi {
+  exportRecoveryDiagnostics(): Promise<boolean>;
   recoveryOperation(): Promise<DesktopRecoveryOperationV2>;
   recoveryAction(request: DesktopRecoveryActionV2): Promise<DesktopRecoveryOperationV2>;
   appInfo(): Promise<DesktopAppInfoV1>;
@@ -514,6 +517,7 @@ export interface HoneyBeeDesktopApi {
     request: z.infer<typeof DesktopStorageRecoveryActionV1Schema>,
   ): Promise<boolean>;
   updateStatus(): Promise<DesktopUpdateStatusV1>;
+  updateOperation(): Promise<DesktopRecoveryOperationV2>;
   checkUpdate(): Promise<DesktopUpdateStatusV1>;
   cancelUpdateCheck(): Promise<DesktopUpdateStatusV1>;
   downloadUpdate(): Promise<DesktopUpdateStatusV1>;

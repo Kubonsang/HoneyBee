@@ -9,6 +9,7 @@ import { discoverRelease } from "../../../../scripts/update/release-discovery.mj
 import { stageAuthenticatedRelease } from "../../../../scripts/update/authenticated-release.mjs";
 import { DesktopUpdateCheck } from "./update-check.js";
 import { appInfo } from "./app-info.js";
+import { recoveryDiagnostics } from "../shared/recovery-diagnostics.js";
 import { SetupRecoveryController } from "../../../../scripts/update/setup-recovery-controller.mjs";
 import { readUpdateOutcome } from "../../../../scripts/update/update-outcome.mjs";
 import {
@@ -364,6 +365,41 @@ const recovery = new SetupRecoveryController({
     ].includes(updateCheck.status().state),
 });
 const registerIpc = (): void => {
+  activityHandle(
+    DesktopIpcChannels.recoveryExport,
+    handler(async (value, event) => {
+      assert(value === undefined);
+      assert(
+        mainWindow &&
+          event.sender === mainWindow.webContents &&
+          event.senderFrame === mainWindow.webContents.mainFrame,
+      );
+      const doctor = await desktopDoctor();
+      const releaseRoot = path.resolve(process.resourcesPath, "../..");
+      const info = appInfo({
+        packaged: app.isPackaged,
+        buildVersion: compatibility.honeybeeVersion,
+        releaseRoot,
+        managed: installedStorageCommand !== undefined,
+        checks: doctor.checks,
+      });
+      const setupOperation = await recovery.status();
+      await updateCheck.refresh();
+      const report = recoveryDiagnostics(
+        info,
+        doctor,
+        setupOperation.state === "Idle" ? updateCheck.operationStatus() : setupOperation,
+      );
+      const chosen = await dialog.showSaveDialog(mainWindow, {
+        title: "Save HoneyBee diagnostics / 진단 저장",
+        defaultPath: `HoneyBee-diagnostics-${Date.now()}.json`,
+        filters: [{ name: "JSON", extensions: ["json"] }],
+      });
+      if (chosen.canceled || !chosen.filePath) return false;
+      await writeFile(chosen.filePath, JSON.stringify(report, null, 2) + "\n", { flag: "wx" });
+      return true;
+    }),
+  );
   for (const [channel, action] of [
     [
       DesktopIpcChannels.recoveryOperation,
@@ -477,6 +513,13 @@ const registerIpc = (): void => {
 
   for (const [channel, action] of [
     [DesktopIpcChannels.updateStatus, () => updateCheck.refresh()],
+    [
+      DesktopIpcChannels.updateOperation,
+      async () => {
+        await updateCheck.refresh();
+        return updateCheck.operationStatus();
+      },
+    ],
     [DesktopIpcChannels.updateCheck, () => updateCheck.check()],
     [DesktopIpcChannels.updateCancel, () => updateCheck.cancel()],
     [DesktopIpcChannels.updateDownload, () => updateCheck.download()],

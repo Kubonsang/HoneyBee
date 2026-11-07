@@ -58,3 +58,23 @@ Project-specific problems do not make an otherwise healthy installation fail Rep
 This protocol requires packaged Windows qualification for each release. Source
 tests and mocked downloads do not establish that UAC, native replacement, Setup
 relaunch or Workspace preservation worked on that release's binaries.
+
+## Progress and local diagnostics
+
+Desktop's additive IPC v2 operation view exposes the stage, elapsed time, last real
+progress record and next user action. Existing v1 update actions stay compatible.
+Downloads show received bytes; installation and service work do not show estimated
+percentages. A long pause prompts inspection of Setup and Windows approval windows
+without claiming that a security prompt was detected. Cancellation is available
+only during preparation or before execution; it never terminates service migration.
+
+Setup streams bounded human-readable stages into its own window, so progress remains
+visible while Desktop is closed. The [NSIS ExecToLog interface](https://nsis.sourceforge.io/NsExec_plug-in)
+captures command output without a separate console window. Completed Setup closes
+automatically; errors keep their recovery guidance visible.
+
+**Save diagnostics** writes a user-selected local JSON file. The explicit allowlist
+contains product/storage versions, installation type, known check results, operation
+states and known error codes. It excludes diagnostic messages, paths, account names,
+project names, terminal contents and credentials. Nothing is uploaded automatically.
+An unknown preservation result remains unknown even when installation health passes.

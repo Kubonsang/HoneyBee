@@ -38,7 +38,7 @@ export function AppFrame({
         >
           {locale === "ko" ? "스토리지 복구" : "Storage recovery"}
         </button>
-        <UpdateCheck locale={locale} />
+        <UpdateCheck locale={locale} onRecovery={onStorageRecovery} />
         <button
           className="locale-button"
           data-testid="locale-toggle"

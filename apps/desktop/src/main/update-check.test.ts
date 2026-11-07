@@ -40,6 +40,45 @@ const staged: AuthenticatedStage = {
   activationAllowed: false,
 };
 
+it("v2 progress timestamps advance on actual changes and polling preserves v1 compatibility", async () => {
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date("2026-11-08T00:00:00Z"));
+    let finish!: (value: AvailableRelease) => void;
+    const controller = new DesktopUpdateCheck({
+      source: async () => source,
+      trustedPublicKeys: ["trusted"],
+      discover: () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    });
+    controller.check();
+    await tick();
+    const initial = controller.operationStatus();
+    expect(initial).toMatchObject({
+      schemaVersion: 2,
+      state: "Checking",
+      canCancel: true,
+      route: "application-update",
+    });
+    vi.setSystemTime(new Date("2026-11-08T00:01:00Z"));
+    expect(controller.operationStatus().lastProgressAt).toBe(initial.lastProgressAt);
+    expect(controller.status()).toEqual({
+      schemaVersion: 1,
+      state: "Checking",
+      version: null,
+      mandatory: false,
+    });
+    finish(offer);
+    await tick();
+    expect(controller.operationStatus().lastProgressAt).not.toBe(initial.lastProgressAt);
+    expect(controller.operationStatus().startedAt).toBe(initial.startedAt);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 it("preparation runs once, cannot be cancelled as a download, and exposes no job paths", async () => {
   let finish!: () => void;
   const prepare = vi.fn(
