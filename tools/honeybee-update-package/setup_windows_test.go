@@ -28,6 +28,9 @@ func TestSetupReadLeasePreventsReplacementAndWrite(t *testing.T) {
 	if err := os.Remove(file); err == nil {
 		t.Fatal("delete succeeded under Setup read lease")
 	}
+	if err := os.Rename(root, root+"-moved"); err == nil {
+		t.Fatal("ancestor rename succeeded under Setup read lease")
+	}
 }
 
 func TestSetupChangedDigestNeverExecutes(t *testing.T) {

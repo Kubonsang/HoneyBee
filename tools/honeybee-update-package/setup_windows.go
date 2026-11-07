@@ -18,9 +18,58 @@ import (
 
 // Hold a Windows handle denying writes and deletion from hashing until Setup exits.
 // A check followed by an unlocked CreateProcess would permit executable replacement.
-func openSetupReadLease(executable string) (*os.File, error) {
+type setupReadLease struct {
+	*os.File
+	parents []syscall.Handle
+}
+
+func (lease *setupReadLease) Close() error {
+	err := lease.File.Close()
+	for i := len(lease.parents) - 1; i >= 0; i-- {
+		err = errors.Join(err, syscall.CloseHandle(lease.parents[i]))
+	}
+	return err
+}
+
+func openSetupReadLease(executable string) (*setupReadLease, error) {
 	if err := plainDir(filepath.Dir(executable)); err != nil {
 		return nil, err
+	}
+	// Lock ancestors from the volume down before opening the executable. A file
+	// lease alone does not protect its path if an ancestor directory is renamed.
+	var directories []string
+	for directory := filepath.Dir(executable); ; directory = filepath.Dir(directory) {
+		directories = append(directories, directory)
+		if filepath.Dir(directory) == directory {
+			break
+		}
+	}
+	var parents []syscall.Handle
+	retained := false
+	defer func() {
+		if !retained {
+			for _, handle := range parents {
+				syscall.CloseHandle(handle)
+			}
+		}
+	}()
+	for i := len(directories) - 1; i >= 0; i-- {
+		name, err := syscall.UTF16PtrFromString(directories[i])
+		if err != nil {
+			return nil, err
+		}
+		handle, err := syscall.CreateFile(name, 0, syscall.FILE_SHARE_READ|syscall.FILE_SHARE_WRITE, nil, syscall.OPEN_EXISTING, syscall.FILE_FLAG_BACKUP_SEMANTICS|syscall.FILE_FLAG_OPEN_REPARSE_POINT, 0)
+		if err != nil {
+			return nil, err
+		}
+		parents = append(parents, handle)
+		var info syscall.ByHandleFileInformation
+		if err := syscall.GetFileInformationByHandle(handle, &info); err != nil {
+			return nil, err
+		}
+		if info.FileAttributes&syscall.FILE_ATTRIBUTE_REPARSE_POINT != 0 || info.FileAttributes&syscall.FILE_ATTRIBUTE_DIRECTORY == 0 {
+			return nil, errors.New("redirected Setup ancestor")
+		}
 	}
 	name, err := syscall.UTF16PtrFromString(executable)
 	if err != nil {
@@ -40,7 +89,8 @@ func openSetupReadLease(executable string) (*os.File, error) {
 		file.Close()
 		return nil, errors.New("redirected Setup")
 	}
-	return file, nil
+	retained = true
+	return &setupReadLease{File: file, parents: parents}, nil
 }
 
 func runVerifiedSetup(executable, expectedSHA, expectedSize, root, mode string) error {
