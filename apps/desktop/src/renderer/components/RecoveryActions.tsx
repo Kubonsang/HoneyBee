@@ -118,10 +118,18 @@ export function RecoveryActions({
       )}
       {idle && allowPreparation && (
         <div className="recovery-buttons">
-          <button disabled={sending} onClick={() => void action({ action: "prepare-update" })}>
+          <button
+            className="secondary"
+            disabled={sending}
+            onClick={() => void action({ action: "prepare-update" })}
+          >
             {ko ? "보존 업데이트 준비" : "Prepare preserving update"}
           </button>
-          <button disabled={sending} onClick={() => void action({ action: "prepare-repair" })}>
+          <button
+            className="secondary"
+            disabled={sending}
+            onClick={() => void action({ action: "prepare-repair" })}
+          >
             {ko ? "현재 버전 복구 준비" : "Prepare current-version repair"}
           </button>
         </div>
@@ -153,7 +161,11 @@ export function RecoveryActions({
         </>
       )}
       {status?.canCancel && (
-        <button disabled={sending} onClick={() => void action(withJob("cancel"))}>
+        <button
+          className="secondary"
+          disabled={sending}
+          onClick={() => void action(withJob("cancel"))}
+        >
           {ko ? "준비 취소" : "Cancel preparation"}
         </button>
       )}
@@ -165,7 +177,11 @@ export function RecoveryActions({
               : "Check Setup and any Windows approval prompt. The operation record remains after the app closes."}
           </p>
           {(status.state === "Unresolved" || stalled) && !status.canCancel && (
-            <button disabled={sending} onClick={() => void action(withJob("resume"))}>
+            <button
+              className="secondary"
+              disabled={sending}
+              onClick={() => void action(withJob("resume"))}
+            >
               {ko ? "기존 작업 확인 및 재개" : "Check and resume existing operation"}
             </button>
           )}
