@@ -35,6 +35,7 @@ await Promise.all([
   assertOnlyJavaScript(path.join(bundleRoot, "dist"), [
     "cli.js",
     "human-output.js",
+    "product-version.js",
     "workspace-command.js",
   ]),
   assertOnlyJavaScript(path.join(bundleRoot, "node_modules", "@honeybee", "core", "dist"), [
