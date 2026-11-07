@@ -117,7 +117,10 @@ it.runIf(process.platform === "win32")(
       [path.join(cli, "dist/cli.js"), "--version"],
       { windowsHide: true, timeout: 10000 },
     );
-    expect(result.stdout.trim()).toBe("0.1.0-beta.11");
+    const product = JSON.parse(await readFile(path.resolve("package.json"), "utf8")) as {
+      version: string;
+    };
+    expect(result.stdout.trim()).toBe(product.version);
   },
   20000,
 );

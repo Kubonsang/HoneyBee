@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer } from "electron";
 import { z } from "zod";
 
 import {
+  DesktopAppInfoV1Schema,
   DesktopBaseCommitV1Schema,
   DesktopBaseRefsV1Schema,
   DesktopBaseHistoryV1Schema,
@@ -29,6 +30,7 @@ const invoke = async <T>(channel: string, schema: z.ZodType<T>, request?: unknow
 };
 
 const api: HoneyBeeDesktopApi = {
+  appInfo: () => invoke(DesktopIpcChannels.appInfo, DesktopAppInfoV1Schema),
   storageRecoveryStatus: () =>
     invoke(DesktopIpcChannels.storageRecoveryStatus, DesktopStorageRecoveryV1Schema),
   storageRecoveryAction: (request) =>

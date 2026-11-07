@@ -25,26 +25,26 @@ codex
 
 ## Status
 
-The current prerelease is [Beta 11](https://github.com/Kubonsang/HoneyBee/releases/tag/v0.1.0-beta.11).
-It adds visual starting-commit selection and retains Beta 10's NTFS compression for private Bee caches.
-In the paired GNF study, combined child plus Bee allocation fell from 483.80 MB to
-392.31 MB (18.91% less), with measured timing regressions within 10%. Authored/Git
-files and shared parents are additional costs. Existing Workspaces do not shrink
-automatically; existing external-Bee parent seeds can be reused.
+Published builds and their qualification scope are listed on the
+[official releases page](https://github.com/Kubonsang/HoneyBee/releases).
+Use the release's `HoneyBeeSetup.exe` for a managed installation. Windows may warn
+before running an unsigned installer. A portable ZIP is not an installed service update.
 
-Beta 11 requires the same storage component `0.0.0+cfa606fd4143.hb12`. The hb11-to-hb12
-upgrade, service restart and physical reboot checks passed; see the
-[product validation record](docs/validation/bee-compression-product.md), including
-the interrupted-install recovery and preservation scope. Fresh service installation
-and older migrations remain outside this qualification. Use **Repair** when status
-reports `repair-required`, and wait for `ready` before opening tools.
-The [paired performance report](docs/validation/workspace-footprint.md) retains the
-missed 20% reduction gate; this release does not promise a 300 MB total Workspace.
+**About** displays the running app version, installation type and installed/required
+storage versions. The app version and the storage component's `hb` version are
+independent. See the [recovery guide](docs/operations/storage-recovery.md) for
+supported preserving updates, repairs and interruption recovery. Keep existing
+Workspaces and Git branches; do not erase installation receipts to bypass errors.
 
-The GitHub prerelease provides unsigned Windows x64 Desktop and CLI archives plus SHA-256 checksums.
-The CLI archive requires Node.js 24 and a one-time elevated storage service setup; extract it and
-follow the [Windows CLI Beta guide](docs/operations/windows-cli-beta.md). Windows may warn before
-opening the unsigned Desktop executable.
+Historical measurements remain in the [product validation record](docs/validation/bee-compression-product.md)
+and [paired performance report](docs/validation/workspace-footprint.md). They describe
+the tested versions and do not establish qualification for a newer build.
+
+For CLI archives, follow the [Windows CLI Beta guide](docs/operations/windows-cli-beta.md).
+
+Builds take their product version from the root `package.json`. After changing it,
+run `corepack pnpm version:sync`; `corepack pnpm version:check` verifies package,
+CLI and compatibility metadata consistency without changing storage payload identities.
 
 ## CLI
 
